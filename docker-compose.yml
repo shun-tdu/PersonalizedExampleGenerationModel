@@ -1,0 +1,16 @@
+services:
+  app:
+    build: .
+    container_name: PersonalizedExampleGeneration_dev
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./src:/app
+      - ./data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

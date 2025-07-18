@@ -1,0 +1,45 @@
+# # Byte-compiled/optimized files
+# Pythonが自動で生成するキャッシュファイル
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+
+# # Virtual Environments
+# Pythonの仮想環境フォルダ（PCごとに内容が異なるため含めない）
+.venv/
+venv/
+env/
+ENV/
+
+
+# # IDE / Editor specific files
+# VSCodeやPyCharmなどのエディタが自動生成する設定フォルダ
+.vscode/
+.idea/
+.ipynb_checkpoints/
+
+
+# # OS specific files
+# macOSやWindowsが自動生成する隠しファイル
+.DS_Store
+Thumbs.db
+
+
+# # Build and distribution
+# パッケージ作成時に生成されるフォルダ
+build/
+dist/
+*.egg-info/
+
+
+# # Sensitive information
+# APIキーやパスワードなどを記述するファイル (非常に重要！)
+.env
+*.env
+secrets.yaml
+
+# # Data files
+# 学習データやログ，学習済みモデルを保管するフォルダ
+data/
