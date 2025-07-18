@@ -9,4 +9,3 @@ else:
     print("CUDA is not available.")
 
 
-    #Do DODODODODODO
