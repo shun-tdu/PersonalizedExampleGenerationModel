@@ -1,1 +1,0 @@
-{'train_data': 'data/Datasets/overfitting_dataset_cond_3.npz', 'val_data': None, 'val_split_ratio': 0.2}

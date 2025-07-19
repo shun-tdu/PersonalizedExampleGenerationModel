@@ -43,6 +43,7 @@ secrets.yaml
 # # Data files
 # 学習データやログ，学習済みモデルを保管するフォルダ
 data/
-checkpoints/
+src/checkpoints/
+src/mlruns
 
 CLAUDE.md

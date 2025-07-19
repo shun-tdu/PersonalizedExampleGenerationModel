@@ -1,9 +1,0 @@
-mlflow==2.7.1
-astunparse==1.6.3
-cloudpickle==2.2.1
-numpy==1.26.4
-packaging==23.2
-pandas==2.3.1
-pyyaml==6.0.2
-torch==2.7.1
-tqdm==4.67.1

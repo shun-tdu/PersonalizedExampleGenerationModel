@@ -1,1 +1,0 @@
-{'tracking_uri': 'mlruns', 'experiment_name': 'unet_diffusion_experiments', 'run_name': None, 'log_model': True, 'log_artifacts': True}
