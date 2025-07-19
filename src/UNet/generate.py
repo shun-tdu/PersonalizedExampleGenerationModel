@@ -6,6 +6,10 @@ import matplotlib.pyplot as plt
 from typing import Optional, Tuple
 import argparse
 import os
+import hydra
+from omegaconf import DictConfig, OmegaConf
+import mlflow
+import mlflow.pytorch
 from Model import UNet1D
 from train import DDPMScheduler
 from TrajectoryDataset import TrajectoryDataset
@@ -260,7 +264,175 @@ def visualize_trajectories(trajectories: np.ndarray,
         plt.show()
 
 
+@hydra.main(version_base=None, config_path=".", config_name="config")
+def hydra_generate(cfg: DictConfig) -> None:
+    """
+    Hydra統合生成関数
+    """
+    print(f"Generation Configuration:\n{OmegaConf.to_yaml(cfg)}")
+    
+    # デバイス設定
+    device = torch.device(cfg.device if torch.cuda.is_available() else 'cpu')
+    print(f'Using device: {device}')
+    
+    # 出力ディレクトリ作成
+    output_dir = cfg.output.get('generation_dir', 'generated_trajectories')
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # MLFlowセットアップ（生成ログ用）
+    mlflow.set_tracking_uri(cfg.mlflow.tracking_uri)
+    mlflow.set_experiment(cfg.mlflow.experiment_name)
+    
+    with mlflow.start_run(run_name=f"generation_{cfg.generation.method}"):
+        # 設定をMLFlowにログ
+        generation_params = {
+            "generation_method": cfg.generation.method,
+            "num_inference_steps": cfg.generation.num_inference_steps,
+            "seq_len": cfg.generation.seq_len,
+            "num_samples": cfg.generation.num_samples
+        }
+        mlflow.log_params(generation_params)
+        
+        # チェックポイントパスを決定（最新のものを使用）
+        checkpoint_dir = cfg.output.checkpoint_dir
+        if os.path.exists(checkpoint_dir):
+            checkpoints = [f for f in os.listdir(checkpoint_dir) if f.endswith('.pth')]
+            if checkpoints:
+                # エポック番号でソートして最新を取得
+                checkpoints.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
+                checkpoint_path = os.path.join(checkpoint_dir, checkpoints[-1])
+                print(f'Using latest checkpoint: {checkpoint_path}')
+            else:
+                raise FileNotFoundError(f"No checkpoints found in {checkpoint_dir}")
+        else:
+            raise FileNotFoundError(f"Checkpoint directory not found: {checkpoint_dir}")
+        
+        # モデルロード
+        model = load_model(checkpoint_path, None, device)
+        
+        # スケジューラ作成
+        scheduler = DDPMScheduler(
+            num_timesteps=cfg.scheduler.num_timesteps,
+            beta_start=cfg.scheduler.beta_start,
+            beta_end=cfg.scheduler.beta_end
+        )
+        
+        # ジェネレータ作成
+        generator = TrajectoryGenerator(model, scheduler, device)
+        
+        # 条件次元の自動検出
+        detected_condition_dim = None
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        sample_key = 'encoder_blocks.0.cross_attention.to_k.weight'
+        if sample_key in checkpoint['model_state_dict']:
+            detected_condition_dim = checkpoint['model_state_dict'][sample_key].shape[1]
+        
+        actual_condition_dim = detected_condition_dim if detected_condition_dim is not None else cfg.model.condition_dim
+        print(f'Using condition dimension: {actual_condition_dim}')
+        
+        # 条件データの準備
+        if cfg.training.use_dummy or not cfg.data.train_data:
+            # ダミー個人特性データ生成
+            print('Using dummy condition data...')
+            conditions = np.random.randn(cfg.generation.num_samples, actual_condition_dim).astype(np.float32)
+            conditions_source = 'dummy'
+        else:
+            # 実データから条件を取得
+            print(f'Loading condition data from: {cfg.data.train_data}')
+            try:
+                dataset = TrajectoryDataset(cfg.data.train_data)
+                
+                # ランダムサンプリング
+                total_samples = len(dataset)
+                if cfg.generation.num_samples > total_samples:
+                    print(f'Warning: num_samples ({cfg.generation.num_samples}) > dataset size ({total_samples}), using all data')
+                    indices = list(range(total_samples))
+                else:
+                    indices = np.random.choice(total_samples, cfg.generation.num_samples, replace=False).tolist()
+                print(f'Randomly sampled indices: {indices}')
+                
+                # 条件データを取得
+                conditions_list = []
+                for idx in indices:
+                    _, condition = dataset[idx]
+                    conditions_list.append(condition.numpy())
+                
+                conditions = np.array(conditions_list, dtype=np.float32)
+                conditions_source = f'real_data (indices: {indices})'
+                
+            except Exception as e:
+                print(f'Error loading real data: {e}')
+                print('Falling back to dummy data...')
+                conditions = np.random.randn(cfg.generation.num_samples, actual_condition_dim).astype(np.float32)
+                conditions_source = 'dummy (fallback)'
+        
+        conditions_tensor = torch.FloatTensor(conditions).to(device)
+        print(f'Condition data source: {conditions_source}')
+        print(f'Condition data shape: {conditions.shape}')
+        
+        # 軌道生成
+        print(f'Generating {len(conditions)} trajectories using {cfg.generation.method} method...')
+        import time
+        start_time = time.time()
+        
+        with torch.no_grad():
+            generated_trajectories = generator.generate_trajectories(
+                conditions=conditions_tensor,
+                seq_len=cfg.generation.seq_len,
+                method=cfg.generation.method,
+                num_inference_steps=cfg.generation.num_inference_steps
+            )
+        
+        generation_time = time.time() - start_time
+        print(f'Generation completed in {generation_time:.2f} seconds')
+        
+        # CPU に移動してnumpy配列に変換
+        trajectories_np = generated_trajectories.cpu().numpy()
+        
+        # 可視化と保存
+        vis_path = os.path.join(output_dir, 'generated_trajectories.png')
+        visualize_trajectories(trajectories_np, conditions, vis_path)
+        
+        # 軌道データと条件データを保存
+        np.save(os.path.join(output_dir, 'trajectories.npy'), trajectories_np)
+        np.save(os.path.join(output_dir, 'conditions.npy'), conditions)
+        
+        # メタデータも保存
+        metadata = {
+            'condition_source': conditions_source,
+            'method': cfg.generation.method,
+            'num_inference_steps': cfg.generation.num_inference_steps,
+            'condition_dim': actual_condition_dim,
+            'seq_len': cfg.generation.seq_len,
+            'checkpoint_path': checkpoint_path,
+            'generation_time': generation_time
+        }
+        
+        import json
+        with open(os.path.join(output_dir, 'metadata.json'), 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        # MLFlowにメトリクスとアーティファクトをログ
+        mlflow.log_metrics({
+            "generation_time": generation_time,
+            "num_generated": len(trajectories_np),
+            "trajectory_x_mean": float(trajectories_np[:, 0, :].mean()),
+            "trajectory_y_mean": float(trajectories_np[:, 1, :].mean()),
+            "trajectory_x_std": float(trajectories_np[:, 0, :].std()),
+            "trajectory_y_std": float(trajectories_np[:, 1, :].std())
+        })
+        
+        # アーティファクトを保存
+        mlflow.log_artifact(vis_path, "generated_plots")
+        mlflow.log_artifact(os.path.join(output_dir, 'metadata.json'), "metadata")
+        
+        print(f'Generation completed! Results saved to: {output_dir}')
+
+
 def main():
+    """
+    argparse対応メイン関数（後方互換性のため）
+    """
     parser = argparse.ArgumentParser(description='Trajectory Generation')
     parser.add_argument('--checkpoint', type=str, required=True, help='Path to model checkpoint')
     parser.add_argument('--data_path', type=str, default=None, help='Path to real data (.npz file) for conditions')

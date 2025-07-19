@@ -17,3 +17,40 @@ docker-compose exec app python claude_test.py
 
   # 可視化
   python src/UNet/visualize.py --checkpoint checkpoints/checkpoint_epoch_100.pth
+
+
+  # Docker環境で
+  docker-compose exec app bash
+  cd /app/src/UNet
+
+  # 1. 訓練実行（Hydra設定使用）
+  python train.py
+
+  # 2. 設定オーバーライドで訓練
+  python train.py training.epochs=50 training.batch_size=16
+
+  # 3. 軌道生成
+  python generate.py --checkpoint checkpoints/checkpoint_epoch_100.pth
+
+  # 4. モデル評価
+  python evaluate.py
+
+  # 5. MLFlow UI起動
+  mlflow ui --host 0.0.0.0 --port 5000
+
+  高度な機能：
+
+  # ハイパーパラメータスイープ
+  python train.py -m training.learning_rate=1e-4,5e-5 training.batch_size=16,32
+
+  # カスタム設定ファイル使用
+  python train.py --config-name=custom_config
+
+  主な利点
+
+  1. 実験管理の効率化: MLFlowで全実験を自動追跡
+  2. 設定管理の簡素化: Hydraで柔軟な設定管理
+  3. 再現性の向上: 全パラメータとアーティファクトの自動保存
+  4. 性能評価の標準化: 包括的な評価メトリクス
+  5. Docker統合: 環境の一貫性を保証
+

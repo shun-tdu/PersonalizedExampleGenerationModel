@@ -1,0 +1,6 @@
+artifact_location: /app/mlruns/681785596080312909
+creation_time: 1752938961046
+experiment_id: '681785596080312909'
+last_update_time: 1752938961046
+lifecycle_stage: active
+name: unet_diffusion_experiments

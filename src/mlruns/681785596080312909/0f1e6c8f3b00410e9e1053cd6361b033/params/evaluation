@@ -1,0 +1,1 @@
+{'metrics': ['trajectory_diversity', 'condition_consistency', 'trajectory_smoothness', 'endpoint_accuracy'], 'visualization': {'save_plots': True, 'plot_samples': 16}}

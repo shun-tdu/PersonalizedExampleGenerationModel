@@ -1,0 +1,13 @@
+aliases: []
+creation_timestamp: 1752938993918
+current_stage: None
+description: null
+last_updated_timestamp: 1752938993918
+name: unet_diffusion_experiments_unet
+run_id: 85c7604f431f4b89b6331fef9c48a505
+run_link: null
+source: /app/mlruns/681785596080312909/85c7604f431f4b89b6331fef9c48a505/artifacts/model
+status: READY
+status_message: null
+user_id: null
+version: 1

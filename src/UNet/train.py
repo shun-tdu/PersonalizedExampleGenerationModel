@@ -10,6 +10,10 @@ import argparse
 from typing import Dict, Any
 import json
 import matplotlib.pyplot as plt
+import hydra
+from omegaconf import DictConfig, OmegaConf
+import mlflow
+import mlflow.pytorch
 from Model import UNet1D
 from TrajectoryDataset import TrajectoryDataset
 
@@ -240,92 +244,241 @@ def create_dummy_data(num_samples: int = 1000, seq_len: int = 101, condition_dim
     return trajectories, conditions
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Diffusion Model Training')
-    parser.add_argument('--train_data', type=str, required=True, help='Path to training data (.npz file)')
-    parser.add_argument('--val_data', type=str, default=None, help='Path to validation data (.npz file)')
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
-    parser.add_argument('--epochs', type=int, default=100, help='Number of epochs')
-    parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
-    parser.add_argument('--device', type=str, default='cuda', help='Device to use')
-    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints', help='Checkpoint directory')
-    parser.add_argument('--use_dummy', action='store_true', help='Use dummy data instead of real data')
-    
-    args = parser.parse_args()
+@hydra.main(version_base=None, config_path=".", config_name="config")
+def main(cfg: DictConfig) -> None:
+    """
+    Hydra統合メイン関数
+    """
+    print(f"Configuration:\n{OmegaConf.to_yaml(cfg)}")
     
     # デバイス設定
-    device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
+    device = torch.device(cfg.device if torch.cuda.is_available() else 'cpu')
     print(f'Using device: {device}')
     
-    if args.use_dummy:
-        # ダミーデータを使用
-        print('Creating dummy data...')
-        train_trajectories, train_conditions = create_dummy_data(1000, 101, 3)
-        val_trajectories, val_conditions = create_dummy_data(200, 101, 3)
+    # MLFlowセットアップ
+    mlflow.set_tracking_uri(cfg.mlflow.tracking_uri)
+    mlflow.set_experiment(cfg.mlflow.experiment_name)
+    
+    with mlflow.start_run(run_name=cfg.mlflow.run_name):
+        # 設定をMLFlowにログ
+        mlflow.log_params(OmegaConf.to_container(cfg, resolve=True))
         
-        # 古いTrajectoryDatasetクラスを内部定義
-        class DummyTrajectoryDataset(Dataset):
-            def __init__(self, trajectory_data: np.ndarray, condition_data: np.ndarray):
-                self.trajectories = torch.FloatTensor(trajectory_data)
-                self.conditions = torch.FloatTensor(condition_data)
-                
-            def __len__(self):
-                return len(self.trajectories)
+        if cfg.training.use_dummy:
+            # ダミーデータを使用
+            print('Creating dummy data...')
+            train_trajectories, train_conditions = create_dummy_data(1000, 101, cfg.model.condition_dim)
+            val_trajectories, val_conditions = create_dummy_data(200, 101, cfg.model.condition_dim)
             
-            def __getitem__(self, idx):
-                return self.trajectories[idx], self.conditions[idx]
-        
-        train_dataset = DummyTrajectoryDataset(train_trajectories, train_conditions)
-        val_dataset = DummyTrajectoryDataset(val_trajectories, val_conditions)
-        condition_dim = 5
-    else:
-        # 実データを使用
-        print(f'Loading training data from: {args.train_data}')
-        train_dataset = TrajectoryDataset(args.train_data)
-        
-        if args.val_data:
-            print(f'Loading validation data from: {args.val_data}')
-            val_dataset = TrajectoryDataset(args.val_data)
+            # ダミーTrajectoryDatasetクラスを内部定義
+            class DummyTrajectoryDataset(Dataset):
+                def __init__(self, trajectory_data: np.ndarray, condition_data: np.ndarray):
+                    self.trajectories = torch.FloatTensor(trajectory_data)
+                    self.conditions = torch.FloatTensor(condition_data)
+                    
+                def __len__(self):
+                    return len(self.trajectories)
+                
+                def __getitem__(self, idx):
+                    return self.trajectories[idx], self.conditions[idx]
+            
+            train_dataset = DummyTrajectoryDataset(train_trajectories, train_conditions)
+            val_dataset = DummyTrajectoryDataset(val_trajectories, val_conditions)
+            condition_dim = cfg.model.condition_dim
         else:
-            # バリデーションデータが指定されていない場合は訓練データから分割
-            print('Splitting training data for validation...')
-            train_size = int(0.8 * len(train_dataset))
-            val_size = len(train_dataset) - train_size
-            train_dataset, val_dataset = torch.utils.data.random_split(train_dataset, [train_size, val_size])
+            # 実データを使用
+            print(f'Loading training data from: {cfg.data.train_data}')
+            train_dataset = TrajectoryDataset(cfg.data.train_data)
+            
+            if cfg.data.val_data:
+                print(f'Loading validation data from: {cfg.data.val_data}')
+                val_dataset = TrajectoryDataset(cfg.data.val_data)
+            else:
+                # バリデーションデータが指定されていない場合は訓練データから分割
+                print('Splitting training data for validation...')
+                train_size = int((1 - cfg.data.val_split_ratio) * len(train_dataset))
+                val_size = len(train_dataset) - train_size
+                train_dataset, val_dataset = torch.utils.data.random_split(train_dataset, [train_size, val_size])
+            
+            # データセットから条件次元を取得
+            sample_trajectory, sample_condition = train_dataset[0]
+            condition_dim = sample_condition.shape[0]
+            print(f'Condition dimension detected: {condition_dim}')
         
-        # データセットから条件次元を取得
-        sample_trajectory, sample_condition = train_dataset[0]
-        condition_dim = sample_condition.shape[0]
-        print(f'Condition dimension: {condition_dim}')
+        # データローダー作成
+        train_loader = DataLoader(train_dataset, batch_size=cfg.training.batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=cfg.training.batch_size, shuffle=False)
+        
+        # モデル作成
+        model = UNet1D(
+            input_dim=cfg.model.input_dim,
+            condition_dim=condition_dim,
+            time_embed_dim=cfg.model.time_embed_dim,
+            base_channels=cfg.model.base_channels
+        ).to(device)
+        
+        # モデル情報をログ
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        mlflow.log_params({
+            "total_parameters": total_params,
+            "trainable_parameters": trainable_params,
+            "actual_condition_dim": condition_dim
+        })
+        
+        # スケジューラ作成
+        scheduler = DDPMScheduler(
+            num_timesteps=cfg.scheduler.num_timesteps,
+            beta_start=cfg.scheduler.beta_start,
+            beta_end=cfg.scheduler.beta_end
+        )
+        
+        # トレーナー作成（MLFlow統合）
+        trainer = MLFlowDiffusionTrainer(
+            model, scheduler, device, cfg.training.learning_rate
+        )
+        
+        # 訓練開始
+        print('Starting training...')
+        trainer.train(
+            train_loader=train_loader,
+            val_loader=val_loader,
+            num_epochs=cfg.training.epochs,
+            save_interval=cfg.training.save_interval,
+            checkpoint_dir=cfg.output.checkpoint_dir
+        )
+        
+        # モデルをMLFlowに保存
+        if cfg.mlflow.log_model:
+            mlflow.pytorch.log_model(
+                model, 
+                "model",
+                registered_model_name=f"{cfg.mlflow.experiment_name}_unet"
+            )
+        
+        print('Training completed!')
+
+
+class MLFlowDiffusionTrainer(DiffusionTrainer):
+    """
+    MLFlow統合拡散モデル訓練クラス
+    """
+    def train(self, 
+              train_loader: DataLoader, 
+              val_loader: DataLoader = None,
+              num_epochs: int = 100,
+              save_interval: int = 10,
+              checkpoint_dir: str = 'checkpoints'):
+        """
+        MLFlow統合訓練
+        """
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        for epoch in range(num_epochs):
+            self.model.train()
+            epoch_loss = 0.0
+            
+            # 訓練ループ
+            with tqdm(train_loader, desc=f'Epoch {epoch+1}/{num_epochs}') as pbar:
+                for batch in pbar:
+                    loss = self.train_step(batch)
+                    epoch_loss += loss
+                    
+                    pbar.set_postfix({'Loss': f'{loss:.4f}'})
+            
+            avg_epoch_loss = epoch_loss / len(train_loader)
+            self.train_losses.append(avg_epoch_loss)
+            
+            # バリデーション
+            val_loss = None
+            if val_loader is not None:
+                val_loss = self.validate(val_loader)
+                self.val_losses.append(val_loss)
+                print(f'Epoch {epoch+1}: Train Loss = {avg_epoch_loss:.4f}, Val Loss = {val_loss:.4f}')
+            else:
+                print(f'Epoch {epoch+1}: Train Loss = {avg_epoch_loss:.4f}')
+            
+            # MLFlowにメトリクスをログ
+            mlflow.log_metrics({
+                "train_loss": avg_epoch_loss,
+                "val_loss": val_loss if val_loss is not None else 0.0,
+                "epoch": epoch + 1
+            }, step=epoch)
+            
+            # チェックポイント保存
+            if (epoch + 1) % save_interval == 0:
+                checkpoint_path = self.save_checkpoint(epoch + 1, checkpoint_dir)
+                
+                # MLFlowにアーティファクトとして保存
+                mlflow.log_artifact(checkpoint_path, "checkpoints")
+        
+        # 訓練完了後に損失曲線を保存
+        curve_path = self.save_training_curves(checkpoint_dir)
+        if curve_path:
+            mlflow.log_artifact(curve_path, "plots")
     
-    # データローダー作成
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    def save_checkpoint(self, epoch: int, checkpoint_dir: str) -> str:
+        """
+        チェックポイント保存（パス返却版）
+        """
+        checkpoint = {
+            'epoch': epoch,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'train_losses': self.train_losses,
+            'val_losses': self.val_losses,
+        }
+        
+        checkpoint_path = os.path.join(checkpoint_dir, f'checkpoint_epoch_{epoch}.pth')
+        torch.save(checkpoint, checkpoint_path)
+        print(f'Checkpoint saved: {checkpoint_path}')
+        return checkpoint_path
     
-    # モデル作成
-    model = UNet1D(
-        input_dim=2,
-        condition_dim=condition_dim,
-        time_embed_dim=128,
-        base_channels=64
-    ).to(device)
-    
-    # スケジューラ作成
-    scheduler = DDPMScheduler(num_timesteps=1000)
-    
-    # トレーナー作成
-    trainer = DiffusionTrainer(model, scheduler, device, args.lr)
-    
-    # 訓練開始
-    print('Starting training...')
-    trainer.train(
-        train_loader=train_loader,
-        val_loader=val_loader,
-        num_epochs=args.epochs,
-        checkpoint_dir=args.checkpoint_dir
-    )
-    
-    print('Training completed!')
+    def save_training_curves(self, checkpoint_dir: str) -> str:
+        """
+        訓練曲線を画像として保存（パス返却版）
+        """
+        if len(self.train_losses) == 0:
+            return None
+            
+        plt.figure(figsize=(12, 4))
+        
+        # 訓練損失
+        plt.subplot(1, 2, 1)
+        epochs = range(1, len(self.train_losses) + 1)
+        plt.plot(epochs, self.train_losses, 'b-', label='Training Loss')
+        if len(self.val_losses) > 0:
+            plt.plot(epochs, self.val_losses, 'r-', label='Validation Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.title('Training Curves')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        
+        # 損失改善率
+        if len(self.train_losses) > 1:
+            plt.subplot(1, 2, 2)
+            train_improvement = [(self.train_losses[i-1] - self.train_losses[i]) / self.train_losses[i-1] * 100 
+                               for i in range(1, len(self.train_losses))]
+            plt.plot(epochs[1:], train_improvement, 'b-', label='Training Improvement')
+            
+            if len(self.val_losses) > 1:
+                val_improvement = [(self.val_losses[i-1] - self.val_losses[i]) / self.val_losses[i-1] * 100 
+                                 for i in range(1, len(self.val_losses))]
+                plt.plot(epochs[1:], val_improvement, 'r-', label='Validation Improvement')
+            
+            plt.axhline(y=0, color='k', linestyle='--', alpha=0.5)
+            plt.xlabel('Epoch')
+            plt.ylabel('Improvement (%)')
+            plt.title('Loss Improvement Rate')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        curve_path = os.path.join(checkpoint_dir, 'training_curves.png')
+        plt.savefig(curve_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f'Training curves saved: {curve_path}')
+        return curve_path
 
 
 if __name__ == '__main__':
