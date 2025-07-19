@@ -71,6 +71,7 @@ def analyze_trials(df):
 
         movement_time = (trial_data['Timestamp'].iloc[-1] - trial_data['Timestamp'].iloc[0]) / 1e7
         actual_end_pos = trial_data[['HandlePosX', 'HandlePosY']].iloc[-1].values
+        target_start_pos = trial_data[['TargetStartPosX', 'TargetStartPosY']].iloc[-1].values
         target_end_pos = trial_data[['TargetEndPosX', 'TargetEndPosY']].iloc[-1].values
         endpoint_error = np.linalg.norm(actual_end_pos - target_end_pos)
 
@@ -79,8 +80,16 @@ def analyze_trials(df):
         jerk = calculate_jerk(acc_x, acc_y, ts)
 
         trial_metrics.append({
-            'SubjectID': name[0], 'Block': name[1], 'Trial': name[2],
-            'MovementTime': movement_time, 'EndpointError': endpoint_error, 'Jerk': jerk,
+            'SubjectID': name[0],
+            'Block': name[1],
+            'Trial': name[2],
+            'MovementTime': movement_time,
+            'EndpointError': endpoint_error,
+            'Jerk': jerk,
+            'TargetStartPosX': target_start_pos[0],
+            'TargetStartPosY': target_start_pos[1],
+            'TargetEndPosX': target_end_pos[0],
+            'TargetEndPosY': target_end_pos[1],
         })
     return pd.DataFrame(trial_metrics)
 
@@ -153,20 +162,36 @@ def main():
         condition_vector = np.array([
             trial_info['MovementTime'],
             trial_info['EndpointError'],
-            trial_info['Jerk']
+            trial_info['Jerk'],
+            trial_info['TargetStartPosX'],
+            trial_info['TargetStartPosY'],
+            trial_info['TargetEndPosX'],
+            trial_info['TargetEndPosY']
         ])
         conditions.append(condition_vector)
 
-    # 条件ベクトルを標準化
+    # 条件ベクトルをNumpy配列に変換
     conditions = np.array(conditions)
+
+    # ---- 特徴量ごとに異なる前処理を適用 ----
+    # 1. パフォーマンス指標
+    performance_features = conditions[:, :3]
     scaler = StandardScaler()
-    conditions_standardized = scaler.fit_transform(conditions)
+    performance_standardized = scaler.fit_transform(performance_features)
+
+    # 2. 座標データを-1から1に正規化
+    coordinate_features = conditions[:, 3:]
+    coordinate_normalized = (coordinate_features / 0.15) - 1.0
+
+    # 3. 前処理した特徴量を結合して条件ベクトルを生成
+    conditions_processed = np.concatenate([performance_standardized, coordinate_normalized], axis=1)
+
 
     # 5. ファイルに保存
     np.savez_compressed(
         OUTPUT_FILE,
         trajectories=np.array(trajectories),
-        conditions=conditions_standardized,
+        conditions=conditions_processed,
         condition_scaler_mean=scaler.mean_,
         condition_scaler_scale=scaler.scale_
     )

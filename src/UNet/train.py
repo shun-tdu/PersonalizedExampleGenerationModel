@@ -277,7 +277,7 @@ def main():
         
         train_dataset = DummyTrajectoryDataset(train_trajectories, train_conditions)
         val_dataset = DummyTrajectoryDataset(val_trajectories, val_conditions)
-        condition_dim = 3
+        condition_dim = 5
     else:
         # 実データを使用
         print(f'Loading training data from: {args.train_data}')

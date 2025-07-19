@@ -8,6 +8,7 @@ import argparse
 import os
 from Model import UNet1D
 from train import DDPMScheduler
+from TrajectoryDataset import TrajectoryDataset
 
 
 class TrajectoryGenerator:
@@ -174,11 +175,26 @@ class TrajectoryGenerator:
 
 
 def load_model(checkpoint_path: str, 
-               condition_dim: int = 5,
+               condition_dim: int = None,
                device: torch.device = torch.device('cpu')) -> UNet1D:
     """
     チェックポイントからモデルをロード
     """
+    # まずチェックポイントを読み込んで構造を確認
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    # チェックポイントから condition_dim を推定
+    if condition_dim is None:
+        # CrossAttentionのto_k.weightから条件次元を推定
+        # encoder_blocks.0.cross_attention.to_k.weight の形状: [inner_dim, condition_dim]
+        sample_key = 'encoder_blocks.0.cross_attention.to_k.weight'
+        if sample_key in checkpoint['model_state_dict']:
+            condition_dim = checkpoint['model_state_dict'][sample_key].shape[1]
+            print(f'Detected condition_dim from checkpoint: {condition_dim}')
+        else:
+            print('Warning: Could not detect condition_dim from checkpoint, using default 5')
+            condition_dim = 5
+    
     model = UNet1D(
         input_dim=2,
         condition_dim=condition_dim,
@@ -186,7 +202,6 @@ def load_model(checkpoint_path: str,
         base_channels=64
     ).to(device)
     
-    checkpoint = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     
@@ -223,7 +238,7 @@ def visualize_trajectories(trajectories: np.ndarray,
         ax.plot(x_traj[0], y_traj[0], 'go', markersize=8, label='Start')
         ax.plot(x_traj[-1], y_traj[-1], 'ro', markersize=8, label='End')
         
-        ax.set_title(f'Trajectory {i+1}\nCondition: {conditions[i, :3]:.2f}...')
+        ax.set_title(f'Trajectory {i+1}\nCondition: {conditions[i, :3]}...')
         ax.set_xlabel('X Position')
         ax.set_ylabel('Y Position')
         ax.grid(True, alpha=0.3)
@@ -248,13 +263,16 @@ def visualize_trajectories(trajectories: np.ndarray,
 def main():
     parser = argparse.ArgumentParser(description='Trajectory Generation')
     parser.add_argument('--checkpoint', type=str, required=True, help='Path to model checkpoint')
-    parser.add_argument('--condition_dim', type=int, default=5, help='Condition dimension')
+    parser.add_argument('--data_path', type=str, default=None, help='Path to real data (.npz file) for conditions')
+    parser.add_argument('--condition_dim', type=int, default=5, help='Condition dimension (used when generating dummy data)')
     parser.add_argument('--batch_size', type=int, default=8, help='Number of trajectories to generate')
     parser.add_argument('--seq_len', type=int, default=101, help='Sequence length')
     parser.add_argument('--method', type=str, default='ddpm', choices=['ddpm', 'ddim'], help='Sampling method')
     parser.add_argument('--steps', type=int, default=None, help='Number of inference steps')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use')
     parser.add_argument('--output_dir', type=str, default='generated_trajectories', help='Output directory')
+    parser.add_argument('--use_dummy', action='store_true', help='Use dummy conditions instead of real data')
+    parser.add_argument('--sample_indices', type=str, default=None, help='Comma-separated indices to sample from data (e.g., "0,5,10")')
     
     args = parser.parse_args()
     
@@ -267,7 +285,7 @@ def main():
     
     # モデルロード
     print(f'Loading model from: {args.checkpoint}')
-    model = load_model(args.checkpoint, args.condition_dim, device)
+    model = load_model(args.checkpoint, None, device)  # condition_dimを自動検出
     
     # スケジューラ作成
     scheduler = DDPMScheduler(num_timesteps=1000)
@@ -275,13 +293,67 @@ def main():
     # ジェネレータ作成
     generator = TrajectoryGenerator(model, scheduler, device)
     
-    # ダミー個人特性データ生成（実際のプロジェクトでは実データに置き換える）
-    # 例：動作時間、終点誤差、ジャーク、個人スキル、好み設定など
-    conditions = np.random.randn(args.batch_size, args.condition_dim).astype(np.float32)
+    # 自動検出されたcondition_dimを取得
+    detected_condition_dim = None
+    checkpoint = torch.load(args.checkpoint, map_location=device)
+    sample_key = 'encoder_blocks.0.cross_attention.to_k.weight'
+    if sample_key in checkpoint['model_state_dict']:
+        detected_condition_dim = checkpoint['model_state_dict'][sample_key].shape[1]
+    
+    actual_condition_dim = detected_condition_dim if detected_condition_dim is not None else args.condition_dim
+    print(f'Using condition dimension: {actual_condition_dim}')
+    
+    # 条件データの準備
+    if args.use_dummy or args.data_path is None:
+        # ダミー個人特性データ生成
+        print('Using dummy condition data...')
+        conditions = np.random.randn(args.batch_size, actual_condition_dim).astype(np.float32)
+        conditions_source = 'dummy'
+    else:
+        # 実データから条件を取得
+        print(f'Loading condition data from: {args.data_path}')
+        try:
+            dataset = TrajectoryDataset(args.data_path)
+            
+            # サンプル対象のインデックスを決定
+            if args.sample_indices:
+                # 指定されたインデックスを使用
+                indices = [int(idx.strip()) for idx in args.sample_indices.split(',')]
+                indices = [idx for idx in indices if 0 <= idx < len(dataset)]  # 範囲チェック
+                if len(indices) == 0:
+                    raise ValueError("No valid indices provided")
+                print(f'Using specified indices: {indices}')
+            else:
+                # ランダムサンプリング
+                total_samples = len(dataset)
+                if args.batch_size > total_samples:
+                    print(f'Warning: batch_size ({args.batch_size}) > dataset size ({total_samples}), using all data')
+                    indices = list(range(total_samples))
+                else:
+                    indices = np.random.choice(total_samples, args.batch_size, replace=False).tolist()
+                print(f'Randomly sampled indices: {indices}')
+            
+            # 条件データを取得
+            conditions_list = []
+            for idx in indices:
+                _, condition = dataset[idx]
+                conditions_list.append(condition.numpy())
+            
+            conditions = np.array(conditions_list, dtype=np.float32)
+            conditions_source = f'real_data (indices: {indices})'
+            
+        except Exception as e:
+            print(f'Error loading real data: {e}')
+            print('Falling back to dummy data...')
+            conditions = np.random.randn(args.batch_size, actual_condition_dim).astype(np.float32)
+            conditions_source = 'dummy (fallback)'
+    
     conditions_tensor = torch.FloatTensor(conditions).to(device)
+    print(f'Condition data source: {conditions_source}')
+    print(f'Condition data shape: {conditions.shape}')
     
     # 軌道生成
-    print(f'Generating {args.batch_size} trajectories using {args.method} method...')
+    print(f'Generating {len(conditions)} trajectories using {args.method} method...')
     with torch.no_grad():
         generated_trajectories = generator.generate_trajectories(
             conditions=conditions_tensor,
@@ -297,9 +369,23 @@ def main():
     vis_path = os.path.join(args.output_dir, 'generated_trajectories.png')
     visualize_trajectories(trajectories_np, conditions, vis_path)
     
-    # 軌道データを保存
+    # 軌道データと条件データを保存
     np.save(os.path.join(args.output_dir, 'trajectories.npy'), trajectories_np)
     np.save(os.path.join(args.output_dir, 'conditions.npy'), conditions)
+    
+    # メタデータも保存
+    metadata = {
+        'condition_source': conditions_source,
+        'method': args.method,
+        'num_inference_steps': args.steps,
+        'condition_dim': actual_condition_dim,
+        'seq_len': args.seq_len,
+        'checkpoint_path': args.checkpoint
+    }
+    
+    import json
+    with open(os.path.join(args.output_dir, 'metadata.json'), 'w') as f:
+        json.dump(metadata, f, indent=2)
     
     print(f'Generation completed! Results saved to: {args.output_dir}')
     
@@ -308,6 +394,13 @@ def main():
     print(f'  Shape: {trajectories_np.shape}')
     print(f'  X-axis range: [{trajectories_np[:, 0, :].min():.3f}, {trajectories_np[:, 0, :].max():.3f}]')
     print(f'  Y-axis range: [{trajectories_np[:, 1, :].min():.3f}, {trajectories_np[:, 1, :].max():.3f}]')
+    
+    # 条件データの統計も表示
+    print(f'\nCondition Statistics:')
+    print(f'  Mean: {conditions.mean(axis=0)}')
+    print(f'  Std: {conditions.std(axis=0)}')
+    print(f'  Min: {conditions.min(axis=0)}')
+    print(f'  Max: {conditions.max(axis=0)}')
 
 
 if __name__ == '__main__':
