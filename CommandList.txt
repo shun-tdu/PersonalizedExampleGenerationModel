@@ -1,1 +1,19 @@
 docker-compose exec app jupyter lab --ip=0.0.0.0 --allow-root --no-browser --NotebookApp.token=''
+docker-compose exec app python claude_test.py
+
+  # 訓練実行
+  実データでの訓練:
+  python train.py --train_data /path/to/train_data.npz --val_data /path/to/val_data.npz --epochs 50
+
+  バリデーションデータなしで訓練:
+  python train.py --train_data /path/to/data.npz --epochs 50
+
+  ダミーデータでの訓練:
+  python train.py --train_data dummy --use_dummy --epochs 10
+
+
+  # 軌道生成
+  python src/UNet/generate.py --checkpoint checkpoints/checkpoint_epoch_100.pth
+
+  # 可視化
+  python src/UNet/visualize.py --checkpoint checkpoints/checkpoint_epoch_100.pth

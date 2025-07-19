@@ -1,0 +1,314 @@
+# CLAUDE_ADDED
+import torch
+import torch.nn.functional as F
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import Optional, Tuple
+import argparse
+import os
+from Model import UNet1D
+from train import DDPMScheduler
+
+
+class TrajectoryGenerator:
+    """
+    拡散モデルを使った軌道生成クラス
+    """
+    def __init__(self, 
+                 model: UNet1D, 
+                 scheduler: DDPMScheduler, 
+                 device: torch.device):
+        self.model = model
+        self.scheduler = scheduler
+        self.device = device
+        
+        # 逆プロセス用のパラメータをデバイスに移動
+        self.sqrt_recip_alphas = torch.sqrt(1.0 / scheduler.alphas).to(device)
+        self.sqrt_one_minus_alphas_cumprod = scheduler.sqrt_one_minus_alphas_cumprod.to(device)
+        
+    @torch.no_grad()
+    def ddpm_sample(self, 
+                    shape: Tuple[int, ...], 
+                    condition: torch.Tensor,
+                    num_inference_steps: Optional[int] = None) -> torch.Tensor:
+        """
+        DDPM サンプリング（逆拡散プロセス）
+        
+        :param shape: 生成する軌道の形状 [batch_size, 2, seq_len]
+        :param condition: 個人特性ベクトル [batch_size, condition_dim]
+        :param num_inference_steps: 推論ステップ数（Noneの場合は全ステップ）
+        :return: 生成された軌道 [batch_size, 2, seq_len]
+        """
+        batch_size = shape[0]
+        
+        # 推論ステップ数の設定
+        if num_inference_steps is None:
+            timesteps = list(range(self.scheduler.num_timesteps))[::-1]
+        else:
+            step_size = self.scheduler.num_timesteps // num_inference_steps
+            timesteps = list(range(0, self.scheduler.num_timesteps, step_size))[::-1]
+        
+        # 純粋なノイズから開始
+        x = torch.randn(shape, device=self.device)
+        
+        for i, t in enumerate(timesteps):
+            # 現在のタイムステップ
+            t_tensor = torch.full((batch_size,), t, device=self.device, dtype=torch.long)
+            
+            # モデルでノイズを予測
+            predicted_noise = self.model(x, t_tensor, condition)
+            
+            # DDPM更新式でx_{t-1}を計算
+            if t > 0:
+                # x_{t-1} = 1/sqrt(α_t) * (x_t - β_t/sqrt(1-α̅_t) * ε_θ) + σ_t * z
+                sqrt_recip_alpha_t = self.sqrt_recip_alphas[t]
+                beta_t = self.scheduler.betas[t]
+                sqrt_one_minus_alphas_cumprod_t = self.sqrt_one_minus_alphas_cumprod[t]
+                
+                # 平均項の計算
+                mean = sqrt_recip_alpha_t * (x - beta_t / sqrt_one_minus_alphas_cumprod_t * predicted_noise)
+                
+                # 分散項の計算
+                alpha_t = self.scheduler.alphas[t].to(self.device)
+                alpha_cumprod_t = self.scheduler.alphas_cumprod[t].to(self.device)
+                alpha_cumprod_prev = self.scheduler.alphas_cumprod_prev[t].to(self.device)
+                
+                # σ_t^2 = β_t * (1 - α̅_{t-1}) / (1 - α̅_t)
+                variance = beta_t.to(self.device) * (1 - alpha_cumprod_prev) / (1 - alpha_cumprod_t)
+                sigma = torch.sqrt(variance)
+                
+                # ランダムノイズ
+                noise = torch.randn_like(x)
+                
+                x = mean + sigma * noise
+            else:
+                # 最後のステップ（t=0）ではノイズを加えない
+                sqrt_recip_alpha_t = self.sqrt_recip_alphas[t]
+                beta_t = self.scheduler.betas[t]
+                sqrt_one_minus_alphas_cumprod_t = self.sqrt_one_minus_alphas_cumprod[t]
+                
+                x = sqrt_recip_alpha_t * (x - beta_t / sqrt_one_minus_alphas_cumprod_t * predicted_noise)
+        
+        return x
+    
+    @torch.no_grad()
+    def ddim_sample(self, 
+                    shape: Tuple[int, ...], 
+                    condition: torch.Tensor,
+                    num_inference_steps: int = 50,
+                    eta: float = 0.0) -> torch.Tensor:
+        """
+        DDIM サンプリング（より高速な推論）
+        
+        :param shape: 生成する軌道の形状 [batch_size, 2, seq_len]
+        :param condition: 個人特性ベクトル [batch_size, condition_dim]
+        :param num_inference_steps: 推論ステップ数
+        :param eta: DDIMパラメータ（0.0でdeterministic, 1.0でDDPM相当）
+        :return: 生成された軌道 [batch_size, 2, seq_len]
+        """
+        batch_size = shape[0]
+        
+        # 等間隔でタイムステップを選択
+        step_size = self.scheduler.num_timesteps // num_inference_steps
+        timesteps = list(range(0, self.scheduler.num_timesteps, step_size))[::-1]
+        
+        # 純粋なノイズから開始
+        x = torch.randn(shape, device=self.device)
+        
+        for i, t in enumerate(timesteps):
+            t_tensor = torch.full((batch_size,), t, device=self.device, dtype=torch.long)
+            
+            # 次のタイムステップ
+            prev_timestep = timesteps[i + 1] if i + 1 < len(timesteps) else 0
+            
+            # モデルでノイズを予測
+            predicted_noise = self.model(x, t_tensor, condition)
+            
+            # DDIM更新式
+            alpha_cumprod_t = self.scheduler.alphas_cumprod[t].to(self.device)
+            alpha_cumprod_prev = self.scheduler.alphas_cumprod[prev_timestep].to(self.device) if prev_timestep > 0 else torch.tensor(1.0, device=self.device)
+            
+            # 予測されたoriginal sample
+            pred_original_sample = (x - torch.sqrt(1 - alpha_cumprod_t) * predicted_noise) / torch.sqrt(alpha_cumprod_t)
+            
+            # 方向ベクトル
+            pred_sample_direction = torch.sqrt(1 - alpha_cumprod_prev - eta**2 * (1 - alpha_cumprod_t) / alpha_cumprod_t * (1 - alpha_cumprod_prev)) * predicted_noise
+            
+            # DDIMステップ
+            prev_sample = torch.sqrt(alpha_cumprod_prev) * pred_original_sample + pred_sample_direction
+            
+            # ランダム項（eta > 0の場合）
+            if eta > 0:
+                variance = eta**2 * (1 - alpha_cumprod_prev) / (1 - alpha_cumprod_t) * (1 - alpha_cumprod_t / alpha_cumprod_prev)
+                noise = torch.randn_like(x)
+                prev_sample += torch.sqrt(variance) * noise
+            
+            x = prev_sample
+        
+        return x
+    
+    def generate_trajectories(self, 
+                            conditions: torch.Tensor,
+                            seq_len: int = 101,
+                            method: str = 'ddpm',
+                            num_inference_steps: Optional[int] = None) -> torch.Tensor:
+        """
+        指定された個人特性に基づいて軌道を生成
+        
+        :param conditions: 個人特性ベクトル [batch_size, condition_dim]
+        :param seq_len: 軌道の長さ
+        :param method: サンプリング手法 ('ddpm' or 'ddim')
+        :param num_inference_steps: 推論ステップ数
+        :return: 生成された軌道 [batch_size, 2, seq_len]
+        """
+        batch_size = conditions.shape[0]
+        shape = (batch_size, 2, seq_len)
+        
+        if method == 'ddpm':
+            return self.ddpm_sample(shape, conditions, num_inference_steps)
+        elif method == 'ddim':
+            steps = num_inference_steps if num_inference_steps is not None else 50
+            return self.ddim_sample(shape, conditions, steps)
+        else:
+            raise ValueError(f"Unknown sampling method: {method}")
+
+
+def load_model(checkpoint_path: str, 
+               condition_dim: int = 5,
+               device: torch.device = torch.device('cpu')) -> UNet1D:
+    """
+    チェックポイントからモデルをロード
+    """
+    model = UNet1D(
+        input_dim=2,
+        condition_dim=condition_dim,
+        time_embed_dim=128,
+        base_channels=64
+    ).to(device)
+    
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+    
+    return model
+
+
+def visualize_trajectories(trajectories: np.ndarray, 
+                         conditions: np.ndarray,
+                         save_path: Optional[str] = None):
+    """
+    生成された軌道を可視化
+    
+    :param trajectories: [batch_size, 2, seq_len] の軌道データ
+    :param conditions: [batch_size, condition_dim] の個人特性データ
+    :param save_path: 保存パス（Noneの場合は表示のみ）
+    """
+    batch_size = trajectories.shape[0]
+    cols = min(4, batch_size)
+    rows = (batch_size + cols - 1) // cols
+    
+    fig, axes = plt.subplots(rows, cols, figsize=(4*cols, 3*rows))
+    if rows == 1:
+        axes = axes.reshape(1, -1)
+    
+    for i in range(batch_size):
+        row = i // cols
+        col = i % cols
+        ax = axes[row, col]
+        
+        x_traj = trajectories[i, 0, :]  # X軸軌道
+        y_traj = trajectories[i, 1, :]  # Y軸軌道
+        
+        ax.plot(x_traj, y_traj, 'b-', linewidth=2, alpha=0.7)
+        ax.plot(x_traj[0], y_traj[0], 'go', markersize=8, label='Start')
+        ax.plot(x_traj[-1], y_traj[-1], 'ro', markersize=8, label='End')
+        
+        ax.set_title(f'Trajectory {i+1}\nCondition: {conditions[i, :3]:.2f}...')
+        ax.set_xlabel('X Position')
+        ax.set_ylabel('Y Position')
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        ax.set_aspect('equal')
+    
+    # 空のサブプロットを非表示
+    for i in range(batch_size, rows * cols):
+        row = i // cols
+        col = i % cols
+        axes[row, col].set_visible(False)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f'Trajectories saved to: {save_path}')
+    else:
+        plt.show()
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Trajectory Generation')
+    parser.add_argument('--checkpoint', type=str, required=True, help='Path to model checkpoint')
+    parser.add_argument('--condition_dim', type=int, default=5, help='Condition dimension')
+    parser.add_argument('--batch_size', type=int, default=8, help='Number of trajectories to generate')
+    parser.add_argument('--seq_len', type=int, default=101, help='Sequence length')
+    parser.add_argument('--method', type=str, default='ddpm', choices=['ddpm', 'ddim'], help='Sampling method')
+    parser.add_argument('--steps', type=int, default=None, help='Number of inference steps')
+    parser.add_argument('--device', type=str, default='cuda', help='Device to use')
+    parser.add_argument('--output_dir', type=str, default='generated_trajectories', help='Output directory')
+    
+    args = parser.parse_args()
+    
+    # デバイス設定
+    device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
+    print(f'Using device: {device}')
+    
+    # 出力ディレクトリ作成
+    os.makedirs(args.output_dir, exist_ok=True)
+    
+    # モデルロード
+    print(f'Loading model from: {args.checkpoint}')
+    model = load_model(args.checkpoint, args.condition_dim, device)
+    
+    # スケジューラ作成
+    scheduler = DDPMScheduler(num_timesteps=1000)
+    
+    # ジェネレータ作成
+    generator = TrajectoryGenerator(model, scheduler, device)
+    
+    # ダミー個人特性データ生成（実際のプロジェクトでは実データに置き換える）
+    # 例：動作時間、終点誤差、ジャーク、個人スキル、好み設定など
+    conditions = np.random.randn(args.batch_size, args.condition_dim).astype(np.float32)
+    conditions_tensor = torch.FloatTensor(conditions).to(device)
+    
+    # 軌道生成
+    print(f'Generating {args.batch_size} trajectories using {args.method} method...')
+    with torch.no_grad():
+        generated_trajectories = generator.generate_trajectories(
+            conditions=conditions_tensor,
+            seq_len=args.seq_len,
+            method=args.method,
+            num_inference_steps=args.steps
+        )
+    
+    # CPU に移動してnumpy配列に変換
+    trajectories_np = generated_trajectories.cpu().numpy()
+    
+    # 可視化と保存
+    vis_path = os.path.join(args.output_dir, 'generated_trajectories.png')
+    visualize_trajectories(trajectories_np, conditions, vis_path)
+    
+    # 軌道データを保存
+    np.save(os.path.join(args.output_dir, 'trajectories.npy'), trajectories_np)
+    np.save(os.path.join(args.output_dir, 'conditions.npy'), conditions)
+    
+    print(f'Generation completed! Results saved to: {args.output_dir}')
+    
+    # 統計情報を表示
+    print(f'\nTrajectory Statistics:')
+    print(f'  Shape: {trajectories_np.shape}')
+    print(f'  X-axis range: [{trajectories_np[:, 0, :].min():.3f}, {trajectories_np[:, 0, :].max():.3f}]')
+    print(f'  Y-axis range: [{trajectories_np[:, 1, :].min():.3f}, {trajectories_np[:, 1, :].max():.3f}]')
+
+
+if __name__ == '__main__':
+    main()
