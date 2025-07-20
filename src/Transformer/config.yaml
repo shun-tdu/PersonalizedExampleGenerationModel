@@ -1,5 +1,5 @@
 # CLAUDE_ADDED
-# Hydra configuration for DiffWave trajectory generation model
+# Hydra configuration for Transformer trajectory generation model
 
 defaults:
   - _self_
@@ -8,25 +8,27 @@ defaults:
 model:
   input_dim: 2
   condition_dim: 5  # Will be auto-detected from data
-  residual_channels: 64
-  skip_channels: 64
-  condition_channels: 128
-  num_layers: 20
-  cycles: 6
-  time_embed_dim: 128
+  d_model: 256
+  nhead: 8
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  dim_feedforward: 1024
+  max_seq_len: 101
+  dropout: 0.1
 
 # Training configuration
 training:
   batch_size: 32
-  epochs: 300
+  epochs: 200
   learning_rate: 1e-4
+  weight_decay: 1e-4
   gradient_clip: 1.0
-  save_interval: 50
+  save_interval: 20
   use_dummy: false
   # Early stopping configuration
   early_stopping:
     enabled: true
-    patience: 30  # DiffWaveは収束が遅い場合があるので少し長めに
+    patience: 25  # Transformerは収束が遅い場合があるので長めに
     min_delta: 1e-6
     restore_best_weights: true
 
@@ -36,18 +38,12 @@ data:
   val_data: null  # If null, will split from train_data
   val_split_ratio: 0.2
 
-# Diffusion scheduler configuration
-scheduler:
-  num_timesteps: 1000
-  beta_start: 0.0001
-  beta_end: 0.02
-
 # Generation configuration
 generation:
-  method: "ddpm"  # ddpm or ddim
-  num_inference_steps: null  # null means use all timesteps
-  seq_len: 101
+  max_length: 101
   num_samples: 8
+  use_start_points: true  # 開始点を使用するか
+  num_start_points: 3    # 開始点の数
 
 # Device configuration
 device: "cuda"
@@ -56,12 +52,12 @@ device: "cuda"
 output:
   checkpoint_dir: "checkpoints"
   mlflow_tracking_uri: "mlruns"
-  experiment_name: "diffwave_trajectory"
+  experiment_name: "transformer_trajectory"
 
 # MLFlow configuration
 mlflow:
   tracking_uri: "mlruns"
-  experiment_name: "diffwave_trajectory_experiments"
+  experiment_name: "transformer_trajectory_experiments"
   run_name: null  # If null, will be auto-generated
   log_model: true
   log_artifacts: true

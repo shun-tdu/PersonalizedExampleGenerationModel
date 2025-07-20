@@ -1,0 +1,25 @@
+{
+  "converged": false,
+  "final_loss": 0.003068887162953615,
+  "convergence_epoch": null,
+  "total_epochs": 5000,
+  "batch_info": {
+    "batch_size": 4,
+    "trajectory_shape": [
+      4,
+      101,
+      2
+    ],
+    "condition_shape": [
+      4,
+      5
+    ]
+  },
+  "loss_statistics": {
+    "min_loss": 0.0024848091416060925,
+    "max_loss": 2.270689010620117,
+    "initial_loss": 0.5966216921806335,
+    "final_loss": 0.003068887162953615,
+    "loss_reduction_ratio": 194.40978455735134
+  }
+}

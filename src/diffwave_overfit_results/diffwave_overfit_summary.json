@@ -1,8 +1,8 @@
 {
   "converged": false,
-  "final_loss": 0.009668007493019104,
+  "final_loss": 0.015843508765101433,
   "convergence_epoch": null,
-  "total_epochs": 5000,
+  "total_epochs": 10000,
   "batch_info": {
     "batch_size": 4,
     "trajectory_shape": [
@@ -16,10 +16,10 @@
     ]
   },
   "loss_statistics": {
-    "min_loss": 0.0030758592765778303,
-    "max_loss": 1.739913821220398,
-    "initial_loss": 1.6019762754440308,
-    "final_loss": 0.009668007493019104,
-    "loss_reduction_ratio": 165.69870023381304
+    "min_loss": 0.0029803395736962557,
+    "max_loss": 1.7163736820220947,
+    "initial_loss": 1.7163736820220947,
+    "final_loss": 0.015843508765101433,
+    "loss_reduction_ratio": 108.33292722397192
   }
 }

@@ -146,7 +146,7 @@ class DiffWave1D(nn.Module):
                  skip_channels: int = 64,
                  condition_channels: int = 128,
                  num_layers: int = 20,
-                 cycles: int = 4,
+                 cycles: int = 6,
                  time_embed_dim: int = 128):
         super().__init__()
         

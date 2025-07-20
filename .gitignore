@@ -45,5 +45,7 @@ secrets.yaml
 data/
 src/checkpoints/
 src/mlruns
-
+src/transformer_overfit_generation_results
+src/transformer_overfit_results
+src/generated_trajectories
 CLAUDE.md
