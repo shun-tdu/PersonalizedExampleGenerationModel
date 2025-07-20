@@ -44,8 +44,10 @@ secrets.yaml
 # 学習データやログ，学習済みモデルを保管するフォルダ
 data/
 src/checkpoints/
-src/mlruns
-src/transformer_overfit_generation_results
-src/transformer_overfit_results
-src/generated_trajectories
+src/mlruns/
+src/transformer_overfit_generation_results/
+src/transformer_overfit_results/
+src/generated_trajectories/
+src/diffwave_overfit_generation_results/
+src/diffwave_overfit_results/
 CLAUDE.md
