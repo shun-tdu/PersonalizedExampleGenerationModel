@@ -48,6 +48,49 @@ class DDPMScheduler:
         return sqrt_alphas_cumprod_t * x0 + sqrt_one_minus_alphas_cumprod_t * noise
 
 
+class EarlyStopping:
+    """
+    アーリーストップ機能クラス
+    """
+    def __init__(self, patience: int = 10, min_delta: float = 1e-6, restore_best_weights: bool = True):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.restore_best_weights = restore_best_weights
+        self.best_loss = float('inf')
+        self.counter = 0
+        self.best_weights = None
+        self.should_stop = False
+        
+    def __call__(self, val_loss: float, model: nn.Module) -> bool:
+        """
+        バリデーション損失をチェックして早期終了判定
+        
+        Args:
+            val_loss: 現在のバリデーション損失
+            model: モデル
+            
+        Returns:
+            bool: 早期終了するかどうか
+        """
+        if val_loss < self.best_loss - self.min_delta:
+            # 改善があった場合
+            self.best_loss = val_loss
+            self.counter = 0
+            if self.restore_best_weights:
+                self.best_weights = model.state_dict().copy()
+        else:
+            # 改善がなかった場合
+            self.counter += 1
+            
+        if self.counter >= self.patience:
+            self.should_stop = True
+            if self.restore_best_weights and self.best_weights is not None:
+                model.load_state_dict(self.best_weights)
+                print(f"Early stopping triggered. Restored best weights with validation loss: {self.best_loss:.6f}")
+                
+        return self.should_stop
+
+
 class DiffusionTrainer:
     """
     拡散モデルの訓練クラス
@@ -108,11 +151,22 @@ class DiffusionTrainer:
               val_loader: DataLoader = None,
               num_epochs: int = 100,
               save_interval: int = 10,
-              checkpoint_dir: str = 'checkpoints'):
+              checkpoint_dir: str = 'checkpoints',
+              early_stopping_config: dict = None):
         """
         モデルの訓練
         """
         os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        # アーリーストップ機能の初期化
+        early_stopping = None
+        if early_stopping_config and early_stopping_config.get('enabled', False):
+            early_stopping = EarlyStopping(
+                patience=early_stopping_config.get('patience', 10),
+                min_delta=early_stopping_config.get('min_delta', 1e-6),
+                restore_best_weights=early_stopping_config.get('restore_best_weights', True)
+            )
+            print(f"Early stopping enabled with patience: {early_stopping.patience}")
         
         for epoch in range(num_epochs):
             self.model.train()
@@ -130,12 +184,28 @@ class DiffusionTrainer:
             self.train_losses.append(avg_epoch_loss)
             
             # バリデーション
+            val_loss = None
             if val_loader is not None:
                 val_loss = self.validate(val_loader)
                 self.val_losses.append(val_loss)
                 print(f'Epoch {epoch+1}: Train Loss = {avg_epoch_loss:.4f}, Val Loss = {val_loss:.4f}')
+                
+                # アーリーストップチェック
+                if early_stopping is not None:
+                    if early_stopping(val_loss, self.model):
+                        print(f'Early stopping at epoch {epoch+1}')
+                        break
+                    elif early_stopping.counter > 0:
+                        print(f'Early stopping counter: {early_stopping.counter}/{early_stopping.patience}')
             else:
                 print(f'Epoch {epoch+1}: Train Loss = {avg_epoch_loss:.4f}')
+                # バリデーションデータがない場合は訓練損失でアーリーストップ
+                if early_stopping is not None:
+                    if early_stopping(avg_epoch_loss, self.model):
+                        print(f'Early stopping at epoch {epoch+1} (using training loss)')
+                        break
+                    elif early_stopping.counter > 0:
+                        print(f'Early stopping counter: {early_stopping.counter}/{early_stopping.patience}')
             
             # チェックポイント保存
             if (epoch + 1) % save_interval == 0:
@@ -339,12 +409,14 @@ def main(cfg: DictConfig) -> None:
         
         # 訓練開始
         print('Starting training...')
+        early_stopping_config = cfg.training.get('early_stopping', None)
         trainer.train(
             train_loader=train_loader,
             val_loader=val_loader,
             num_epochs=cfg.training.epochs,
             save_interval=cfg.training.save_interval,
-            checkpoint_dir=cfg.output.checkpoint_dir
+            checkpoint_dir=cfg.output.checkpoint_dir,
+            early_stopping_config=early_stopping_config
         )
         
         # モデルをMLFlowに保存
@@ -367,11 +439,22 @@ class MLFlowDiffusionTrainer(DiffusionTrainer):
               val_loader: DataLoader = None,
               num_epochs: int = 100,
               save_interval: int = 10,
-              checkpoint_dir: str = 'checkpoints'):
+              checkpoint_dir: str = 'checkpoints',
+              early_stopping_config: dict = None):
         """
-        MLFlow統合訓練
+        MLFlow統合訓練（アーリーストップ対応）
         """
         os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        # アーリーストップ機能の初期化
+        early_stopping = None
+        if early_stopping_config and early_stopping_config.get('enabled', False):
+            early_stopping = EarlyStopping(
+                patience=early_stopping_config.get('patience', 10),
+                min_delta=early_stopping_config.get('min_delta', 1e-6),
+                restore_best_weights=early_stopping_config.get('restore_best_weights', True)
+            )
+            print(f"Early stopping enabled with patience: {early_stopping.patience}")
         
         for epoch in range(num_epochs):
             self.model.train()
@@ -394,8 +477,34 @@ class MLFlowDiffusionTrainer(DiffusionTrainer):
                 val_loss = self.validate(val_loader)
                 self.val_losses.append(val_loss)
                 print(f'Epoch {epoch+1}: Train Loss = {avg_epoch_loss:.4f}, Val Loss = {val_loss:.4f}')
+                
+                # アーリーストップチェック
+                if early_stopping is not None:
+                    if early_stopping(val_loss, self.model):
+                        print(f'Early stopping at epoch {epoch+1}')
+                        # MLFlowにアーリーストップ情報をログ
+                        mlflow.log_params({
+                            "early_stopped": True,
+                            "early_stop_epoch": epoch + 1,
+                            "best_val_loss": early_stopping.best_loss
+                        })
+                        break
+                    elif early_stopping.counter > 0:
+                        print(f'Early stopping counter: {early_stopping.counter}/{early_stopping.patience}')
             else:
                 print(f'Epoch {epoch+1}: Train Loss = {avg_epoch_loss:.4f}')
+                # バリデーションデータがない場合は訓練損失でアーリーストップ
+                if early_stopping is not None:
+                    if early_stopping(avg_epoch_loss, self.model):
+                        print(f'Early stopping at epoch {epoch+1} (using training loss)')
+                        mlflow.log_params({
+                            "early_stopped": True,
+                            "early_stop_epoch": epoch + 1,
+                            "best_train_loss": early_stopping.best_loss
+                        })
+                        break
+                    elif early_stopping.counter > 0:
+                        print(f'Early stopping counter: {early_stopping.counter}/{early_stopping.patience}')
             
             # MLFlowにメトリクスをログ
             mlflow.log_metrics({
