@@ -17,8 +17,8 @@ import json
 import matplotlib.pyplot as plt
 import hydra
 from omegaconf import DictConfig, OmegaConf
-import mlflow
-import mlflow.pytorch
+# import mlflow
+# import mlflow.pytorch
 
 from Model import TransformerTrajectoryGenerator, TransformerTrainer
 
@@ -138,11 +138,11 @@ class MLFlowTransformerTrainer(TransformerTrainer):
                     if early_stopping(val_loss, self.model):
                         print(f'Early stopping at epoch {epoch+1}')
                         # MLFlowにアーリーストップ情報をログ
-                        mlflow.log_params({
-                            "early_stopped": True,
-                            "early_stop_epoch": epoch + 1,
-                            "best_val_loss": early_stopping.best_loss
-                        })
+                        # mlflow.log_params({
+                        #     "early_stopped": True,
+                        #     "early_stop_epoch": epoch + 1,
+                        #     "best_val_loss": early_stopping.best_loss
+                        # })
                         break
                     elif early_stopping.counter > 0:
                         print(f'Early stopping counter: {early_stopping.counter}/{early_stopping.patience}')
@@ -152,33 +152,33 @@ class MLFlowTransformerTrainer(TransformerTrainer):
                 if early_stopping is not None:
                     if early_stopping(avg_epoch_loss, self.model):
                         print(f'Early stopping at epoch {epoch+1} (using training loss)')
-                        mlflow.log_params({
-                            "early_stopped": True,
-                            "early_stop_epoch": epoch + 1,
-                            "best_train_loss": early_stopping.best_loss
-                        })
+                        # mlflow.log_params({
+                        #     "early_stopped": True,
+                        #     "early_stop_epoch": epoch + 1,
+                        #     "best_train_loss": early_stopping.best_loss
+                        # })
                         break
                     elif early_stopping.counter > 0:
                         print(f'Early stopping counter: {early_stopping.counter}/{early_stopping.patience}')
             
             # MLFlowにメトリクスをログ
-            mlflow.log_metrics({
-                "train_loss": avg_epoch_loss,
-                "val_loss": val_loss if val_loss is not None else 0.0,
-                "epoch": epoch + 1
-            }, step=epoch)
+            # mlflow.log_metrics({
+            #     "train_loss": avg_epoch_loss,
+            #     "val_loss": val_loss if val_loss is not None else 0.0,
+            #     "epoch": epoch + 1
+            # }, step=epoch)
             
             # チェックポイント保存
             if (epoch + 1) % save_interval == 0:
                 checkpoint_path = self.save_checkpoint(epoch + 1, checkpoint_dir)
                 
                 # MLFlowにアーティファクトとして保存
-                mlflow.log_artifact(checkpoint_path, "checkpoints")
+                # mlflow.log_artifact(checkpoint_path, "checkpoints")
         
         # 訓練完了後に損失曲線を保存
         curve_path = self.save_training_curves(checkpoint_dir)
-        if curve_path:
-            mlflow.log_artifact(curve_path, "plots")
+        # if curve_path:
+        #     mlflow.log_artifact(curve_path, "plots")
     
     def save_checkpoint(self, epoch: int, checkpoint_dir: str) -> str:
         """
@@ -270,108 +270,108 @@ def main(cfg: DictConfig) -> None:
     print(f'Using device: {device}')
     
     # MLFlowセットアップ
-    mlflow.set_tracking_uri(cfg.mlflow.tracking_uri)
-    mlflow.set_experiment(cfg.mlflow.experiment_name)
+    # mlflow.set_tracking_uri(cfg.mlflow.tracking_uri)
+    # mlflow.set_experiment(cfg.mlflow.experiment_name)
     
-    with mlflow.start_run(run_name=cfg.mlflow.run_name):
-        # 設定をMLFlowにログ
-        mlflow.log_params(OmegaConf.to_container(cfg, resolve=True))
+    # with mlflow.start_run(run_name=cfg.mlflow.run_name):
+    #     # 設定をMLFlowにログ
+    #     mlflow.log_params(OmegaConf.to_container(cfg, resolve=True))
         
-        if cfg.training.use_dummy:
-            # ダミーデータを使用
-            print('Creating dummy data...')
-            train_trajectories, train_conditions = create_dummy_data(1000, 101, cfg.model.condition_dim)
-            val_trajectories, val_conditions = create_dummy_data(200, 101, cfg.model.condition_dim)
-            
-            # ダミーTrajectoryDatasetクラスを内部定義
-            class DummyTrajectoryDataset(Dataset):
-                def __init__(self, trajectory_data: np.ndarray, condition_data: np.ndarray):
-                    self.trajectories = torch.FloatTensor(trajectory_data)
-                    self.conditions = torch.FloatTensor(condition_data)
-                    
-                def __len__(self):
-                    return len(self.trajectories)
+    if cfg.training.use_dummy:
+        # ダミーデータを使用
+        print('Creating dummy data...')
+        train_trajectories, train_conditions = create_dummy_data(1000, 101, cfg.model.condition_dim)
+        val_trajectories, val_conditions = create_dummy_data(200, 101, cfg.model.condition_dim)
+        
+        # ダミーTrajectoryDatasetクラスを内部定義
+        class DummyTrajectoryDataset(Dataset):
+            def __init__(self, trajectory_data: np.ndarray, condition_data: np.ndarray):
+                self.trajectories = torch.FloatTensor(trajectory_data)
+                self.conditions = torch.FloatTensor(condition_data)
                 
-                def __getitem__(self, idx):
-                    return self.trajectories[idx], self.conditions[idx]
+            def __len__(self):
+                return len(self.trajectories)
             
-            train_dataset = DummyTrajectoryDataset(train_trajectories, train_conditions)
-            val_dataset = DummyTrajectoryDataset(val_trajectories, val_conditions)
-            condition_dim = cfg.model.condition_dim
+            def __getitem__(self, idx):
+                return self.trajectories[idx], self.conditions[idx]
+        
+        train_dataset = DummyTrajectoryDataset(train_trajectories, train_conditions)
+        val_dataset = DummyTrajectoryDataset(val_trajectories, val_conditions)
+        condition_dim = cfg.model.condition_dim
+    else:
+        # 実データを使用
+        print(f'Loading training data from: {cfg.data.train_data}')
+        train_dataset = TrajectoryDataset(cfg.data.train_data)
+        
+        if cfg.data.val_data:
+            print(f'Loading validation data from: {cfg.data.val_data}')
+            val_dataset = TrajectoryDataset(cfg.data.val_data)
         else:
-            # 実データを使用
-            print(f'Loading training data from: {cfg.data.train_data}')
-            train_dataset = TrajectoryDataset(cfg.data.train_data)
-            
-            if cfg.data.val_data:
-                print(f'Loading validation data from: {cfg.data.val_data}')
-                val_dataset = TrajectoryDataset(cfg.data.val_data)
-            else:
-                # バリデーションデータが指定されていない場合は訓練データから分割
-                print('Splitting training data for validation...')
-                train_size = int((1 - cfg.data.val_split_ratio) * len(train_dataset))
-                val_size = len(train_dataset) - train_size
-                train_dataset, val_dataset = torch.utils.data.random_split(train_dataset, [train_size, val_size])
-            
-            # データセットから条件次元を取得
-            sample_trajectory, sample_condition = train_dataset[0]
-            condition_dim = sample_condition.shape[0]
-            print(f'Condition dimension detected: {condition_dim}')
+            # バリデーションデータが指定されていない場合は訓練データから分割
+            print('Splitting training data for validation...')
+            train_size = int((1 - cfg.data.val_split_ratio) * len(train_dataset))
+            val_size = len(train_dataset) - train_size
+            train_dataset, val_dataset = torch.utils.data.random_split(train_dataset, [train_size, val_size])
         
-        # データローダー作成
-        train_loader = DataLoader(train_dataset, batch_size=cfg.training.batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=cfg.training.batch_size, shuffle=False)
-        
-        # モデル作成
-        model = TransformerTrajectoryGenerator(
-            input_dim=cfg.model.input_dim,
-            condition_dim=condition_dim,
-            d_model=cfg.model.d_model,
-            nhead=cfg.model.nhead,
-            num_encoder_layers=cfg.model.num_encoder_layers,
-            num_decoder_layers=cfg.model.num_decoder_layers,
-            dim_feedforward=cfg.model.dim_feedforward,
-            max_seq_len=cfg.model.max_seq_len,
-            dropout=cfg.model.dropout
-        ).to(device)
-        
-        # モデル情報をログ
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        mlflow.log_params({
-            "total_parameters": total_params,
-            "trainable_parameters": trainable_params,
-            "actual_condition_dim": condition_dim
-        })
-        
-        print(f'Model created with {total_params:,} parameters')
-        
-        # トレーナー作成（MLFlow統合）
-        trainer = MLFlowTransformerTrainer(
-            model, device, cfg.training.learning_rate
-        )
-        
-        # 訓練開始
-        print('Starting Transformer training...')
-        early_stopping_config = cfg.training.get('early_stopping', None)
-        trainer.train(
-            train_loader=train_loader,
-            val_loader=val_loader,
-            num_epochs=cfg.training.epochs,
-            save_interval=cfg.training.save_interval,
-            checkpoint_dir=cfg.output.checkpoint_dir,
-            early_stopping_config=early_stopping_config
-        )
-        
-        # モデルをMLFlowに保存
-        if cfg.mlflow.log_model:
-            mlflow.pytorch.log_model(
-                model, 
-                "model",
-                registered_model_name=f"{cfg.mlflow.experiment_name}_transformer"
-            )
-        
-        print('Transformer training completed!')
+        # データセットから条件次元を取得
+        sample_trajectory, sample_condition = train_dataset[0]
+        condition_dim = sample_condition.shape[0]
+        print(f'Condition dimension detected: {condition_dim}')
+    
+    # データローダー作成
+    train_loader = DataLoader(train_dataset, batch_size=cfg.training.batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=cfg.training.batch_size, shuffle=False)
+    
+    # モデル作成
+    model = TransformerTrajectoryGenerator(
+        input_dim=cfg.model.input_dim,
+        condition_dim=condition_dim,
+        d_model=cfg.model.d_model,
+        nhead=cfg.model.nhead,
+        num_encoder_layers=cfg.model.num_encoder_layers,
+        num_decoder_layers=cfg.model.num_decoder_layers,
+        dim_feedforward=cfg.model.dim_feedforward,
+        max_seq_len=cfg.model.max_seq_len,
+        dropout=cfg.model.dropout
+    ).to(device)
+    
+    # モデル情報をログ
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    # mlflow.log_params({
+    #     "total_parameters": total_params,
+    #     "trainable_parameters": trainable_params,
+    #     "actual_condition_dim": condition_dim
+    # })
+    
+    print(f'Model created with {total_params:,} parameters')
+    
+    # トレーナー作成（MLFlow統合）
+    trainer = MLFlowTransformerTrainer(
+        model, device, cfg.training.learning_rate
+    )
+    
+    # 訓練開始
+    print('Starting Transformer training...')
+    early_stopping_config = cfg.training.get('early_stopping', None)
+    trainer.train(
+        train_loader=train_loader,
+        val_loader=val_loader,
+        num_epochs=cfg.training.epochs,
+        save_interval=cfg.training.save_interval,
+        checkpoint_dir=cfg.output.checkpoint_dir,
+        early_stopping_config=early_stopping_config
+    )
+    
+    # モデルをMLFlowに保存
+    # if cfg.mlflow.log_model:
+    #     mlflow.pytorch.log_model(
+    #         model, 
+    #         "model",
+    #         registered_model_name=f"{cfg.mlflow.experiment_name}_transformer"
+    #     )
+    
+    print('Transformer training completed!')
 
 
 if __name__ == '__main__':

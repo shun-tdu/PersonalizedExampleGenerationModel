@@ -57,6 +57,9 @@ class TrajectoryEmbedding(nn.Module):
         Returns:
             [seq_len, batch_size, d_model]
         """
+        # 入力形状を確認
+        batch_size, seq_len, input_dim = x.shape
+        
         # [batch_size, seq_len, input_dim] -> [batch_size, seq_len, d_model]
         embedded = self.embedding(x)
         embedded = self.layer_norm(embedded)

@@ -11,11 +11,15 @@ from torch.utils.data import Dataset
 import numpy as np
 
 # 親ディレクトリのUNetモジュールを参照
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'UNet'))
+unet_path = os.path.join(os.path.dirname(__file__), '..', 'UNet')
+sys.path.insert(0, unet_path)
 
-# UNetのTrajectoryDatasetをインポート（モジュール名を明示的に指定）
-import TrajectoryDataset as unet_trajectory_dataset
-UNetTrajectoryDataset = unet_trajectory_dataset.TrajectoryDataset
+# UNetのTrajectoryDatasetを直接インポート
+import importlib.util
+spec = importlib.util.spec_from_file_location("unet_trajectory", os.path.join(unet_path, "TrajectoryDataset.py"))
+unet_trajectory_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(unet_trajectory_module)
+UNetTrajectoryDataset = unet_trajectory_module.TrajectoryDataset
 
 
 class TrajectoryDataset(Dataset):

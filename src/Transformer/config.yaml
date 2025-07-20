@@ -24,7 +24,7 @@ training:
   weight_decay: 1e-4
   gradient_clip: 1.0
   save_interval: 20
-  use_dummy: false
+  use_dummy: true
   # Early stopping configuration
   early_stopping:
     enabled: true
