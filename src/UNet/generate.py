@@ -22,10 +22,14 @@ class TrajectoryGenerator:
     def __init__(self, 
                  model: UNet1D, 
                  scheduler: DDPMScheduler, 
-                 device: torch.device):
+                 device: torch.device,
+                 denormalize_trajectories: bool = True,
+                 trajectory_scale_factor: float = 0.15):
         self.model = model
         self.scheduler = scheduler
         self.device = device
+        self.denormalize_trajectories = denormalize_trajectories
+        self.trajectory_scale_factor = trajectory_scale_factor  # 正規化時に使用された最大値
         
         # 逆プロセス用のパラメータをデバイスに移動
         self.sqrt_recip_alphas = torch.sqrt(1.0 / scheduler.alphas).to(device)
@@ -152,6 +156,22 @@ class TrajectoryGenerator:
         
         return x
     
+    def denormalize_trajectory(self, normalized_trajectory: torch.Tensor) -> torch.Tensor:
+        """
+        正規化された軌道を元のスケールに戻す
+        
+        :param normalized_trajectory: 正規化済み軌道 [batch_size, 2, seq_len] (-1~1範囲)
+        :return: 元スケールの軌道 [batch_size, 2, seq_len] (メートル単位)
+        """
+        if not self.denormalize_trajectories:
+            return normalized_trajectory
+            
+        # 正規化の逆変換：各軌道が個別に正規化されていたので、
+        # データ生成時の最大値(0.15m)をスケール基準として使用
+        denormalized = normalized_trajectory * self.trajectory_scale_factor
+        
+        return denormalized
+    
     def generate_trajectories(self, 
                             conditions: torch.Tensor,
                             seq_len: int = 101,
@@ -169,13 +189,19 @@ class TrajectoryGenerator:
         batch_size = conditions.shape[0]
         shape = (batch_size, 2, seq_len)
         
+        # 拡散モデルで軌道生成（正規化済み）
         if method == 'ddpm':
-            return self.ddpm_sample(shape, conditions, num_inference_steps)
+            normalized_trajectories = self.ddpm_sample(shape, conditions, num_inference_steps)
         elif method == 'ddim':
             steps = num_inference_steps if num_inference_steps is not None else 50
-            return self.ddim_sample(shape, conditions, steps)
+            normalized_trajectories = self.ddim_sample(shape, conditions, steps)
         else:
             raise ValueError(f"Unknown sampling method: {method}")
+        
+        # 正規化を元に戻す
+        trajectories = self.denormalize_trajectory(normalized_trajectories)
+        
+        return trajectories
 
 
 def load_model(checkpoint_path: str, 
@@ -222,21 +248,27 @@ def load_model(checkpoint_path: str,
 
 def visualize_trajectories(trajectories: np.ndarray, 
                          conditions: np.ndarray,
-                         save_path: Optional[str] = None):
+                         save_path: Optional[str] = None,
+                         denormalized: bool = True):
     """
-    生成された軌道を可視化
+    生成された軌道を可視化（改善版）
     
     :param trajectories: [batch_size, 2, seq_len] の軌道データ
     :param conditions: [batch_size, condition_dim] の個人特性データ
     :param save_path: 保存パス（Noneの場合は表示のみ）
+    :param denormalized: 軌道が既に正規化解除されているかどうか
     """
     batch_size = trajectories.shape[0]
     cols = min(4, batch_size)
     rows = (batch_size + cols - 1) // cols
     
-    fig, axes = plt.subplots(rows, cols, figsize=(4*cols, 3*rows))
+    fig, axes = plt.subplots(rows, cols, figsize=(5*cols, 4*rows))
     if rows == 1:
         axes = axes.reshape(1, -1)
+    
+    # 単位とスケールの情報
+    unit = 'm' if denormalized else 'normalized'
+    scale_info = 'Real Scale' if denormalized else 'Normalized (-1 to 1)'
     
     for i in range(batch_size):
         row = i // cols
@@ -250,12 +282,32 @@ def visualize_trajectories(trajectories: np.ndarray,
         ax.plot(x_traj[0], y_traj[0], 'go', markersize=8, label='Start')
         ax.plot(x_traj[-1], y_traj[-1], 'ro', markersize=8, label='End')
         
-        ax.set_title(f'Trajectory {i+1}\nCondition: {conditions[i, :3]}...')
-        ax.set_xlabel('X Position')
-        ax.set_ylabel('Y Position')
+        # 軌道の統計情報
+        trajectory_length = np.sum(np.sqrt(np.diff(x_traj)**2 + np.diff(y_traj)**2))
+        endpoint_distance = np.sqrt((x_traj[-1] - x_traj[0])**2 + (y_traj[-1] - y_traj[0])**2)
+        
+        # タイトルに統計情報を含める
+        title = f'Trajectory {i+1}\n'
+        if conditions.shape[1] >= 3:
+            title += f'MT:{conditions[i, 0]:.2f}, EE:{conditions[i, 1]:.2f}, J:{conditions[i, 2]:.2f}\n'
+        title += f'Length: {trajectory_length:.3f}{unit}, End-dist: {endpoint_distance:.3f}{unit}'
+        
+        ax.set_title(title, fontsize=9)
+        ax.set_xlabel(f'X Position ({unit})')
+        ax.set_ylabel(f'Y Position ({unit})')
         ax.grid(True, alpha=0.3)
-        ax.legend()
+        ax.legend(fontsize=8)
         ax.set_aspect('equal')
+        
+        # 軸の範囲を適切に設定
+        if denormalized:
+            # 実スケールの場合、-0.2m to 0.2m程度の範囲
+            ax.set_xlim(-0.4, 0.4)
+            ax.set_ylim(-0.4, 0.4)
+        else:
+            # 正規化済みの場合、-1.5 to 1.5程度
+            ax.set_xlim(-1.5, 1.5)
+            ax.set_ylim(-1.5, 1.5)
     
     # 空のサブプロットを非表示
     for i in range(batch_size, rows * cols):
@@ -263,11 +315,37 @@ def visualize_trajectories(trajectories: np.ndarray,
         col = i % cols
         axes[row, col].set_visible(False)
     
+    # 全体のタイトル
+    fig.suptitle(f'Generated Trajectories ({scale_info})', fontsize=14, y=0.95)
+    
     plt.tight_layout()
     
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        print(f'Trajectories saved to: {save_path}')
+        print(f'Trajectories visualization saved to: {save_path}')
+        
+        # 統計情報をテキストファイルにも保存
+        stats_path = save_path.replace('.png', '_stats.txt')
+        with open(stats_path, 'w') as f:
+            f.write(f'Trajectory Generation Statistics ({scale_info})\n')
+            f.write('='*50 + '\n')
+            f.write(f'Number of trajectories: {batch_size}\n')
+            f.write(f'Sequence length: {trajectories.shape[2]}\n')
+            f.write(f'X range: [{trajectories[:, 0, :].min():.4f}, {trajectories[:, 0, :].max():.4f}] {unit}\n')
+            f.write(f'Y range: [{trajectories[:, 1, :].min():.4f}, {trajectories[:, 1, :].max():.4f}] {unit}\n')
+            f.write(f'X mean: {trajectories[:, 0, :].mean():.4f} {unit}\n')
+            f.write(f'Y mean: {trajectories[:, 1, :].mean():.4f} {unit}\n')
+            f.write(f'X std: {trajectories[:, 0, :].std():.4f} {unit}\n')
+            f.write(f'Y std: {trajectories[:, 1, :].std():.4f} {unit}\n')
+            f.write('\nPer-trajectory statistics:\n')
+            for i in range(batch_size):
+                x_traj = trajectories[i, 0, :]
+                y_traj = trajectories[i, 1, :]
+                length = np.sum(np.sqrt(np.diff(x_traj)**2 + np.diff(y_traj)**2))
+                end_dist = np.sqrt((x_traj[-1] - x_traj[0])**2 + (y_traj[-1] - y_traj[0])**2)
+                f.write(f'  Traj {i+1}: Length={length:.4f}{unit}, End-dist={end_dist:.4f}{unit}\n')
+        
+        print(f'Statistics saved to: {stats_path}')
     else:
         plt.show()
 
