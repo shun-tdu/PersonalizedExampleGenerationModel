@@ -9,14 +9,15 @@ model:
   input_dim: 2
   condition_dim: 5  # Will be auto-detected from data
   time_embed_dim: 128
-  base_channels: 64
+  base_channels: 128
 
 # Training configuration
 training:
   batch_size: 32
-  epochs: 500
+  epochs: 300
   learning_rate: 2e-5
-  save_interval: 100
+  fourier_loss_weight: 0.1
+  save_interval: 10
   use_dummy: false
   # Early stopping configuration
   early_stopping:

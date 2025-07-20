@@ -1,0 +1,2 @@
+- model.base_channels=128
+- mlflow.run_name=fourier_loss_test

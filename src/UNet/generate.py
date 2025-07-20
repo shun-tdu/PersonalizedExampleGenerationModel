@@ -199,11 +199,19 @@ def load_model(checkpoint_path: str,
             print('Warning: Could not detect condition_dim from checkpoint, using default 5')
             condition_dim = 5
     
+    # チェックポイントからbase_channelsを推定
+    # input_proj.weight の形状: [base_channels, input_dim, 1]
+    base_channels = 64  # デフォルト値
+    input_proj_key = 'input_proj.weight'
+    if input_proj_key in checkpoint['model_state_dict']:
+        base_channels = checkpoint['model_state_dict'][input_proj_key].shape[0]
+        print(f'Detected base_channels from checkpoint: {base_channels}')
+    
     model = UNet1D(
         input_dim=2,
         condition_dim=condition_dim,
         time_embed_dim=128,
-        base_channels=64
+        base_channels=base_channels
     ).to(device)
     
     model.load_state_dict(checkpoint['model_state_dict'])

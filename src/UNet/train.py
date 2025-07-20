@@ -3,6 +3,7 @@ import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from mpmath import fourier
 from torch.utils.data import DataLoader, Dataset
 import numpy as np
 from tqdm import tqdm
@@ -16,6 +17,33 @@ import mlflow
 import mlflow.pytorch
 from Model import UNet1D
 from TrajectoryDataset import TrajectoryDataset
+
+
+class FourierLoss(nn.Module):
+    """
+    周波数領域で損失を計算するクラス。
+    予測とターゲットの振幅スペクトルのL1損失を計算する。
+    """
+    def __init__(self):
+        super().__init__()
+        self.l1_loss =nn.L1Loss()
+
+    def forward(self,pred:torch.Tensor, target:torch.Tensor) -> torch.Tensor:
+        """
+        :param pred: 予測されたテンソル [Batch, Channels, SeqLen]
+        :param target: 目標のテンソル [Batch, Channels, SeqLen]
+        :return: フーリエ損失
+        """
+        # 高速フーリエ変換
+        pred_fft = torch.fft.rfft(pred, dim=-1)
+        target_fft = torch.fft.rfft(target, dim=-1)
+
+        # 振幅スペクトルを計算
+        pred_amp = torch.abs(pred_fft)
+        target_amp = torch.abs(target_fft)
+
+        return self.l1_loss(pred_amp, target_amp)
+
 
 
 class DDPMScheduler:
@@ -99,7 +127,8 @@ class DiffusionTrainer:
                  model: UNet1D,
                  scheduler: DDPMScheduler,
                  device: torch.device,
-                 learning_rate: float = 1e-4):
+                 learning_rate: float = 1e-4,
+                 fourier_loss_weight: float = 0.1):
         self.model = model
         self.scheduler = scheduler
         self.device = device
@@ -108,7 +137,9 @@ class DiffusionTrainer:
         self.optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
         
         # 損失関数
-        self.criterion = nn.MSELoss()
+        self.criterion_mse = nn.MSELoss()
+        self.criterion_fourier = FourierLoss()
+        self.fourier_loss_weight = fourier_loss_weight
         
         # 訓練ログ用リスト
         self.train_losses = []
@@ -137,8 +168,15 @@ class DiffusionTrainer:
         predicted_noise = self.model(noisy_trajectories, timesteps, conditions)
         
         # 損失を計算
-        loss = self.criterion(predicted_noise, noise)
-        
+        # 1. MSE損失
+        loss_mse = self.criterion_mse(predicted_noise, noise)
+
+        # 2. Fourier損失
+        loss_fourier = self.criterion_fourier(predicted_noise, noise)
+
+        # 3. 2つの損失を重み付けして合計
+        loss = loss_mse + self.fourier_loss_weight * loss_fourier
+
         # 逆伝播
         self.optimizer.zero_grad()
         loss.backward()
@@ -233,7 +271,9 @@ class DiffusionTrainer:
                 noisy_trajectories = self.scheduler.add_noise(trajectories, noise, timesteps)
                 
                 predicted_noise = self.model(noisy_trajectories, timesteps, conditions)
-                loss = self.criterion(predicted_noise, noise)
+                loss_mse = self.criterion_mse(predicted_noise, noise)
+                loss_fourier = self.criterion_fourier(predicted_noise, noise)
+                loss = loss_mse + self.fourier_loss_weight * loss_fourier
                 val_loss += loss.item()
         
         return val_loss / len(val_loader)
