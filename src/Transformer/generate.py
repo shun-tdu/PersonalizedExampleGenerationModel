@@ -216,7 +216,7 @@ def hydra_generate(cfg: DictConfig) -> None:
     print(f'Using device: {device}')
     
     # 出力ディレクトリ作成
-    output_dir = cfg.output.get('generation_dir', 'transformer_generated_trajectories')
+    output_dir = cfg.output.get('generated_dir', 'outputs/generated_trajectories')
     os.makedirs(output_dir, exist_ok=True)
     
     # MLFlowセットアップ（生成ログ用）
@@ -414,7 +414,7 @@ def main():
     parser.add_argument('--batch_size', type=int, default=8, help='Number of trajectories to generate')
     parser.add_argument('--seq_len', type=int, default=101, help='Sequence length')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use')
-    parser.add_argument('--output_dir', type=str, default='transformer_generated_trajectories', help='Output directory')
+    parser.add_argument('--output_dir', type=str, default='outputs/generated_trajectories', help='Output directory')
     parser.add_argument('--use_dummy', action='store_true', help='Use dummy conditions instead of real data')
     parser.add_argument('--num_start_points', type=int, default=3, help='Number of start points for generation')
     

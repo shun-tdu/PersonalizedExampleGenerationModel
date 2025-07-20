@@ -50,13 +50,15 @@ device: "cuda"
 
 # Output directories
 output:
-  checkpoint_dir: "checkpoints"
-  mlflow_tracking_uri: "mlruns"
+  checkpoint_dir: "outputs/checkpoints"
+  generated_dir: "outputs/generated_trajectories"
+  overfit_dir: "outputs/overfit_results"
+  mlflow_tracking_uri: "outputs/mlflow"
   experiment_name: "transformer_trajectory"
 
 # MLFlow configuration
 mlflow:
-  tracking_uri: "mlruns"
+  tracking_uri: "outputs/mlflow"
   experiment_name: "transformer_trajectory_experiments"
   run_name: null  # If null, will be auto-generated
   log_model: true

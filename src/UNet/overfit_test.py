@@ -191,7 +191,7 @@ def run_overfit_test(data_path: str,
                     num_epochs: int = 1000,
                     target_loss: float = 1e-4,
                     learning_rate: float = 1e-3,
-                    output_dir: str = 'overfit_test_results',
+                    output_dir: str = 'outputs/overfit_results',
                     device: str = 'cuda'):
     """
     過学習テストを実行するメイン関数
@@ -389,7 +389,7 @@ if __name__ == '__main__':
                         help='Target loss to achieve')
     parser.add_argument('--learning_rate', type=float, default=1e-3,
                         help='Learning rate (higher than usual)')
-    parser.add_argument('--output_dir', type=str, default='overfit_test_results',
+    parser.add_argument('--output_dir', type=str, default='outputs/overfit_results',
                         help='Output directory')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device to use')

@@ -362,7 +362,7 @@ def hydra_generate(cfg: DictConfig) -> None:
     print(f'Using device: {device}')
     
     # 出力ディレクトリ作成
-    output_dir = cfg.output.get('generation_dir', 'generated_trajectories')
+    output_dir = cfg.output.get('generated_dir', 'outputs/generated_trajectories')
     os.makedirs(output_dir, exist_ok=True)
     
     # MLFlowセットアップ（生成ログ用）

@@ -341,7 +341,7 @@ def visualize_reconstruction_analysis(analysis_results: Dict,
 
 def run_overfit_generation_analysis(model_path: str,
                                   data_path: str,
-                                  output_dir: str = 'overfit_generation_analysis',
+                                  output_dir: str = 'outputs/overfit_results/generation_analysis',
                                   device: str = 'cuda'):
     """
     過学習モデルでの詳細生成分析を実行
@@ -470,7 +470,7 @@ if __name__ == '__main__':
                         help='Path to overfitted model')
     parser.add_argument('--data_path', type=str, default='/data/Datasets/overfitting_dataset.npz',
                         help='Path to dataset')
-    parser.add_argument('--output_dir', type=str, default='overfit_generation_analysis',
+    parser.add_argument('--output_dir', type=str, default='outputs/overfit_results/generation_analysis',
                         help='Output directory')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device to use')

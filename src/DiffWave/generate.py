@@ -318,7 +318,7 @@ def hydra_generate(cfg: DictConfig) -> None:
     print(f'Using device: {device}')
     
     # 出力ディレクトリ作成
-    output_dir = cfg.output.get('generation_dir', 'diffwave_generated_trajectories')
+    output_dir = cfg.output.get('generation_dir', 'outputs/generated_trajectories')
     os.makedirs(output_dir, exist_ok=True)
     
     # MLFlowセットアップ（生成ログ用）
@@ -468,7 +468,7 @@ def main():
     parser.add_argument('--method', type=str, default='ddpm', choices=['ddpm', 'ddim'], help='Sampling method')
     parser.add_argument('--steps', type=int, default=None, help='Number of inference steps')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use')
-    parser.add_argument('--output_dir', type=str, default='diffwave_generated_trajectories', help='Output directory')
+    parser.add_argument('--output_dir', type=str, default='outputs/generated_trajectories', help='Output directory')
     parser.add_argument('--use_dummy', action='store_true', help='Use dummy conditions instead of real data')
     
     args = parser.parse_args()

@@ -304,7 +304,7 @@ def main():
     parser.add_argument('--checkpoint', type=str, required=True, 
                        help='Path to overfitted Transformer model checkpoint')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use')
-    parser.add_argument('--output_dir', type=str, default='transformer_overfit_generation_results', 
+    parser.add_argument('--output_dir', type=str, default='outputs/overfit_results', 
                        help='Output directory')
     parser.add_argument('--max_length', type=int, default=101, 
                        help='Maximum trajectory length')

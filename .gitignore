@@ -45,9 +45,18 @@ secrets.yaml
 data/
 src/checkpoints/
 src/mlruns/
+src/generated_trajectories/
+src/overfit_test_results/
+src/transformer_generated_trajectories/
 src/transformer_overfit_generation_results/
 src/transformer_overfit_results/
-src/generated_trajectories/
 src/diffwave_overfit_generation_results/
 src/diffwave_overfit_results/
+src/outputs/
+
+# # Model-specific output directories
+# 各モデルの出力ディレクトリ
+src/UNet/outputs/
+src/DiffWave/outputs/
+src/Transformer/outputs/
 CLAUDE.md

@@ -114,7 +114,7 @@ class TransformerOverfitTester:
         
         return results
     
-    def analyze_results(self, results: Dict, save_dir: str = 'transformer_overfit_results'):
+    def analyze_results(self, results: Dict, save_dir: str = 'outputs/overfit_results'):
         """
         過学習結果の分析と可視化
         """
@@ -278,7 +278,7 @@ def main():
     parser.add_argument('--target_loss', type=float, default=1e-4, help='Target loss for convergence')
     parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use')
-    parser.add_argument('--output_dir', type=str, default='transformer_overfit_results', help='Output directory')
+    parser.add_argument('--output_dir', type=str, default='outputs/overfit_results', help='Output directory')
     
     # Transformerモデルパラメータ
     parser.add_argument('--d_model', type=int, default=256, help='Model dimension')

@@ -393,7 +393,7 @@ def main():
     parser.add_argument('--checkpoint', type=str, required=True, 
                        help='Path to overfitted DiffWave model checkpoint')
     parser.add_argument('--device', type=str, default='cuda', help='Device to use')
-    parser.add_argument('--output_dir', type=str, default='diffwave_overfit_generation_results', 
+    parser.add_argument('--output_dir', type=str, default='outputs/overfit_results', 
                        help='Output directory')
     parser.add_argument('--num_inference_steps', type=int, default=None, 
                        help='Number of inference steps (None for full)')
