@@ -1,0 +1,62 @@
+{
+  "reconstruction_results": {
+    "mse_errors": {
+      "mean": 0.1019185483455658,
+      "std": 0.028604794293642044,
+      "max": 0.13607677817344666,
+      "min": 0.06921210885047913,
+      "values": [
+        0.06921210885047913,
+        0.13607677817344666,
+        0.12394554167985916,
+        0.07843977212905884
+      ]
+    },
+    "endpoint_errors": {
+      "mean": 0.15129363536834717,
+      "std": 0.03935692086815834,
+      "max": 0.21137866377830505,
+      "min": 0.1142941266298294,
+      "values": [
+        0.1179538294672966,
+        0.1142941266298294,
+        0.21137866377830505,
+        0.1615479439496994
+      ]
+    },
+    "length_errors": {
+      "mean": 2.0308685302734375,
+      "std": 0.8699624538421631,
+      "max": 3.4599575996398926,
+      "min": 1.2716450691223145,
+      "values": [
+        1.3924040794372559,
+        3.4599575996398926,
+        1.9994666576385498,
+        1.2716450691223145
+      ]
+    },
+    "reconstruction_quality": {
+      "excellent": 0,
+      "good": 0,
+      "fair": 2,
+      "poor": 2
+    }
+  },
+  "sensitivity_results": {
+    "mean_trajectory_difference": 0.05809505718449751,
+    "std_trajectory_difference": 0.04498279200311855,
+    "max_difference": 0.18858763575553894,
+    "condition_change_magnitude": 0.1,
+    "sensitivity_score": 0.5809505718449751
+  },
+  "model_info": {
+    "parameters": 1025410,
+    "overfitting_converged": false,
+    "final_training_loss": 0.009668007493019104
+  },
+  "generation_info": {
+    "num_samples_per_condition": 5,
+    "inference_steps": null
+  }
+}

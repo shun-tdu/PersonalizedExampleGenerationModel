@@ -16,7 +16,7 @@ training:
   batch_size: 32
   epochs: 300
   learning_rate: 2e-5
-  fourier_loss_weight: 0.1
+  fourier_loss_weight: 10.0
   save_interval: 10
   use_dummy: false
   # Early stopping configuration
