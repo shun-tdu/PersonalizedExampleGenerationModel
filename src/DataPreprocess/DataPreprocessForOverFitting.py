@@ -201,5 +201,35 @@ def main():
     print(f"ファイル '{OUTPUT_FILE}' に保存しました。")
 
 
+def load_processed_data(data_path):
+    """
+    処理済みのデータセットを読み込む
+    
+    Args:
+        data_path: データファイルのパス (.npz)
+        
+    Returns:
+        trajectories: 軌道データ [num_samples, sequence_length, 2]
+        conditions: 条件データ（最初の3つの特徴量のみ）[num_samples, 3]
+    """
+    if not os.path.exists(data_path):
+        raise FileNotFoundError(f"データファイルが見つかりません: {data_path}")
+    
+    data = np.load(data_path)
+    trajectories = data['trajectories']
+    conditions_all = data['conditions']
+    
+    # 全ての特徴量を使用（MovementTime, EndpointError, Jerk, StartX, StartY, GoalX, GoalY）
+    conditions = conditions_all
+    
+    print(f"データを読み込みました:")
+    print(f"  軌道データ: {trajectories.shape}")  
+    print(f"  条件データ: {conditions.shape}")
+    print(f"  軌道データ範囲: [{trajectories.min():.3f}, {trajectories.max():.3f}]")
+    print(f"  条件データ範囲: [{conditions.min():.3f}, {conditions.max():.3f}]")
+    
+    return trajectories, conditions
+
+
 if __name__ == '__main__':
     main()
