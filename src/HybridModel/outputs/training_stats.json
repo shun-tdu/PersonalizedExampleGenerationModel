@@ -1,0 +1,49 @@
+{
+  "config": {
+    "model": {
+      "input_dim": 2,
+      "condition_dim": 5,
+      "lstm_hidden_dim": 128,
+      "lstm_num_layers": 2,
+      "diffusion_hidden_dim": 256,
+      "diffusion_num_layers": 4,
+      "moving_average_window": 10,
+      "num_diffusion_steps": 1000
+    },
+    "training": {
+      "batch_size": 32,
+      "num_epochs": 100,
+      "learning_rate": 0.001,
+      "weight_decay": 0.0001,
+      "scheduler_T_max": 200,
+      "scheduler_eta_min": 1e-06,
+      "clip_grad_norm": 1.0
+    },
+    "data": {
+      "data_path": "../../data/Datasets/overfitting_dataset.npz"
+    },
+    "logging": {
+      "log_interval": 10,
+      "save_interval": 20,
+      "output_dir": "outputs"
+    }
+  },
+  "model_info": {
+    "total_parameters": 1616132,
+    "trainable_parameters": 1616132,
+    "low_freq_parameters": 200706,
+    "high_freq_parameters": 1415426,
+    "input_dim": 2,
+    "condition_dim": 5,
+    "moving_average_window": 10,
+    "diffusion_steps": 1000
+  },
+  "final_losses": {
+    "total": 0.00578251293067027,
+    "low_freq": 0.0007075134177554261,
+    "high_freq": 0.005074999553875791
+  },
+  "min_loss": 0.00578251293067027,
+  "epochs_trained": 100,
+  "timestamp": "2025-07-24T01:00:39.852838"
+}

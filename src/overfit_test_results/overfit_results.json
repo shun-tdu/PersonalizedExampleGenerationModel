@@ -1,7 +1,0 @@
-{
-  "final_loss": 0.12911514937877655,
-  "converged": false,
-  "epochs_trained": 25000,
-  "target_loss": 0.0001,
-  "batch_size": 4
-}

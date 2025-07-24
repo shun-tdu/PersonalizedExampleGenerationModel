@@ -33,7 +33,7 @@ def create_config():
     config = {
         'model': {
             'input_dim': 2,
-            'condition_dim': 3,
+            'condition_dim': 5,  # MovementTime, EndpointError, Jerk, GoalX, GoalY
             'lstm_hidden_dim': 128,
             'lstm_num_layers': 2,
             'diffusion_hidden_dim': 256,
@@ -43,7 +43,7 @@ def create_config():
         },
         'training': {
             'batch_size': 32,
-            'num_epochs': 100,
+            'num_epochs': 50,
             'learning_rate': 1e-3,
             'weight_decay': 1e-4,
             'scheduler_T_max': 200,

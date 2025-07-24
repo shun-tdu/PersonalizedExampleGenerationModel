@@ -1,29 +1,23 @@
-# CLAUDE_ADDED
-# ハイブリッドモデル設定ファイル
-
-model:
-  input_dim: 2                    # 入力次元数 (x, y座標)
-  condition_dim: 3                # 条件次元数 (動作時間、終点誤差、ジャーク)
-  lstm_hidden_dim: 128           # LSTM隠れ層次元数
-  lstm_num_layers: 2             # LSTMレイヤー数
-  diffusion_hidden_dim: 256      # 拡散モデル隠れ層次元数
-  diffusion_num_layers: 4        # 拡散モデルレイヤー数
-  moving_average_window: 10      # 移動平均ウィンドウサイズ
-  num_diffusion_steps: 1000      # 拡散ステップ数
-
-training:
-  batch_size: 32                 # バッチサイズ
-  num_epochs: 100                # 学習エポック数
-  learning_rate: 0.001           # 学習率
-  weight_decay: 0.0001           # 重み減衰
-  scheduler_T_max: 200           # コサインアニーリングの周期
-  scheduler_eta_min: 0.000001    # 最小学習率
-  clip_grad_norm: 1.0            # 勾配クリッピング
-
 data:
-  data_path: '../../data/Datasets/overfitting_dataset.npz'  # データファイルパス
-
+  data_path: ../../data/Datasets/overfitting_dataset.npz
 logging:
-  log_interval: 10               # ログ出力間隔 (エポック)
-  save_interval: 20              # モデル保存間隔 (エポック)
-  output_dir: 'outputs'          # 出力ディレクトリ
+  log_interval: 10
+  output_dir: outputs
+  save_interval: 20
+model:
+  condition_dim: 5
+  diffusion_hidden_dim: 256
+  diffusion_num_layers: 4
+  input_dim: 2
+  lstm_hidden_dim: 128
+  lstm_num_layers: 2
+  moving_average_window: 10
+  num_diffusion_steps: 1000
+training:
+  batch_size: 32
+  clip_grad_norm: 1.0
+  learning_rate: 0.001
+  num_epochs: 1000
+  scheduler_T_max: 200
+  scheduler_eta_min: 1.0e-06
+  weight_decay: 0.0001

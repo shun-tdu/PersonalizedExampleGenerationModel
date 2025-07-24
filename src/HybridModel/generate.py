@@ -114,7 +114,7 @@ def save_results(generated, original, conditions, output_dir, samples_per_condit
         'total_generated_samples': generated.shape[0],
         'sequence_length': generated.shape[1],
         'feature_dim': generated.shape[2],
-        'condition_names': ['動作時間', '終点誤差', 'ジャーク'],
+        'condition_names': ['動作時間', '終点誤差', 'ジャーク', 'ゴールX', 'ゴールY'],
         'generated_shape': generated.shape,
         'original_shape': original.shape,
         'conditions_shape': conditions.shape,
@@ -131,7 +131,7 @@ def visualize_results(generated, original, conditions, output_dir, samples_per_c
     """結果を可視化"""
     
     num_conditions = len(conditions)
-    condition_names = ['動作時間', '終点誤差', 'ジャーク']
+    condition_names = ['動作時間', '終点誤差', 'ジャーク', 'ゴールX', 'ゴールY']
     
     # 1. 軌道比較プロット
     plt.figure(figsize=(20, 4 * min(5, num_conditions)))
