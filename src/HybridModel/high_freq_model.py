@@ -181,7 +181,7 @@ class UNet1D(nn.Module):
         self.decoder_blocks = nn.ModuleList()
         self.upsample_layers = nn.ModuleList()
 
-        decoder_channels = list(reversed(self.channels[-1]))
+        decoder_channels = list(reversed(self.channels[:-1]))
         in_c = self.channels[-1]
 
         for i, out_c in enumerate(decoder_channels):
@@ -219,28 +219,28 @@ class UNet1D(nn.Module):
                 encoder_features.append(x)
             x = downsample(x)
 
-            # Bottleneck
-            x = self.bottleneck(x, time_embed, condition)
+        # Bottleneck
+        x = self.bottleneck(x, time_embed, condition)
 
-            # Decoder
-            for i, (upsample, block) in enumerate(zip(self.upsample_layers, self.decoder_blocks)):
-                # アップサンプリング
-                x = upsample(x)
+        # Decoder
+        for i, (upsample, block) in enumerate(zip(self.upsample_layers, self.decoder_blocks)):
+            # アップサンプリング
+            x = upsample(x)
 
-                # スキップ接続
-                skip = encoder_features.pop()
+            # スキップ接続
+            skip = encoder_features.pop()
 
-                # サイズ調整
-                if x.size(-1) != skip.size(-1):
-                    x = F.interpolate(x, size=skip.size(-1), mode='linear', align_corners=False)
+            # サイズ調整
+            if x.size(-1) != skip.size(-1):
+                x = F.interpolate(x, size=skip.size(-1), mode='linear', align_corners=False)
 
-                # チャンネルを結合
-                x = torch.cat([x, skip], dim=1)
+            # チャンネルを結合
+            x = torch.cat([x, skip], dim=1)
 
-                # ResidualBlock
-                x = block(x, time_embed, condition)
+            # ResidualBlock
+            x = block(x, time_embed, condition)
 
-            return self.output_proj(x)
+        return self.output_proj(x)
 
 
 class SimpleDiffusionMLP(nn.Module):

@@ -7,7 +7,7 @@ from data_decomposition import DataDecomposer
 from low_freq_model import LowFreqLSTM
 from low_freq_model import LowFreqTransformer
 from low_freq_model import LowFreqSpline
-from high_freq_model import SimpleDiffusionMLP, HighFreqDiffusion
+from high_freq_model import SimpleDiffusionMLP, HighFreqDiffusion, UNet1D
 
 
 class HybridTrajectoryModel(nn.Module):
@@ -65,13 +65,21 @@ class HybridTrajectoryModel(nn.Module):
         )
 
         # 高周波モデル（拡散モデル）
-        self.high_freq_model = SimpleDiffusionMLP(
+        # self.high_freq_model = SimpleDiffusionMLP(
+        #     input_dim=input_dim,
+        #     hidden_dim=diffusion_hidden_dim,
+        #     num_layers=diffusion_num_layers,
+        #     condition_dim=condition_dim
+        # )
+
+        self.high_freq_model = UNet1D(
             input_dim=input_dim,
-            hidden_dim=diffusion_hidden_dim,
-            num_layers=diffusion_num_layers,
-            condition_dim=condition_dim
+            condition_dim=condition_dim,
+            time_embed_dim=
+
+
         )
-        
+
         # 拡散プロセス
         self.diffusion = HighFreqDiffusion(num_timesteps=num_diffusion_steps)
         
@@ -111,7 +119,7 @@ class HybridTrajectoryModel(nn.Module):
         return {
             'low_freq_loss': low_freq_loss,
             'high_freq_loss': high_freq_loss,
-            'total_loss': low_freq_loss*10 + high_freq_loss,
+            'total_loss': low_freq_loss + high_freq_loss,
             'low_freq_pred': low_freq_pred,
             'high_freq_target': high_freq,
             'predicted_noise': predicted_noise,
