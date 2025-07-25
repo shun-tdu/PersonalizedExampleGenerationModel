@@ -1,0 +1,23 @@
+data:
+  data_path: ../../data/Datasets/overfitting_dataset.npz
+logging:
+  log_interval: 10
+  output_dir: outputs
+  save_interval: 20
+model:
+  condition_dim: 5
+  diffusion_hidden_dim: 256
+  diffusion_num_layers: 4
+  input_dim: 2
+  lstm_hidden_dim: 128
+  lstm_num_layers: 2
+  moving_average_window: 10
+  num_diffusion_steps: 1000
+training:
+  batch_size: 32
+  clip_grad_norm: 1.0
+  learning_rate: 0.001
+  num_epochs: 50
+  scheduler_T_max: 200
+  scheduler_eta_min: 1.0e-06
+  weight_decay: 0.0001

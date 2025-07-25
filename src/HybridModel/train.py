@@ -329,6 +329,7 @@ def generate_samples(model_path, config_path=None, num_samples=5):
             num_samples=3
         )
     
+    print(f"生成された軌道のテンソル形状: {generated_trajectories.shape}")
     generated_trajectories = generated_trajectories.cpu().numpy()
     
     # 結果を可視化（最大9個まで表示）

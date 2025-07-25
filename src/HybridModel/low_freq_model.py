@@ -6,6 +6,233 @@ import torch.nn as nn
 from typing import Optional, Tuple
 
 
+class DifferentiableBSpline(nn.Module):
+    """微分可能なB-スプライン基底関数（簡易版）"""
+
+    def __init__(self, num_control_points: int, degree: int = 3):
+        super().__init__()
+        self.num_control_points = num_control_points
+        self.degree = degree
+
+    def forward(self, control_points: torch.Tensor, num_output_points: int) -> torch.Tensor:
+        """
+        簡易的な3次スプライン補間（Catmull-Rom風）
+
+        Args:
+            control_points: [batch_size, num_control_points, 2]
+            num_output_points: 出力する点の数
+
+        Returns:
+            trajectory: [batch_size, num_output_points, 2]
+        """
+        batch_size, n_cp, dim = control_points.shape
+        device = control_points.device
+
+        # 出力する軌道点
+        trajectory = []
+
+        # 各セグメント間を補間
+        segments = n_cp - 1
+        points_per_segment = num_output_points // segments + 1
+
+        for i in range(segments):
+            # セグメントの両端
+            p0 = control_points[:, i]
+            p1 = control_points[:, i + 1]
+
+            # 前後の点（境界処理）
+            if i > 0:
+                pm1 = control_points[:, i - 1]
+            else:
+                pm1 = 2 * p0 - p1
+
+            if i < segments - 1:
+                p2 = control_points[:, i + 2]
+            else:
+                p2 = 2 * p1 - p0
+
+            # このセグメントでの補間点数
+            if i == segments - 1:
+                n_points = num_output_points - len(trajectory)
+            else:
+                n_points = points_per_segment
+
+            # パラメータt（0から1）
+            t = torch.linspace(0, 1, n_points, device=device)
+
+            # Catmull-Rom補間
+            for tj in t[:-1] if i < segments - 1 else t:
+                # 基底関数
+                t2 = tj * tj
+                t3 = t2 * tj
+
+                h00 = 2 * t3 - 3 * t2 + 1
+                h10 = t3 - 2 * t2 + tj
+                h01 = -2 * t3 + 3 * t2
+                h11 = t3 - t2
+
+                # 接線ベクトル
+                m0 = 0.5 * (p1 - pm1)
+                m1 = 0.5 * (p2 - p0)
+
+                # 補間点
+                point = h00.unsqueeze(-1) * p0 + \
+                        h10.unsqueeze(-1) * m0 + \
+                        h01.unsqueeze(-1) * p1 + \
+                        h11.unsqueeze(-1) * m1
+
+                trajectory.append(point)
+
+        # リストをテンソルに変換
+        trajectory = torch.stack(trajectory, dim=1)
+
+        # 正確にnum_output_pointsになるよう調整
+        if trajectory.shape[1] > num_output_points:
+            trajectory = trajectory[:, :num_output_points]
+        elif trajectory.shape[1] < num_output_points:
+            # 最後の点を繰り返して埋める
+            last_point = trajectory[:, -1:].repeat(1, num_output_points - trajectory.shape[1], 1)
+            trajectory = torch.cat([trajectory, last_point], dim=1)
+
+        return trajectory
+
+
+class LowFreqSpline(nn.Module):
+    """
+    低周波成分を学習・生成するスプラインベースモデル
+    """
+
+    def __init__(
+            self,
+            input_dim: int = 2,
+            condition_dim: int = 5,
+            num_control_points: int = 8,
+            hidden_dim: int = 256,
+            spline_degree: int = 3,
+            dropout: float = 0.1
+    ):
+        super().__init__()
+
+        self.input_dim = input_dim
+        self.condition_dim = condition_dim
+        self.num_control_points = num_control_points
+
+        # B-スプライン補間器
+        self.spline = DifferentiableBSpline(num_control_points, degree=spline_degree)
+
+        # 条件から制御点を生成するネットワーク
+        self.control_point_generator = nn.Sequential(
+            nn.Linear(condition_dim, hidden_dim),
+            nn.ReLU(),
+            nn.BatchNorm1d(hidden_dim),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.BatchNorm1d(hidden_dim),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, num_control_points * input_dim)
+        )
+
+        # 制約を生成するネットワーク
+        self.constraint_net = nn.Sequential(
+            nn.Linear(condition_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 4)  # start_x, start_y, scale_x, scale_y
+        )
+
+        # 制御点の基準位置（学習可能）
+        self.register_parameter(
+            'base_control_points',
+            nn.Parameter(torch.randn(num_control_points, input_dim) * 0.1)
+        )
+
+        # 時間方向の分布を制御
+        time_distribution = torch.linspace(0, 1, num_control_points)
+        self.register_buffer('time_distribution', time_distribution)
+
+    def forward(self, x: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
+        """
+        順方向計算（学習時）
+
+        Args:
+            x: 入力軌道 [batch_size, sequence_length, input_dim]
+            condition: 条件ベクトル [batch_size, condition_dim]
+
+        Returns:
+            output: 予測軌道 [batch_size, sequence_length, input_dim]
+        """
+        batch_size, seq_len, _ = x.shape
+
+        # 制御点を生成
+        control_points = self._generate_control_points(condition)
+
+        # スプライン補間で軌道を生成
+        output = self.spline(control_points, seq_len)
+
+        return output
+
+    def _generate_control_points(self, condition: torch.Tensor) -> torch.Tensor:
+        """
+        条件から制御点を生成
+        """
+        batch_size = condition.shape[0]
+        device = condition.device
+
+        # 制御点のオフセットを生成
+        control_offsets = self.control_point_generator(condition)
+        control_offsets = control_offsets.view(batch_size, self.num_control_points, self.input_dim)
+
+        # 基準制御点にオフセットを加算
+        control_points = self.base_control_points.unsqueeze(0) + control_offsets
+
+        # 制約を適用
+        constraints = self.constraint_net(condition)
+        start_pos = constraints[:, :2]
+        scale = torch.sigmoid(constraints[:, 2:]) * 2 + 0.1  # 0.1 ~ 2.1
+
+        # 始点を原点に固定
+        control_points[:, 0, :] = torch.zeros(batch_size, 2, device=device)
+
+        # 終点を条件から設定（GoalX, GoalY）
+        if condition.shape[1] >= 5:
+            goal_pos = condition[:, 3:5]  # GoalX, GoalY
+            control_points[:, -1, :] = goal_pos
+
+            # 中間の制御点を調整
+            for i in range(1, self.num_control_points - 1):
+                t = self.time_distribution[i]
+                # 始点と終点の間に配置
+                baseline = start_pos * (1 - t) + goal_pos * t
+                offset = control_points[:, i, :] - baseline
+                control_points[:, i, :] = baseline + offset * 0.5
+
+        return control_points
+
+    def generate(
+            self,
+            condition: torch.Tensor,
+            sequence_length: int,
+            start_token: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """
+        低周波成分の軌道を生成
+        """
+        # 制御点を生成
+        control_points = self._generate_control_points(condition)
+
+        # スプライン補間で軌道を生成
+        generated = self.spline(control_points, sequence_length)
+
+        return generated
+
+    def get_control_points(self, condition: torch.Tensor) -> torch.Tensor:
+        """
+        デバッグ用：条件から生成される制御点を取得
+        """
+        with torch.no_grad():
+            return self._generate_control_points(condition)
+
+
 class PositionalEncoding(nn.Module):
     def __init__(self,
                  d_model: int,
@@ -69,7 +296,7 @@ class LowFreqTransformer(nn.Module):
 
     def forward(self, x: torch.Tensor, condition: torch.Tensor) -> torch.Tensor:
         # 1. 入力を潜在次元に変換
-        x = self.input_proj(x) & math.sqrt(self.inner_dim)
+        x = self.input_proj(x) * math.sqrt(self.inner_dim)
 
         # 2. 条件を潜在次元に変換し、系列の各ステップに加算
         condition_emb = self.condition_proj(condition).unsqueeze(1)

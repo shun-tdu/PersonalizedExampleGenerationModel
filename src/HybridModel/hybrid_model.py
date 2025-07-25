@@ -5,6 +5,8 @@ import torch.nn.functional as F
 from typing import Tuple, Dict, Any
 from data_decomposition import DataDecomposer
 from low_freq_model import LowFreqLSTM
+from low_freq_model import LowFreqTransformer
+from low_freq_model import LowFreqSpline
 from high_freq_model import SimpleDiffusionMLP, HighFreqDiffusion
 
 
@@ -45,13 +47,23 @@ class HybridTrajectoryModel(nn.Module):
         self.decomposer = DataDecomposer(window_size=moving_average_window)
         
         # 低周波モデル（LSTM）
-        self.low_freq_model = LowFreqLSTM(
+        # self.low_freq_model = LowFreqLSTM(
+        #     input_dim=input_dim,
+        #     hidden_dim=lstm_hidden_dim,
+        #     num_layers=lstm_num_layers,
+        #     condition_dim=condition_dim
+        # )
+        # self.low_freq_model = LowFreqTransformer(
+        #     input_dim=input_dim,
+        #     condition_dim=condition_dim
+        # )
+        self.low_freq_model = LowFreqSpline(
             input_dim=input_dim,
-            hidden_dim=lstm_hidden_dim,
-            num_layers=lstm_num_layers,
-            condition_dim=condition_dim
+            condition_dim=condition_dim,
+            num_control_points=8,
+            hidden_dim=256
         )
-        
+
         # 高周波モデル（拡散モデル）
         self.high_freq_model = SimpleDiffusionMLP(
             input_dim=input_dim,
@@ -81,7 +93,7 @@ class HybridTrajectoryModel(nn.Module):
         low_freq, high_freq = self.decomposer.decompose(x)
         
         # 低周波成分の学習
-        low_freq_pred, _ = self.low_freq_model(low_freq, condition)
+        low_freq_pred = self.low_freq_model(low_freq, condition)
         low_freq_loss = F.mse_loss(low_freq_pred, low_freq)
         
         # 高周波成分の学習（拡散モデル）
@@ -99,7 +111,7 @@ class HybridTrajectoryModel(nn.Module):
         return {
             'low_freq_loss': low_freq_loss,
             'high_freq_loss': high_freq_loss,
-            'total_loss': low_freq_loss + high_freq_loss,
+            'total_loss': low_freq_loss*10 + high_freq_loss,
             'low_freq_pred': low_freq_pred,
             'high_freq_target': high_freq,
             'predicted_noise': predicted_noise,
