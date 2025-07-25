@@ -357,7 +357,7 @@ def generate_samples(model_path, config_path=None, num_samples=5):
             gen_idx = i * 3 + j
             if gen_idx < len(generated_trajectories):
                 plt.plot(generated_trajectories[gen_idx, :, 0], generated_trajectories[gen_idx, :, 1],
-                        '--', linewidth=2, alpha=0.7, label=f'Generated {j+1}')
+                        '-', linewidth=2, alpha=0.7, label=f'Generated {j+1}')
         
         plt.xlabel('X Position')
         plt.ylabel('Y Position')

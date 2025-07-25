@@ -107,7 +107,7 @@ class LowFreqSpline(nn.Module):
             input_dim: int = 2,
             condition_dim: int = 5,
             num_control_points: int = 8,
-            hidden_dim: int = 256,
+            hidden_dim: int = 512,
             spline_degree: int = 3,
             dropout: float = 0.1
     ):

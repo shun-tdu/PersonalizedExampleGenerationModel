@@ -7,176 +7,181 @@ from data_decomposition import DataDecomposer
 from low_freq_model import LowFreqLSTM
 from low_freq_model import LowFreqTransformer
 from low_freq_model import LowFreqSpline
-from high_freq_model import SimpleDiffusionMLP, HighFreqDiffusion, UNet1D
+from high_freq_model import SimpleDiffusionMLP, HighFreqDiffusion, UNet1D,UNet1DForTrajectory
 
 
 class HybridTrajectoryModel(nn.Module):
-    """
-    低周波LSTM + 高周波拡散モデルのハイブリッド軌道生成モデル
-    """
-    
     def __init__(
-        self,
-        input_dim: int = 2,
-        condition_dim: int = 3,
-        lstm_hidden_dim: int = 128,
-        lstm_num_layers: int = 2,
-        diffusion_hidden_dim: int = 256,
-        diffusion_num_layers: int = 4,
-        moving_average_window: int = 10,
-        num_diffusion_steps: int = 1000,
-        **kwargs
+            self,
+            input_dim: int = 2,
+            condition_dim: int = 5,  # 5次元に統一
+            # スプラインモデルのパラメータ
+            num_control_points: int = 8,
+            spline_hidden_dim: int = 256,
+            # 拡散モデルのパラメータ
+            high_freq_model_type: str = 'unet',  # 'unet' or 'mlp'
+            diffusion_hidden_dim: int = 256,
+            diffusion_num_layers: int = 4,
+            # その他のパラメータ
+            moving_average_window: int = 10,
+            num_diffusion_steps: int = 100,
+            diffusion_schedule: str = 'cosine',
+            **kwargs
     ):
-        """
-        Args:
-            input_dim: 入力軌道の次元数（x, y座標）
-            condition_dim: 条件ベクトルの次元数（動作時間、終点誤差、ジャーク）
-            lstm_hidden_dim: LSTM隠れ層の次元数
-            lstm_num_layers: LSTMのレイヤー数
-            diffusion_hidden_dim: 拡散モデル隠れ層の次元数
-            diffusion_num_layers: 拡散モデルのレイヤー数
-            moving_average_window: 移動平均のウィンドウサイズ
-            num_diffusion_steps: 拡散ステップ数
-        """
         super().__init__()
-        
+
         self.input_dim = input_dim
         self.condition_dim = condition_dim
-        
+
         # データ分解器
         self.decomposer = DataDecomposer(window_size=moving_average_window)
-        
-        # 低周波モデル（LSTM）
-        # self.low_freq_model = LowFreqLSTM(
-        #     input_dim=input_dim,
-        #     hidden_dim=lstm_hidden_dim,
-        #     num_layers=lstm_num_layers,
-        #     condition_dim=condition_dim
-        # )
-        # self.low_freq_model = LowFreqTransformer(
-        #     input_dim=input_dim,
-        #     condition_dim=condition_dim
-        # )
+
+        # 低周波モデル（スプライン）
         self.low_freq_model = LowFreqSpline(
             input_dim=input_dim,
             condition_dim=condition_dim,
-            num_control_points=8,
-            hidden_dim=256
+            num_control_points=num_control_points,
+            hidden_dim=spline_hidden_dim
         )
 
-        # 高周波モデル（拡散モデル）
-        # self.high_freq_model = SimpleDiffusionMLP(
-        #     input_dim=input_dim,
-        #     hidden_dim=diffusion_hidden_dim,
-        #     num_layers=diffusion_num_layers,
-        #     condition_dim=condition_dim
-        # )
-
-        self.high_freq_model = UNet1D(
-            input_dim=input_dim,
-            condition_dim=condition_dim,
-            time_embed_dim=
-
-
-        )
+        # 高周波モデル
+        if high_freq_model_type == 'unet':
+            self.high_freq_model = UNet1D(
+                input_dim=input_dim,
+                condition_dim=condition_dim,
+                base_channels=32,
+                num_resolutions=3
+            )
+        else:
+            self.high_freq_model = SimpleDiffusionMLP(
+                input_dim=input_dim,
+                hidden_dim=diffusion_hidden_dim,
+                num_layers=diffusion_num_layers,
+                condition_dim=condition_dim
+            )
 
         # 拡散プロセス
-        self.diffusion = HighFreqDiffusion(num_timesteps=num_diffusion_steps)
-        
+        self.diffusion = HighFreqDiffusion(
+            num_timesteps=num_diffusion_steps,
+            schedule=diffusion_schedule
+        )
+
+        # 正規化パラメータ（EMA）
+        self.register_buffer('high_freq_mean', torch.zeros(1))
+        self.register_buffer('high_freq_std', torch.ones(1))
+
     def forward(self, x: torch.Tensor, condition: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """
-        学習用の順方向計算
-        
-        Args:
-            x: 入力軌道 [batch_size, sequence_length, input_dim]
-            condition: 条件ベクトル [batch_size, condition_dim]
-            
-        Returns:
-            losses: 各成分の損失を含む辞書
-        """
         batch_size = x.shape[0]
         device = x.device
-        
+
         # データを分解
         low_freq, high_freq = self.decomposer.decompose(x)
-        
+
         # 低周波成分の学習
         low_freq_pred = self.low_freq_model(low_freq, condition)
         low_freq_loss = F.mse_loss(low_freq_pred, low_freq)
-        
-        # 高周波成分の学習（拡散モデル）
-        # ランダムな時刻ステップをサンプリング
+
+        # 低周波の滑らかさ損失
+        low_freq_smoothness = self._compute_smoothness_loss(low_freq_pred)
+
+        # 高周波成分の正規化
+        high_freq_mean = high_freq.mean()
+        high_freq_std = high_freq.std() + 1e-6
+        high_freq_normalized = (high_freq - high_freq_mean) / high_freq_std
+
+        # EMA更新
+        if self.training:
+            with torch.no_grad():
+                self.high_freq_mean = 0.95 * self.high_freq_mean + 0.05 * high_freq_mean
+                self.high_freq_std = 0.95 * self.high_freq_std + 0.05 * high_freq_std
+
+        # 拡散モデルの学習
         timesteps = self.diffusion.sample_timesteps(batch_size, device)
-        
-        # ノイズを追加
-        noise = torch.randn_like(high_freq)
-        high_freq_noisy = self.diffusion.add_noise(high_freq, timesteps, noise)
-        
-        # ノイズを予測
+        noise = torch.randn_like(high_freq_normalized)
+        high_freq_noisy = self.diffusion.add_noise(high_freq_normalized, timesteps, noise)
         predicted_noise = self.high_freq_model(high_freq_noisy, timesteps, condition)
+
         high_freq_loss = F.mse_loss(predicted_noise, noise)
-        
+
+        # 高周波の滑らかさペナルティ
+        high_freq_smoothness = self._compute_smoothness_loss(predicted_noise)
+
         return {
             'low_freq_loss': low_freq_loss,
             'high_freq_loss': high_freq_loss,
-            'total_loss': low_freq_loss + high_freq_loss,
+            'low_freq_smoothness': low_freq_smoothness,
+            'high_freq_smoothness': high_freq_smoothness,
+            'total_loss': (
+                    low_freq_loss * 100 +
+                    high_freq_loss +
+                    low_freq_smoothness * 0.01 +
+                    high_freq_smoothness * 0.001
+            ),
             'low_freq_pred': low_freq_pred,
             'high_freq_target': high_freq,
             'predicted_noise': predicted_noise,
             'actual_noise': noise
         }
-    
+
+    def _compute_smoothness_loss(self, trajectory: torch.Tensor) -> torch.Tensor:
+        """軌道の滑らかさを評価"""
+        if trajectory.shape[1] < 3:
+            return torch.tensor(0.0, device=trajectory.device)
+
+        # 2階微分（加速度）
+        vel = trajectory[:, 1:] - trajectory[:, :-1]
+        acc = vel[:, 1:] - vel[:, :-1]
+
+        return torch.mean(torch.sum(acc ** 2, dim=-1))
     @torch.no_grad()
-    def generate(
-        self, 
-        condition: torch.Tensor, 
-        sequence_length: int,
-        num_samples: int = 1
-    ) -> torch.Tensor:
-        """
-        軌道を生成
-        
-        Args:
-            condition: 条件ベクトル [batch_size, condition_dim]
-            sequence_length: 生成する系列長
-            num_samples: 各条件に対して生成するサンプル数
-            
-        Returns:
-            generated_trajectories: 生成された軌道 [batch_size * num_samples, sequence_length, input_dim]
-        """
+    def generate(self, condition: torch.Tensor, sequence_length: int, num_samples: int = 1) -> torch.Tensor:
         batch_size = condition.shape[0]
         device = condition.device
-        
-        # 条件を拡張（複数サンプル対応）
+
+        # 条件を拡張
         if num_samples > 1:
             condition_expanded = condition.unsqueeze(1).expand(-1, num_samples, -1)
             condition_expanded = condition_expanded.contiguous().view(-1, self.condition_dim)
         else:
             condition_expanded = condition
-        
+
         total_batch_size = condition_expanded.shape[0]
-        
+
         # 低周波成分を生成
         low_freq_generated = self.low_freq_model.generate(
-            condition_expanded, 
+            condition_expanded,
             sequence_length
         )
-        
-        # 高周波成分を生成
+
+        # 高周波成分を生成（正規化された空間で）
         high_freq_shape = (total_batch_size, sequence_length, self.input_dim)
-        high_freq_generated = self.diffusion.generate(
+        high_freq_normalized = self.diffusion.generate(
             self.high_freq_model,
             high_freq_shape,
             condition_expanded,
             device
         )
-        
+
+        # 正規化を逆変換
+        high_freq_generated = high_freq_normalized * self.high_freq_std + self.high_freq_mean
+
+        # 追加のスムージング（オプション）
+        if sequence_length > 3:
+            # 簡単な移動平均でスムージング
+            kernel_size = 3
+            kernel = torch.ones(1, 1, kernel_size, device=device) / kernel_size
+            high_freq_generated = F.conv1d(
+                high_freq_generated.transpose(1, 2).unsqueeze(1),
+                kernel,
+                padding=kernel_size // 2
+            ).squeeze(1).transpose(1, 2)
+
         # 低周波成分と高周波成分を結合
         generated_trajectories = self.decomposer.reconstruct(
-            low_freq_generated, 
+            low_freq_generated,
             high_freq_generated
         )
-        
+
         return generated_trajectories
     
     def get_model_info(self) -> Dict[str, Any]:

@@ -85,7 +85,9 @@ class DataDecomposer:
         
         return smoothed
     
-    def reconstruct(self, low_freq: torch.Tensor, high_freq: torch.Tensor) -> torch.Tensor:
+    def reconstruct(self, low_freq: torch.Tensor,
+                    high_freq: torch.Tensor
+                    ) -> torch.Tensor:
         """
         低周波成分と高周波成分から元のデータを復元
         
@@ -96,4 +98,5 @@ class DataDecomposer:
         Returns:
             復元されたデータ
         """
+        # return low_freq
         return low_freq + high_freq
