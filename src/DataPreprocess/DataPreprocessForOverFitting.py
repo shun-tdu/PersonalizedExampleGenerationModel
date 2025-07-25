@@ -184,15 +184,8 @@ def main():
 
     # ---- 特徴量ごとに異なる前処理を適用 ----
     # 1. パフォーマンス指標
-    performance_features = conditions[:, :3]
     scaler = StandardScaler()
-    performance_standardized = scaler.fit_transform(performance_features)
-
-    # 2. 座標データを-1から1に正規化
-    coordinate_features = conditions[:, 3:]
-
-    # 3. 前処理した特徴量を結合して条件ベクトルを生成
-    conditions_processed = np.concatenate([performance_standardized, coordinate_features], axis=1)
+    conditions_processed = scaler.fit_transform(conditions)
 
 
     # 5. ファイルに保存
