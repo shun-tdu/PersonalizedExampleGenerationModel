@@ -1,0 +1,50 @@
+# .dockerignore
+
+# 1. Pythonの仮想環境
+# これらは非常に大きく、ビルドに不要
+venv/
+.venv/
+env/
+.env/
+
+# 2. Pythonのキャッシュファイル
+# 実行環境で自動生成されるため不要
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 3. IDE/エディタの設定フォルダ
+# 開発環境にのみ依存するファイル
+.idea/
+.vscode/
+.project
+.pydevproject
+.settings/
+
+# 4. OS固有のファイル
+.DS_Store
+Thumbs.db
+
+# 5. Gitの管理ファイル
+# バージョン管理情報なのでイメージに含めない
+.git/
+.gitignore
+.gitattributes
+
+# 6. 環境変数ファイル
+# セキュリティ情報を含むためイメージに含めないのが原則
+.env*
+*.env
+
+# 7. ログファイルや一時ファイル
+*.log
+*.tmp
+
+# 8. 大規模なデータセットや出力ファイル
+src/mlruns
+src/checkpoints
+
+# 9. テスト関連ファイル
+.pytest_cache/
+.tox/

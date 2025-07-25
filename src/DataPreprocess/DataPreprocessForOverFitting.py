@@ -100,9 +100,12 @@ def normalize_trajectory(trial_data, length):
     y = trial_data['HandlePosY'].values
     timestamps = trial_data['Timestamp'].values / 1e7  # タイムスタンプを秒に変換
 
+    # 始点を保存
+    start_pos = np.array([x[0], y[0]])
+
     # 始点を(0,0)に移動させる
-    x_norm = x - x[0]
-    y_norm = y - y[0]
+    x_norm = x - start_pos[0]
+    y_norm = y - start_pos[1]
 
     # 実際の時間軸に基づいてリサンプリング
     original_time = timestamps - timestamps[0]  # 開始時刻を0にする
@@ -118,10 +121,12 @@ def normalize_trajectory(trial_data, length):
 
     # 全体の最大値と最小値を取得
     max_val = np.max(np.abs(trajectory))
-    if max_val > 0:
-        trajectory = trajectory / max_val  # -1から1に正規化
+    if max_val == 0:
+        max_val = 1.0
 
-    return trajectory
+    trajectory = trajectory / max_val  # -1から1に正規化
+
+    return trajectory, start_pos, max_val
 
 
 def main():
@@ -156,17 +161,21 @@ def main():
 
         if len(trial_data) < 5: continue
 
-        trajectories.append(normalize_trajectory(trial_data, TRAJECTORY_LENGTH))
+        # 正規化された軌道を保存
+        norm_trajectory, start_pos, scale_val = normalize_trajectory(trial_data, TRAJECTORY_LENGTH)
+        trajectories.append(norm_trajectory)
+
+        # 元のゴール位置を取得
+        original_goal_pos = np.array([trial_info['TargetEndPosX'], trial_info['TargetEndPosY']])
+        normalized_goal_pos = (original_goal_pos - start_pos) / scale_val
 
         # 被験者の特性ベクトル（コンディション）
         condition_vector = np.array([
             trial_info['MovementTime'],
             trial_info['EndpointError'],
             trial_info['Jerk'],
-            trial_info['TargetStartPosX'],
-            trial_info['TargetStartPosY'],
-            trial_info['TargetEndPosX'],
-            trial_info['TargetEndPosY']
+            normalized_goal_pos[0],
+            normalized_goal_pos[1]
         ])
         conditions.append(condition_vector)
 
@@ -181,10 +190,9 @@ def main():
 
     # 2. 座標データを-1から1に正規化
     coordinate_features = conditions[:, 3:]
-    coordinate_normalized = (coordinate_features / 0.15) - 1.0
 
     # 3. 前処理した特徴量を結合して条件ベクトルを生成
-    conditions_processed = np.concatenate([performance_standardized, coordinate_normalized], axis=1)
+    conditions_processed = np.concatenate([performance_standardized, coordinate_features], axis=1)
 
 
     # 5. ファイルに保存
@@ -219,7 +227,7 @@ def load_processed_data(data_path):
     trajectories = data['trajectories']
     conditions_all = data['conditions']
     
-    # 全ての特徴量を使用（MovementTime, EndpointError, Jerk, StartX, StartY, GoalX, GoalY）
+    # 全ての特徴量を使用（MovementTime, EndpointError, Jerk, GoalX, GoalY）
     conditions = conditions_all
     
     print(f"データを読み込みました:")
