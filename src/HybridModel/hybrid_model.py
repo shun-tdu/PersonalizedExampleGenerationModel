@@ -169,12 +169,18 @@ class HybridTrajectoryModel(nn.Module):
         if sequence_length > 3:
             # 簡単な移動平均でスムージング
             kernel_size = 3
-            kernel = torch.ones(1, 1, kernel_size, device=device) / kernel_size
-            high_freq_generated = F.conv1d(
-                high_freq_generated.transpose(1, 2).unsqueeze(1),
+            kernel = torch.ones(self.input_dim, 1, kernel_size, device=device) / kernel_size
+            # [batch, seq, dim] -> [batch, dim, seq]
+            high_freq_reshaped = high_freq_generated.transpose(1, 2)
+            # グループごとに畳み込み適用
+            high_freq_smoothed = F.conv1d(
+                high_freq_reshaped,
                 kernel,
-                padding=kernel_size // 2
-            ).squeeze(1).transpose(1, 2)
+                padding=kernel_size // 2,
+                groups=self.input_dim
+            )
+            # [batch, dim, seq] -> [batch, seq, dim]
+            high_freq_generated = high_freq_smoothed.transpose(1, 2)
 
         # 低周波成分と高周波成分を結合
         generated_trajectories = self.decomposer.reconstruct(

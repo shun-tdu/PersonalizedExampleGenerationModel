@@ -216,7 +216,7 @@ class UNet1DForTrajectory(nn.Module):
             x: torch.Tensor,
             time_steps: torch.Tensor,
             condition: torch.Tensor
-    ) -> torch.Tensor:
+            ) -> torch.Tensor:
         """
         Args:
             x: [batch, seq_len, 2] 高周波成分
