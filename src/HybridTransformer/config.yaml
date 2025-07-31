@@ -11,13 +11,13 @@ model:
   input_dim: 2
   lstm_hidden_dim: 128
   lstm_num_layers: 2
-  moving_average_window: 10
+  moving_average_window: 5
   num_diffusion_steps: 1000
 training:
   batch_size: 32
   clip_grad_norm: 1.0
   learning_rate: 0.001
-  num_epochs: 100
+  num_epochs: 200
   scheduler_T_max: 200
   scheduler_eta_min: 1.0e-06
   weight_decay: 0.0001

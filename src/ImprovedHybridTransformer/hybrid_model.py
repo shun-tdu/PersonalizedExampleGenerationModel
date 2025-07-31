@@ -83,10 +83,25 @@ class HybridTrajectoryModel(nn.Module):
 
         # 低周波成分の学習
         low_freq_pred = self.low_freq_model(low_freq, condition)
-        low_freq_loss = F.mse_loss(low_freq_pred, low_freq)
+
+        # ターゲットの調整(最初の点は予測しない)
+        if low_freq_pred.shape[1] == low_freq.shape[1] - 1:
+            target = low_freq[:, 1:, :]
+        else:
+            target = low_freq
+
+        low_freq_loss = F.mse_loss(low_freq_pred, target)
 
         # 低周波の滑らかさ損失
         low_freq_smoothness = self._compute_smoothness_loss(low_freq_pred)
+
+        # 低周波のゴール到達損失
+        if low_freq_pred.shape[1] > 0:
+            final_pos = low_freq_pred[:, -1, :]
+            goal_pos = condition[:, 3:5]
+            goal_loss = F.mse_loss(final_pos, goal_pos)
+            low_freq_loss = low_freq_loss + goal_loss * 10
+
 
         # 高周波成分の正規化
         high_freq_mean = high_freq.mean()

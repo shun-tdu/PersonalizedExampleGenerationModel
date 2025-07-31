@@ -35,8 +35,8 @@ def create_config():
         'model': {
             'input_dim': 2,
             'condition_dim': 5,  # MovementTime, EndpointError, Jerk, GoalX, GoalY
-            'lstm_hidden_dim': 128,
-            'lstm_num_layers': 2,
+            # 'lstm_hidden_dim': 128,
+            # 'lstm_num_layers': 2,
             'diffusion_hidden_dim': 256,
             'diffusion_num_layers': 4,
             'moving_average_window': 5,
@@ -215,7 +215,7 @@ def train_model(config_path=None):
             checkpoint_path = os.path.join(
                 config['logging']['output_dir'], 
                 'checkpoints', 
-                f'hybrid_model_epoch_{epoch+1}.pth'
+                f'HybridTransformer_model_epoch_{epoch+1}.pth'
             )
             model.save_model(checkpoint_path)
             print(f"  Model saved: {checkpoint_path}")

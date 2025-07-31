@@ -11,7 +11,7 @@ model:
   input_dim: 2
   lstm_hidden_dim: 128
   lstm_num_layers: 2
-  moving_average_window: 5
+  moving_average_window: 10
   num_diffusion_steps: 1000
 training:
   batch_size: 32

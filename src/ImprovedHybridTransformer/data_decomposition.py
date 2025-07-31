@@ -99,4 +99,4 @@ class DataDecomposer:
             復元されたデータ
         """
         # return low_freq
-        return low_freq + high_freq
+        return low_freq + high_freq[:,1:low_freq.size(1)+1,:]

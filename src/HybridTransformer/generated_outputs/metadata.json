@@ -1,0 +1,29 @@
+{
+  "num_conditions": 50,
+  "samples_per_condition": 1,
+  "total_generated_samples": 50,
+  "sequence_length": 101,
+  "feature_dim": 2,
+  "condition_names": [
+    "動作時間",
+    "終点誤差",
+    "ジャーク",
+    "ゴールX",
+    "ゴールY"
+  ],
+  "generated_shape": [
+    50,
+    101,
+    2
+  ],
+  "original_shape": [
+    50,
+    101,
+    2
+  ],
+  "conditions_shape": [
+    50,
+    5
+  ],
+  "timestamp": "2025-07-31T10:05:34.033609"
+}
