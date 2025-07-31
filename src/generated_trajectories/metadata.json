@@ -1,8 +1,0 @@
-{
-  "condition_source": "real_data (indices: [692, 254, 244, 800, 289, 176, 145, 287])",
-  "method": "ddpm",
-  "num_inference_steps": null,
-  "condition_dim": 7,
-  "seq_len": 101,
-  "checkpoint_path": "/app/checkpoints/checkpoint_epoch_70.pth"
-}

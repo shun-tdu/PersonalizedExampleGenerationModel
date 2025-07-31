@@ -70,7 +70,7 @@ class CrossAttention(nn.Module):
 
         # QとKの内積でAttentionを計算
         attention_scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-        attention = F.softmax(attention_scores, dim=1)
+        attention = F.softmax(attention_scores, dim=-1)
 
         # AttentionをVに適用
         out = torch.matmul(attention, v)
@@ -88,8 +88,11 @@ class ResidualBlock(nn.Module):
                  time_embed_dim: int,
                  condition_dim: int,
                  kernel_size:int = 3,
-                 num_group:int = 8):
+                 num_group:int = 8,
+                 use_attention: bool = True):
         super().__init__()
+
+        self.use_attention = use_attention
 
         # 1つ目の畳み込み層
         self.conv1 = nn.Conv1d(in_channels, out_channels, kernel_size, padding='same')
@@ -100,12 +103,18 @@ class ResidualBlock(nn.Module):
         self.norm2 = nn.GroupNorm(num_group, out_channels)
 
         # 時間埋め込みの次元変換層
-        self.time_proj = nn.Linear(time_embed_dim, out_channels)
+        # self.time_proj = nn.Linear(time_embed_dim, out_channels)
+        self.time_proj = nn.Sequential(
+            nn.Linear(time_embed_dim, out_channels),
+            nn.SiLU()
+        )
 
-        # 条件付けのためのCross-Attention層
-        self.cross_attention = CrossAttention(out_channels, condition_dim)
+        if use_attention:
+            # 条件付けのためのCross-Attention層
+            self.norm_attn = nn.GroupNorm(num_group, out_channels)
+            self.cross_attention = CrossAttention(out_channels, condition_dim)
 
-        # 入力と出力のチャンネル数を合わせるための、スキップ接続
+         # 入力と出力のチャンネル数を合わせるための、スキップ接続
         self.skip_connection = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
 
     def forward(self,
@@ -132,10 +141,12 @@ class ResidualBlock(nn.Module):
         x = self.conv2(x)
         x = self.norm2(x)
 
-        # 3. Cross Attentionによる条件付け
-        x_transposed = x.transpose(1, 2)
-        x_attended = self.cross_attention(x_transposed, condition)
-        x = x_attended.transpose(1, 2)
+        if self.use_attention:
+            # 3. Cross Attentionによる条件付け
+            x_transposed = x.transpose(1, 2)
+            x_transposed = self.norm_attn(x_transposed.transpose(1, 2)).transpose(1, 2)
+            x_attended = self.cross_attention(x_transposed, condition)
+            x = x + x_attended.transpose(1, 2)
 
         # 4. Residual Connection
         return x + residual
@@ -159,7 +170,7 @@ class UNet1DForTrajectory(nn.Module):
         self.time_embedding = SinusoidalPositionalEmbedding(time_embed_dim)
 
         # 入力を適切な次元に変換（2次元座標を保持）
-        self.input_proj = nn.Linear(input_dim, base_channels)
+        self.input_proj = nn.Conv1d(input_dim, base_channels, kernel_size=1)
 
         # Encoder
         self.encoder_blocks = nn.ModuleList()
@@ -168,22 +179,23 @@ class UNet1DForTrajectory(nn.Module):
         in_c = base_channels
         for i, out_c in enumerate(self.channels):
             self.encoder_blocks.append(
-                TransformerBlock(in_c, out_c, time_embed_dim, condition_dim)
+                ResidualBlock(
+                    in_c,out_c,time_embed_dim,condition_dim,use_attention=(1 >= num_resolutions - 2)
+                )
             )
 
+            # 最後以外はダウンサンプリング
             if i < self.num_resolutions - 1:
-                # 1D畳み込みの代わりにLinear層を使用
-                self.downsample_layers.append(
-                    nn.Sequential(
-                        nn.Linear(out_c, out_c),
-                        nn.LayerNorm(out_c)
-                    )
-                )
+                self.downsample_layers.append(nn.Conv1d(out_c, out_c, kernel_size=3, stride=2, padding=1))
+            else:
+                self.downsample_layers.append(nn.Identity())
             in_c = out_c
 
         # Bottleneck
-        self.bottleneck = TransformerBlock(
-            self.channels[-1], self.channels[-1], time_embed_dim, condition_dim
+        self.bottleneck = ResidualBlock(
+            self.channels[-1], self.channels[-1],
+            time_embed_dim, condition_dim,
+            use_attention=True
         )
 
         # Decoder
@@ -194,22 +206,21 @@ class UNet1DForTrajectory(nn.Module):
         in_c = self.channels[-1]
 
         for i, out_c in enumerate(decoder_channels):
-            self.upsample_layers.append(nn.Linear(in_c, out_c))
+            self.upsample_layers.append(
+                nn.ConvTranspose1d(in_c, out_c, kernel_size=3, stride=2, padding=1,output_padding=1)
+            )
             # スキップ接続を考慮: encoder特徴量はout_cチャンネル、アップサンプル後もout_cチャンネル
             self.decoder_blocks.append(
-                TransformerBlock(out_c * 2, out_c, time_embed_dim, condition_dim)
+                ResidualBlock(
+                    out_c * 2, out_c, time_embed_dim, condition_dim,
+                    use_attention=(i == 0)
+                )
             )
             in_c = out_c
 
         # 出力層
-        self.output_proj = nn.Sequential(
-            nn.Linear(base_channels, base_channels),
-            nn.SiLU(),
-            nn.Linear(base_channels, input_dim)
-        )
+        self.output_proj = nn.Conv1d(base_channels, input_dim, kernel_size=1)
 
-        # 残差接続のための層
-        self.residual_proj = nn.Linear(input_dim, input_dim)
 
     def forward(
             self,
@@ -228,8 +239,7 @@ class UNet1DForTrajectory(nn.Module):
         """
         batch_size, seq_len, _ = x.shape
 
-        # 入力を保存（残差接続用）
-        x_input = x
+        x = x.permute(0, 2, 1)
 
         # 時間埋め込み
         time_embed = self.time_embedding(time_steps)
@@ -239,17 +249,13 @@ class UNet1DForTrajectory(nn.Module):
 
         # Encoder
         encoder_features = []
-        for i, block in enumerate(self.encoder_blocks):
+        for i, (block, downsample) in enumerate(zip(self.encoder_blocks,self.downsample_layers)):
             x = block(x, time_embed, condition)
             
             # ボトルネック以外のみスキップ接続として保存
             if i < self.num_resolutions - 1:
                 encoder_features.append(x)
-
-            if i < self.num_resolutions - 1:
-                # ダウンサンプリング（系列長を半分に）
-                x = x[:, ::2]  # シンプルなダウンサンプリング
-                x = self.downsample_layers[i](x)
+            x = downsample(x)
 
         # Bottleneck
         x = self.bottleneck(x, time_embed, condition)
@@ -259,36 +265,22 @@ class UNet1DForTrajectory(nn.Module):
                 zip(self.upsample_layers, self.decoder_blocks)
         ):
             # アップサンプリング
-            x = torch.repeat_interleave(x, 2, dim=1)
             x = upsample(x)
 
             # スキップ接続
             skip = encoder_features.pop()
 
             # サイズ調整
-            if x.shape[1] != skip.shape[1]:
-                if x.shape[1] > skip.shape[1]:
-                    x = x[:, :skip.shape[1]]
-                else:
-                    skip = skip[:, :x.shape[1]]
+            if x.size(-1) != skip.size(-1):
+                x = F.interpolate(x, size=skip.size(-1), mode='linear', align_corners=False)
 
             # 結合
-            x = torch.cat([x, skip], dim=-1)
+            x = torch.cat([x, skip], dim=1)
             x = block(x, time_embed, condition)
-
-        # 最終的なサイズ調整
-        if x.shape[1] != seq_len:
-            x = F.interpolate(
-                x.transpose(1, 2),
-                size=seq_len,
-                mode='linear'
-            ).transpose(1, 2)
 
         # 出力プロジェクション
         output = self.output_proj(x)
-
-        # 残差接続（オプション）
-        output = output + self.residual_proj(x_input) * 0.1
+        output = output.permute(0, 2, 1)
 
         return output
 
@@ -435,10 +427,10 @@ class UNet1D(nn.Module):
                 time_steps: torch.Tensor,
                 condition: torch.Tensor) -> torch.Tensor:
         """
-        :param x: [batch, 2, seq_len] ノイズ軌道
+        :param x: [batch, seq_len, ind_dim] ノイズ軌道
         :param time_steps: [batch, ] 時間ステップ
         :param condition: [batch, condition_dim] 個人特性ベクトル
-        :return: [batch, 2, seq_len] 予測されたノイズ
+        :return: [batch, in_dim, seq_len] 予測されたノイズ
         """
         x = x.permute(0, 2, 1)
 
@@ -695,7 +687,7 @@ class HighFreqDiffusion:
     @torch.no_grad()
     def denoise_step(
         self,
-        model: SimpleDiffusionMLP,
+        model: UNet1DForTrajectory,
         x_t: torch.Tensor,
         t: torch.Tensor,
         condition: torch.Tensor

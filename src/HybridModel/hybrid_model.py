@@ -32,6 +32,16 @@ class HybridTrajectoryModel(nn.Module):
 
         self.input_dim = input_dim
         self.condition_dim = condition_dim
+        self.high_freq_model_type = high_freq_model_type
+
+        # パラメータを保存
+        self.hparams = {
+            "input_dim": input_dim, "condition_dim": condition_dim, "num_control_points": num_control_points,
+            "spline_hidden_dim": spline_hidden_dim, "high_freq_model_type": high_freq_model_type,
+            "diffusion_hidden_dim": diffusion_hidden_dim, "diffusion_num_layers": diffusion_num_layers,
+            "moving_average_window": moving_average_window, "num_diffusion_steps": num_diffusion_steps,
+            "diffusion_schedule": diffusion_schedule
+        }
 
         # データ分解器
         self.decomposer = DataDecomposer(window_size=moving_average_window)
@@ -46,11 +56,9 @@ class HybridTrajectoryModel(nn.Module):
 
         # 高周波モデル
         if high_freq_model_type == 'unet':
-            self.high_freq_model = UNet1D(
+            self.high_freq_model = UNet1DForTrajectory(
                 input_dim=input_dim,
                 condition_dim=condition_dim,
-                base_channels=32,
-                num_resolutions=3
             )
         else:
             self.high_freq_model = SimpleDiffusionMLP(
@@ -133,6 +141,7 @@ class HybridTrajectoryModel(nn.Module):
         acc = vel[:, 1:] - vel[:, :-1]
 
         return torch.mean(torch.sum(acc ** 2, dim=-1))
+
     @torch.no_grad()
     def generate(self, condition: torch.Tensor, sequence_length: int, num_samples: int = 1) -> torch.Tensor:
         batch_size = condition.shape[0]
@@ -165,23 +174,6 @@ class HybridTrajectoryModel(nn.Module):
         # 正規化を逆変換
         high_freq_generated = high_freq_normalized * self.high_freq_std + self.high_freq_mean
 
-        # 追加のスムージング（オプション）
-        if sequence_length > 3:
-            # 簡単な移動平均でスムージング
-            kernel_size = 3
-            kernel = torch.ones(self.input_dim, 1, kernel_size, device=device) / kernel_size
-            # [batch, seq, dim] -> [batch, dim, seq]
-            high_freq_reshaped = high_freq_generated.transpose(1, 2)
-            # グループごとに畳み込み適用
-            high_freq_smoothed = F.conv1d(
-                high_freq_reshaped,
-                kernel,
-                padding=kernel_size // 2,
-                groups=self.input_dim
-            )
-            # [batch, dim, seq] -> [batch, seq, dim]
-            high_freq_generated = high_freq_smoothed.transpose(1, 2)
-
         # 低周波成分と高周波成分を結合
         generated_trajectories = self.decomposer.reconstruct(
             low_freq_generated,
@@ -189,7 +181,7 @@ class HybridTrajectoryModel(nn.Module):
         )
 
         return generated_trajectories
-    
+
     def get_model_info(self) -> Dict[str, Any]:
         """
         モデル情報を取得
@@ -213,34 +205,23 @@ class HybridTrajectoryModel(nn.Module):
             'moving_average_window': self.decomposer.window_size,
             'diffusion_steps': self.diffusion.num_timesteps
         }
-    
+
     def save_model(self, filepath: str):
-        """
-        モデルを保存
-        """
-        torch.save({
-            'model_state_dict': self.state_dict(),
-            'model_info': self.get_model_info()
-        }, filepath)
-    
+        torch.save({'model_state_dict': self.state_dict(), 'hparams': self.hparams}, filepath)
+
     @classmethod
     def load_model(cls, filepath: str, device: str = 'cpu'):
         """
         モデルを読み込み
         """
         checkpoint = torch.load(filepath, map_location=device)
-        model_info = checkpoint['model_info']
+        hparams = checkpoint['hparams']
         
         # モデルを初期化
-        model = cls(
-            input_dim=model_info['input_dim'],
-            condition_dim=model_info['condition_dim'],
-            moving_average_window=model_info['moving_average_window'],
-            num_diffusion_steps=model_info['diffusion_steps']
-        )
+        model = cls(**hparams)
         
         # 状態を読み込み
         model.load_state_dict(checkpoint['model_state_dict'])
         model.to(device)
-        
+        model.eval()
         return model

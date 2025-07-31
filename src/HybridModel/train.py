@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import yaml
 
+
 # パスを追加
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_dir = os.path.dirname(current_dir)
@@ -43,7 +44,7 @@ def create_config():
         },
         'training': {
             'batch_size': 32,
-            'num_epochs': 50,
+            'num_epochs': 500,
             'learning_rate': 1e-3,
             'weight_decay': 1e-4,
             'scheduler_T_max': 200,
@@ -295,7 +296,7 @@ def plot_training_curves(train_losses, low_freq_losses, high_freq_losses, learni
     print(f"学習曲線を保存: {save_path}")
 
 
-def generate_samples(model_path, config_path=None, num_samples=5):
+def generate_samples(model_path, config_path=None, num_samples=9):
     """学習済みモデルで軌道を生成"""
     
     # 設定読み込み
@@ -315,16 +316,24 @@ def generate_samples(model_path, config_path=None, num_samples=5):
     # テストデータ読み込み
     data_path = config['data']['data_path']
     trajectories, conditions = load_processed_data(data_path)
-    
-    # テスト条件を準備
-    test_conditions = torch.tensor(conditions[:num_samples], dtype=torch.float32).to(device)
-    original_trajectories = trajectories[:num_samples]
+
+    # データセットからランダムにインデックスを選択
+    num_total_data = conditions.shape[0]
+    random_indices = np.random.permutation(num_total_data)[:num_samples]
+
+    # ランダムなインデックスを使って条件と元の軌道を取得
+    # サンプルされた条件ベクトル
+    sampled_conditions = torch.tensor(conditions[random_indices],dtype=torch.float32).to(device)
+    # 対応する正解の軌道
+    original_trajectories = trajectories[random_indices]
+
+    print(f"データセットから{num_samples}個の条件をランダムに選択しました")
     
     # 軌道生成
     print("軌道を生成中...")
     with torch.no_grad():
         generated_trajectories = model.generate(
-            condition=test_conditions,
+            condition=sampled_conditions,
             sequence_length=trajectories.shape[1],
             num_samples=3
         )
@@ -380,8 +389,8 @@ def generate_samples(model_path, config_path=None, num_samples=5):
     # 数値データも保存
     np.save(os.path.join(output_dir, 'generated_trajectories', 'generated_samples.npy'), 
             generated_trajectories)
-    np.save(os.path.join(output_dir, 'generated_trajectories', 'test_conditions.npy'), 
-            test_conditions.cpu().numpy())
+    np.save(os.path.join(output_dir, 'generated_trajectories', 'sampled_conditions.npy'),
+            sampled_conditions.cpu().numpy())
     
     return generated_trajectories
 
@@ -394,7 +403,7 @@ if __name__ == '__main__':
                        help='実行モード: train (学習) または generate (生成)')
     parser.add_argument('--model_path', type=str, default='outputs/hybrid_model_final.pth',
                        help='生成モードで使用するモデルのパス')
-    parser.add_argument('--num_samples', type=int, default=5,
+    parser.add_argument('--num_samples', type=int, default=9,
                        help='生成モードで生成するサンプル数')
     
     args = parser.parse_args()
