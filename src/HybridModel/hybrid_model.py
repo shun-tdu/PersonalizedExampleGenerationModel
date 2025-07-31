@@ -4,9 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Tuple, Dict, Any
 from data_decomposition import DataDecomposer
-from low_freq_model import LowFreqLSTM
 from low_freq_model import LowFreqTransformer
-from low_freq_model import LowFreqSpline
 from high_freq_model import SimpleDiffusionMLP, HighFreqDiffusion, UNet1D,UNet1DForTrajectory
 
 
@@ -46,12 +44,10 @@ class HybridTrajectoryModel(nn.Module):
         # データ分解器
         self.decomposer = DataDecomposer(window_size=moving_average_window)
 
-        # 低周波モデル（スプライン）
-        self.low_freq_model = LowFreqSpline(
+        # 低周波モデル（Transformer）
+        self.low_freq_model = LowFreqTransformer(
             input_dim=input_dim,
             condition_dim=condition_dim,
-            num_control_points=num_control_points,
-            hidden_dim=spline_hidden_dim
         )
 
         # 高周波モデル

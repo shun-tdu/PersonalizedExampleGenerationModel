@@ -39,12 +39,12 @@ def create_config():
             'lstm_num_layers': 2,
             'diffusion_hidden_dim': 256,
             'diffusion_num_layers': 4,
-            'moving_average_window': 10,
+            'moving_average_window': 5,
             'num_diffusion_steps': 1000
         },
         'training': {
             'batch_size': 32,
-            'num_epochs': 500,
+            'num_epochs': 200,
             'learning_rate': 1e-3,
             'weight_decay': 1e-4,
             'scheduler_T_max': 200,
