@@ -44,7 +44,7 @@ def create_config():
         },
         'training': {
             'batch_size': 32,
-            'num_epochs': 200,
+            'num_epochs': 100,
             'learning_rate': 1e-3,
             'weight_decay': 1e-4,
             'scheduler_T_max': 200,
