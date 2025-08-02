@@ -35,8 +35,9 @@ def create_config():
         'model': {
             'input_dim': 2,
             'condition_dim': 5,  # MovementTime, EndpointError, Jerk, GoalX, GoalY
-            'lstm_hidden_dim': 128,
-            'lstm_num_layers': 2,
+            'transformer_inner_dim': 256,
+            'transformer_num_heads': 8,
+            'transformer_num_layers': 4,
             'diffusion_hidden_dim': 256,
             'diffusion_num_layers': 4,
             'moving_average_window': 10,
@@ -45,11 +46,16 @@ def create_config():
         'training': {
             'batch_size': 32,
             'num_epochs': 200,
-            'learning_rate': 1e-3,
+            'lr_low_freq': 1e-3,
+            'lr_high_freq': 5e-4,
+            'lr_decomposer': 1e-4,
             'weight_decay': 1e-4,
-            'scheduler_T_max': 200,
+            'scheduler_T_0': 20,
+            'scheduler_T_mult': 2,
             'scheduler_eta_min': 1e-6,
-            'clip_grad_norm': 1.0
+            'clip_grad_norm': 1.0,
+            'warmup_epochs': 10,
+            'augment_after_epoch':20
         },
         'data': {
             'data_path': '../../data/Datasets/overfitting_dataset.npz'
@@ -126,89 +132,153 @@ def train_model(config_path=None):
         print(f"  {key}: {value:,}" if isinstance(value, int) else f"  {key}: {value}")
     
     # オプティマイザーとスケジューラー
-    optimizer = optim.AdamW(
-        model.parameters(), 
-        lr=config['training']['learning_rate'],
-        weight_decay=config['training']['weight_decay']
-    )
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+    # optimizer = optim.AdamW(
+    #     model.parameters(),
+    #     lr=config['training']['learning_rate'],
+    #     weight_decay=config['training']['weight_decay']
+    # )
+    # オプティマイザーの設定
+    optimizer = optim.AdamW([
+        {'params': model.low_freq_model.parameters(), 'lr': config['training']['lr_low_freq']},
+        {'params': model.high_freq_model.parameters(), 'lr': config['training']['lr_high_freq']},
+        {'params': model.decomposer.parameters(), 'lr': config['training']['lr_decomposer']}
+    ], weight_decay=config['training']['weight_decay'])
+
+    # 学習率スケジューラ-
+    scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
-        T_max=config['training']['scheduler_T_max'],
+        T_0=config['training']['scheduler_T_0'],
+        T_mult=config['training']['scheduler_T_mult'],
         eta_min=config['training']['scheduler_eta_min']
     )
-    
+
+    # ウォームアップスケジューラ
+    warmup_scheduler = optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.1, total_iters=config['training']['warmup_epochs']
+    )
+
     # 学習履歴
-    train_losses = []
-    low_freq_losses = []
-    high_freq_losses = []
-    learning_rates = []
+    history = {
+        'train_loss': [], 'val_loss': [],
+        'low_freq_loss': [], 'high_freq_loss': [],
+        'goal_loss': [], 'curvature_loss': [],
+        'path_efficiency_loss': [],
+        'learning_rates': []
+    }
+
+    # ベストモデルの保存用
+    best_val_loss = float('inf')
     
     # 学習開始
     print("学習を開始します...")
     model.train()
     
     for epoch in range(config['training']['num_epochs']):
-        epoch_losses = []
-        epoch_low_freq_losses = []
-        epoch_high_freq_losses = []
-        
+        # epoch_losses = []
+        # epoch_low_freq_losses = []
+        # epoch_high_freq_losses = []
+
+        # エポック更新(Scheduler sampling用)
+        model.update_epoch(epoch, config['training']['num_epochs'])
+
+        train_losses = {
+            'total_loss': 0.0,
+            'low_freq_loss': 0.0,
+            'low_freq_mse': 0.0,
+            'high_freq_loss': 0.0,
+            'goal_loss': 0.0,
+            'curvature_loss': 0.0,
+            'path_efficiency_loss': 0.0,
+            'velocity_consistency_loss': 0.0,
+            'low_freq_smoothness': 0.0,
+            'high_freq_smoothness': 0.0
+        }
+
         progress_bar = tqdm(train_loader, desc=f'Epoch {epoch+1}/{config["training"]["num_epochs"]}')
         
-        for batch_trajectories, batch_conditions in progress_bar:
-            batch_trajectories = batch_trajectories.to(device)
-            batch_conditions = batch_conditions.to(device)
-            
+        for batch_idx, (trajectories, conditions) in enumerate(progress_bar):
+            trajectories = trajectories.to(device)
+            conditions = conditions.to(device)
+
+            # データ拡張(曲線強調)
+            if epoch > config['training']['augment_after_epoch']:
+                trajectories = augment_curved_trajectories(
+                    trajectories, conditions,
+                    strength=min(0.3, epoch / config["training"]["num_epochs"])
+                )
+
+            # フォワードパス
+            losses = model(trajectories, conditions)
+
+            # 勾配計算
             optimizer.zero_grad()
-            
-            # 順方向計算
-            outputs = model(batch_trajectories, batch_conditions)
-            
+
             # 損失を取得
-            total_loss = outputs['total_loss']
-            low_freq_loss = outputs['low_freq_loss']
-            high_freq_loss = outputs['high_freq_loss']
-            
-            # バックプロパゲーション
-            total_loss.backward()
+            # total_loss = outputs['total_loss']
+            # low_freq_loss = outputs['low_freq_loss']
+            # high_freq_loss = outputs['high_freq_loss']
+            losses['total_loss'].backward()
+
+            # 勾配クリップ
             torch.nn.utils.clip_grad_norm_(
                 model.parameters(), 
                 max_norm=config['training']['clip_grad_norm']
             )
+
             optimizer.step()
             
             # 損失を記録
-            epoch_losses.append(total_loss.item())
-            epoch_low_freq_losses.append(low_freq_loss.item())
-            epoch_high_freq_losses.append(high_freq_loss.item())
+            for key in train_losses:
+                if key in losses:
+                    train_losses[key] += losses[key].item()
+
+            # epoch_losses.append(total_loss.item())
+            # epoch_low_freq_losses.append(low_freq_loss.item())
+            # epoch_high_freq_losses.append(high_freq_loss.item())
             
             # プログレスバー更新
             progress_bar.set_postfix({
-                'Total': f'{total_loss.item():.4f}',
-                'Low': f'{low_freq_loss.item():.4f}',
-                'High': f'{high_freq_loss.item():.4f}',
-                'LR': f'{scheduler.get_last_lr()[0]:.2e}'
+                'Loss': f"{losses['total_loss'].item():.4f}",
+                'Low': f"{losses['low_freq_loss'].item():.4f}",
+                'High': f"{losses['high_freq_loss'].item():.4f}",
+                'goal': f"{losses['goal_loss'].item():.4f}"
             })
         
         # エポック終了処理
-        avg_loss = np.mean(epoch_losses)
-        avg_low_freq_loss = np.mean(epoch_low_freq_losses)
-        avg_high_freq_loss = np.mean(epoch_high_freq_losses)
+        # avg_loss = np.mean(epoch_losses)
+        # avg_low_freq_loss = np.mean(epoch_low_freq_losses)
+        # avg_high_freq_loss = np.mean(epoch_high_freq_losses)
         current_lr = scheduler.get_last_lr()[0]
-        
-        train_losses.append(avg_loss)
-        low_freq_losses.append(avg_low_freq_loss)
-        high_freq_losses.append(avg_high_freq_loss)
-        learning_rates.append(current_lr)
-        
-        scheduler.step()
-        
+        num_batches = len(train_loader)
+        for key in train_losses:
+            train_losses[key] /= num_batches
+
+        # Historyに記録
+        history['train_loss'].append(train_losses['total_loss'])
+        history['low_freq_loss'].append(train_losses['low_freq_loss'])
+        history['high_freq_loss'].append(train_losses['high_freq_loss'])
+        history['goal_loss'].append(train_losses['goal_loss'])
+        history['curvature_loss'].append(train_losses['curvature_loss'])
+        history['path_efficiency_loss'].append(train_losses['path_efficiency_loss'])
+        history['learning_rates'].append(current_lr)
+
+        # 学習率更新
+        if epoch < config['training']['warmup_epochs']:
+            warmup_scheduler.step()
+        else:
+            scheduler.step()
+
         # ログ出力
         if (epoch + 1) % config['logging']['log_interval'] == 0:
             print(f"\nEpoch {epoch+1}/{config['training']['num_epochs']}:")
-            print(f"  Average Total Loss: {avg_loss:.6f}")
-            print(f"  Average Low Freq Loss: {avg_low_freq_loss:.6f}")
-            print(f"  Average High Freq Loss: {avg_high_freq_loss:.6f}")
-            print(f"  Learning Rate: {current_lr:.2e}")
+            print(f"  Train Loss: {train_losses['total_loss']:.4f}")
+            print(f"  Low Freq Loss: {train_losses['low_freq_loss']:.4f}")
+            print(f"  High Freq Loss: {train_losses['high_freq_loss']:.4f}")
+            print(f"  Goal Loss: {train_losses['goal_loss']:.4f}")
+            print(f"  Curvature Loss: {train_losses['curvature_loss']:.4f}")
+            print(f"  Path Efficiency: {train_losses['path_efficiency_loss']:.4f}")
+            print(f"  LR: {optimizer.param_groups[0]['lr']:.2e}")
+            print(f"  Sampling Prob: {model.low_freq_model.sampling_prob.item():.2f}")
         
         # モデル保存
         if (epoch + 1) % config['logging']['save_interval'] == 0:
@@ -227,7 +297,10 @@ def train_model(config_path=None):
     
     # 学習曲線を描画・保存
     plot_training_curves(
-        train_losses, low_freq_losses, high_freq_losses, learning_rates,
+        history['train_losses'],
+        history['low_freq_losses'],
+        history['high_freq_losses'],
+        history['learning_rates'],
         save_path=os.path.join(config['logging']['output_dir'], 'plots', 'training_curves.png')
     )
     
@@ -236,12 +309,12 @@ def train_model(config_path=None):
         'config': config,
         'model_info': model_info,
         'final_losses': {
-            'total': float(train_losses[-1]),
-            'low_freq': float(low_freq_losses[-1]),
-            'high_freq': float(high_freq_losses[-1])
+            'total': float(history['train_losses'][-1]),
+            'low_freq': float(history['low_freq_losses'][-1]),
+            'high_freq': float(history['high_freq_losses'][-1])
         },
-        'min_loss': float(min(train_losses)),
-        'epochs_trained': len(train_losses),
+        'min_loss': float(min(history['train_losses'])),
+        'epochs_trained': len(history['train_losses']),
         'timestamp': datetime.now().isoformat()
     }
     
@@ -251,6 +324,52 @@ def train_model(config_path=None):
     print("学習完了!")
     return model, training_stats
 
+def augment_curved_trajectories(
+        trajectories: torch.Tensor,
+        conditions: torch.Tensor,
+        strength: float = 0.2
+    ) -> torch.Tensor:
+    """曲線を強調するデータ拡張"""
+    batch_size, seq_len, dim = trajectories.shape
+    device = trajectories.device
+
+    augmented = trajectories.clone()
+
+    for i in range(batch_size):
+        # ランダムに曲線を追加するか決定
+        if torch.rand(1).item() < 0.5:
+            # 制御点を使ったベジェ曲線による変形
+            t = torch.linspace(0, 1, seq_len, device=device).unsqueeze(1)
+
+            # ランダムな制御点
+            mid_idx = seq_len // 2
+            control_point = trajectories[i, mid_idx].clone()
+
+            # 制御点をランダムに移動
+            offset = torch.randn(2, device=device)*strength
+            control_point = control_point + offset
+
+            # 3次ベジェ曲線
+            p0 = trajectories[i, 0] # 始点
+            p3 = conditions[i, 3:5] # 終点
+
+            # 中間点制御
+            p1 = p0 + (control_point - p0) * 0.7
+            p2 = p3 + (control_point - p3) * 0.7
+
+            # ベジェ曲線の計算
+            bezier = (
+                (1 - t)**3 * p0 +
+                3 * (1 - t)**2 * t * p1 +
+                3 * (1 - t) * t**2 * p2 +
+                t**3 * p3
+            )
+
+            # 元の軌道とブレンド
+            alpha = torch.rand(1, device=device).item() * 0.5 + 0.5
+            augmented[i] = alpha * bezier + (1 - alpha) * trajectories[i]
+
+    return augmented
 
 def plot_training_curves(train_losses, low_freq_losses, high_freq_losses, learning_rates, save_path):
     """学習曲線を描画"""

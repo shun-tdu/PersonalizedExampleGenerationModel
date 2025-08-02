@@ -36,7 +36,7 @@ class LowFreqTransformer(nn.Module):
     def __init__(self,
                  input_dim: int = 2,
                  dim_head: int = 32,
-                 heads: int = 12,
+                 heads: int = 8,
                  num_layers: int = 4,
                  condition_dim:int = 5,
                  dropout: float = 0.1,
