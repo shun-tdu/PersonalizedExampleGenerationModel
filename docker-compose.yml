@@ -3,8 +3,9 @@ services:
     build: .
     container_name: PersonalizedExampleGeneration_dev
     ports:
-      - "8888:8888"  # Jupyter
-      - "5000:5000"  # MLFlow UI
+      - "8888:8888"   # Jupyter
+      - "2718:2718"   # Marimo
+      - "5000:5000"   # MLFlow UI
     volumes:
       - ./src:/app
       - ./data:/data

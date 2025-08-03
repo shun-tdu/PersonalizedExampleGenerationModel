@@ -14,7 +14,6 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import yaml
 
-
 # パスを追加
 current_dir = os.path.dirname(os.path.abspath(__file__))
 src_dir = os.path.dirname(current_dir)
