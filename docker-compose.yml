@@ -2,6 +2,7 @@ services:
   app:
     build: .
     container_name: PersonalizedExampleGeneration_dev
+    tty: true
     ports:
       - "8888:8888"   # Jupyter
       - "2718:2718"   # Marimo

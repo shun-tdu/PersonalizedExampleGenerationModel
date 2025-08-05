@@ -6,7 +6,7 @@ logging:
   save_interval: 20
 model:
   condition_dim: 5
-  diffusion_hidden_dim: 256
+  diffusion_hidden_dim: 32
   diffusion_num_layers: 4
   input_dim: 2
   moving_average_window: 10

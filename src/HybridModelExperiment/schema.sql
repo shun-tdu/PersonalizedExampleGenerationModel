@@ -1,0 +1,25 @@
+-- 実験管理テーブル
+CREATE TABLE IF NOT EXISTS experiments(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL,
+    start_time TIMESTAMP,
+    end_time TIMESTAMP,
+    config_file TEXT,
+    notes TEXT,
+    git_commit_hash TEXT,
+    low_freq_model_type TEXT,
+    high_freq_model_type TEXT,
+    decomposer_type TEXT,
+    lr_low_freq REAL,
+    lr_high_freq REAL,
+    batch_size INTEGER,
+    num_epochs INTEGER,
+    transformer_layers INTEGER,
+    transformer_dim INTEGER,
+    final_total_loss REAL,
+    final_low_freq_loss REAL,
+    final_high_freq_loss REAL,
+    best_val_loss REAL,
+    model_path TEXT,
+    image_path TEXT
+);

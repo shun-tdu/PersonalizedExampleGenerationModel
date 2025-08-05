@@ -38,7 +38,7 @@ def create_config():
             'transformer_inner_dim': 256,
             'transformer_num_heads': 8,
             'transformer_num_layers': 4,
-            'diffusion_hidden_dim': 256,
+            'diffusion_hidden_dim': 32,
             'diffusion_num_layers': 4,
             'moving_average_window': 10,
             'num_diffusion_steps': 1000

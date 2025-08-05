@@ -14,7 +14,7 @@ class HybridTrajectoryModel(nn.Module):
             input_dim: int = 2,
             condition_dim: int = 5,
             # Transformerモデルのパラメータ
-            transformer_head_dim: int = 256,
+            transformer_head_dim: int = 32,
             transformer_num_heads: int = 8,
             transformer_num_layers: int = 4,
             # 拡散モデルのパラメータ
@@ -163,19 +163,22 @@ class HybridTrajectoryModel(nn.Module):
         high_freq_loss = high_freq_mse + high_freq_smoothness * 0.001
 
         # ============ 統合損失 ============
-        total_loss = low_freq_loss * 100 + high_freq_loss
+        total_loss = low_freq_loss * 100 + high_freq_loss + low_freq_smoothness * 0.01 + high_freq_smoothness * 0.001
 
         return {
+            # 損失関連
+            'total_loss': total_loss,
             'low_freq_loss': low_freq_loss,
             'high_freq_loss': high_freq_loss,
+            # ログ出力や分析用の詳細な損失
+            'low_freq_mse' : low_freq_mse,
+            'goal_loss': goal_loss,
             'low_freq_smoothness': low_freq_smoothness,
+            'path_efficiency_loss': path_efficiency_loss,
+            'velocity_consistency_loss': velocity_consistency_loss,
+            'high_freq_mse': high_freq_mse,
             'high_freq_smoothness': high_freq_smoothness,
-            'total_loss': (
-                    low_freq_loss * 100 +
-                    high_freq_loss +
-                    low_freq_smoothness * 0.01 +
-                    high_freq_smoothness * 0.001
-            ),
+            # デバッグ可視化用
             'low_freq_pred': low_freq_pred,
             'high_freq_target': high_freq,
             'predicted_noise': predicted_noise,
