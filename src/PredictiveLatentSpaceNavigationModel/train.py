@@ -21,7 +21,7 @@ sys.path.insert(0, project_root)
 from models.beta_vae import BetaVAE, loss_function
 
 class TrajectoryDataset(Dataset):
-    def __init__(self, df: pd.DataFrame, seq_len: int = 100, feature_cols=['pos_x', 'pos_y']):
+    def __init__(self, df: pd.DataFrame, seq_len: int = 100, feature_cols=['HandlePosX', 'HandlePosY']):
         self.seq_len = seq_len
         self.feature_cols = feature_cols
 

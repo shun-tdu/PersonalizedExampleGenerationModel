@@ -175,8 +175,9 @@ def main():
     # データフレームを保存
     master_df.to_parquet(DATAFRAME_PATH)
 
-    print("--- ✅  処理後のデータフレームを保存しました ---")
+    print(master_df)
 
+    print("--- ✅  処理後のデータフレームを保存しました ---")
 
     # --- 結果の表示 ---
     print("\n--- 試行ごとのパフォーマンス指標 ---")
