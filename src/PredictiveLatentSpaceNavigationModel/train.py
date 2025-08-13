@@ -12,13 +12,18 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 import yaml
 import sqlite3
+from  sklearn.decomposition import PCA
+from  sklearn.manifold import TSNE
+from scipy.stats import pearsonr
+import seaborn as sns
 
+from src.DataPreprocess.RawDataVisualizer import subject_ids
 
 # --- パス設定とインポート ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
-from models.beta_vae import BetaVAE, loss_function
+from models.beta_vae import BetaVAE
 
 class TrajectoryDataset(Dataset):
     def __init__(self, df: pd.DataFrame, seq_len: int = 100, feature_cols=['HandlePosX', 'HandlePosY']):
@@ -114,7 +119,7 @@ def create_dataloaders(master_data_path: str, seq_len: int, batch_size: int, ran
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    return train_loader, val_loader, test_loader
+    return train_loader, val_loader, test_loader, test_df
 
 
 def update_db(db_path: str, experiment_id: int, data: dict):
@@ -164,6 +169,239 @@ def validate_config(config:dict) -> None:
     if training_config['num_epochs'] <= 0:
         raise ValueError("num_epochsは正の整数である必要があります")
 
+def extract_latent_variables(model, test_loader, device):
+    """テストデータから潜在変数を抽出"""
+    model.eval()
+    all_z_style = []
+    all_z_skill =[]
+    all_subject_ids = []
+    all_is_expert = []
+    all_reconstructions = []
+    all_originals = []
+
+    with torch.no_grad():
+        for trajectories, subject_ids, is_expert in tqdm(test_loader, decs="潜在変数抽出中"):
+            trajectories = trajectories.to(device)
+
+            # エンコード
+            encoded = model.encoder(trajectories)
+            z_style = encoded['z_style']
+            z_skill = encoded['z_skill']
+
+            # 再構成
+            reconstructed = model.decode(z_style, z_skill)
+
+            # CPUに移動して保存
+            all_z_style.append(z_style.cpu().numpy())
+            all_z_skill.append(z_skill.cpu().numpy())
+            all_subject_ids.append(subject_ids)
+            all_is_expert.append(is_expert.cpu().numpy())
+            all_reconstructions.append(reconstructed.cpu().numpy())
+            all_originals.append(trajectories.cpu().numpy())
+
+    return {
+        'z_style': np.vstack(all_z_style),
+        'z_skill': np.vstack(all_z_skill),
+        'subject_ids': all_subject_ids,
+        'is_expert': np.concatenate(is_expert),
+        'reconstructions': np.vstack(all_reconstructions),
+        'originals': np.vstack(all_originals)
+    }
+
+def quantitative_evaluation(latent_data: dict, test_df: pd.DataFrame, output_dir: str):
+    """定量的評価を実行"""
+    print("=== 定量的評価開始 ===")
+
+    # 1. 再構成性能
+    mse = np.mean((latent_data['original'] - latent_data['reconstructions']) ** 2)
+    print(f"再構成MSE: {mse:.6f}")
+
+    # 2. 分離表現の検証 dfから取ってくる
+
+    # z_skillの各次元とパフォーマンス指標の相関
+    correlations = {}
+    z_skill = latent_data['z_skill']
+
+    for metric_name, metric_value in performance_metrics.items():
+        correlations[metric_name] = []
+        for dim in range(z_skill.shape[1]):
+            if len(metric_value) == len(z_skill):
+                corr, p_value = pearsonr(z_skill[:, dim], metric_value)
+                correlations[metric_name].append((corr, p_value))
+            else:
+                correlations[metric_name].append((0.0, 1.0))
+
+    # 結果を保存
+    eval_results = {
+        'reconstruction_mse': mse,
+        'correlations': correlations
+    }
+
+    # todo 結果をDBに保存
+
+def visualize_latent_space(latent_data, test_df, output_dir):
+    """潜在空間の可視化"""
+    print("=== 潜在空間可視化開始 ===")
+
+    # todo 保存したデータをDBに紐づけ
+
+    z_style = latent_data['z_style']
+    z_skill = latent_data['z_skill']
+    subject_ids = latent_data['subject_ids']
+    is_expert = latent_data['is_expert']
+
+    # PCAで２次元に圧縮
+    pca_style = PCA(n_components=2)
+    pca_skill = PCA(n_components=2)
+
+    z_style_2d = pca_style.fit_transform(z_style)
+    z_skill_2d = pca_skill.fit_transform(z_skill)
+
+    # todo 総合スキルスコアの計算
+    skill_scores = np.mean(z_skill, axis=1)  # 簡単な平均値をスコアとする
+
+    # 可視化
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    # 1. z_style空間: 被験者IDで色分け
+    unique_subjects = list(set(subject_ids))
+    colors = plt.cm.Set1(np.linspace(0, 1, len(unique_subjects)))
+    subject_color_map = {subj: colors[i] for i, subj in enumerate(unique_subjects)}
+
+    for subject in unique_subjects:
+        mask = [sid == subject for sid in subject_ids]
+        axes[0].scatter(z_style_2d[mask, 0], z_style_2d[mask, 1],
+                        c=[subject_color_map[subject]],
+                        label=f'Subject {subject}', alpha=0.7)
+
+    axes[0].set_title('z_style space(per subject) ')
+    axes[0].set_xlabel('PC1')
+    axes[0].set_ylabel('PC2')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+
+    # 2. z_skill空間: 熟練度ラベルで色分け
+    expert_mask = is_expert == 1
+    novice_mask = is_expert == 0
+
+    axes[1].scatter(z_skill_2d[novice_mask, 0], z_skill_2d[novice_mask, 1],
+                    c='blue',
+                    label='Novice', alpha=0.7)
+    axes[1].scatter(z_skill_2d[expert_mask, 0], z_skill_2d[expert_mask, 1],
+                    c='red',
+                    label='Expert', alpha=0.7)
+
+    axes[1].set_title('z_skill空間（熟達度別）')
+    axes[1].set_xlabel('PC1')
+    axes[1].set_ylabel('PC2')
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+
+    # 3. z_skill空間: スキルスコアでグラデーション
+    scatter = axes[2].scatter(z_skill_2d[:, 0], z_skill_2d[:, 1],
+                              c=skill_scores, cmap='viridis', alpha=0.7)
+
+    axes[2].set_title('z_skill空間（Skill Score）')
+    axes[2].set_xlabel('PC1')
+    axes[2].set_ylabel('PC2')
+    axes[2].grid(True, alpha=0.3)
+    plt.colorbar(scatter, ax=axes[2], label='Skill Score')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'latent_space_visualization.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print("潜在空間可視化完了")
+
+def generate_qualitative_trajectories(model, latent_data, output_dir, device):
+    """定性評価用の軌道生成"""
+    print("=== 定性評価用軌道生成開始 ===")
+
+    model.eval()
+
+    # 代表的な被験者を選択(最初の被験者)
+    subject_ids = latent_data['subject_ids']
+    unique_subjects = list(set(subject_ids))
+    representative_subject = unique_subjects[0]
+
+    # 代表被験者のz_styleの平均を計算
+    subject_mask = [sid == representative_subject for sid in subject_ids]
+    z_style_mean = np.mean(latent_data['z_style'][subject_mask], axis=0)
+    z_style_tensor = torch.tensor(z_style_mean, dtype=torch.float32).unsqueeze(0).to(device)
+
+    # スキル軸の定義(主成分分析で最大分散方向を求める)
+    z_skill = latent_data['z_skill']
+    pca = PCA(n_components=1)
+    pca.fit(z_skill)
+    skill_direction = pca.components_[0] # 第1主成分
+
+    # z_skillの平均点を基準とする
+    z_skill_mean = np.mean(z_skill, axis=0)
+
+    # α値の範囲
+    alpha_values = np.arange(-0.2, 0.31, 0.1)
+
+    generated_trajectories = []
+
+    with torch.no_grad():
+        for alpha in alpha_values:
+            # z_skillを計算
+            z_skill_modified = z_skill_mean + alpha * skill_direction
+            z_skill_tensor = torch.tensor(z_skill_modified, dtype=torch.float32).unsqueeze(0).to(device)
+
+            generated_traj = model.decode(z_style_tensor, z_skill_tensor)
+            generated_trajectories.append(generated_traj.cpu().numpy().squeeze())
+
+    # 軌道をプロット
+    fig, axes = plt.subplots(1, len(alpha_values), figsize=(20, 4))
+    if len(alpha_values) == 1:
+        axes = [axes]
+
+    for i, (alpha, traj) in enumerate(zip(alpha_values, generated_trajectories)):
+        # 差分から絶対座標に変換
+        cumsum_traj = np.cumsum(traj, axis=0)
+
+        axes[i].plot(cumsum_traj[:, 0], cumsum_traj[:, 1], 'b-', linewidth=2)
+        axes[i].scatter(cumsum_traj[0, 0], cumsum_traj[0, 1], c='green', s=100, label='Start', zorder=5)
+        axes[i].scatter(cumsum_traj[-1, 0], cumsum_traj[-1, 1], c='red', s=100, label='End', zorder=5)
+        axes[i].set_title(f'α = {alpha:.1f}')
+        axes[i].set_xlabel('X Position')
+        axes[i].set_ylabel('Y Position')
+        axes[i].grid(True, alpha=0.3)
+        axes[i].legend()
+        axes[i].set_aspect('equal')
+
+    plt.suptitle(f'Generated Trajectories (Subject: {representative_subject})', fontsize=16)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'generated_trajectories.png'), dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print("定性評価用軌道生成完了")
+
+def run_evaluation(model, test_loader, test_df, output_dir, device):
+    """評価プロセス全体を実行"""
+    print("\n" + "="*50)
+    print("評価開始")
+    print("="*50)
+
+    # 潜在変数抽出
+    latent_data = extract_latent_variables(model, test_loader, device)
+
+    # 定量的評価
+    eval_results = quantitative_evaluation(latent_data, test_df, output_dir)
+
+    # 潜在空間可視化
+    visualize_latent_space(latent_data, test_df, output_dir)
+
+    # 定性的評価用軌道生成
+    generate_qualitative_trajectories(model, latent_data, output_dir, device)
+
+    print("="*50)
+    print("評価完了")
+    print("="*50)
+
+    return eval_results
+
 def train_model(config_path: str, experiment_id: int, db_path: str):
     """
     単一の学習タスクを実行し，結果をDBに報告する．
@@ -199,7 +437,7 @@ def train_model(config_path: str, experiment_id: int, db_path: str):
 
         # 3. データ準備
         try:
-            train_loader, val_loader, test_loader = create_dataloaders(
+            train_loader, val_loader, test_loader, test_df = create_dataloaders(
                 config['data']['data_path'],
                 config['model']['seq_len'],
                 config['training']['batch_size']
@@ -300,15 +538,33 @@ def train_model(config_path: str, experiment_id: int, db_path: str):
         plot_path = os.path.join(output_dir, 'plots', f'plot_exp{experiment_id}.png')
         plot_training_curves(history['train_loss'], history['val_loss'], history['learning_rates'], plot_path)
 
-        # DBに完了報告
-        update_db(db_path, experiment_id, {
-            'status': 'completed',
-            'end_time': datetime.now().isoformat(),
-            'final_total_loss': history['train_loss'][-1],
-            'best_val_loss': best_val_loss,
-            'model_path': final_model_path,
-            'image_path': plot_path
-        })
+        # 7. 評価実行
+        try:
+            eval_results = run_evaluation(model, test_loader, test_df, output_dir, device)
+
+            # 評価結果をDBに記録
+            update_db(db_path, experiment_id, {
+                'status': 'completed',
+                'end_time': datetime.now().isoformat(),
+                'final_total_loss': history['train_loss'][-1],
+                'best_val_loss': best_val_loss,
+                'model_path': final_model_path,
+                'image_path': plot_path,
+                'notes': f"Reconstruction MSE: {eval_results['reconstruction_mse']:.6f}"
+            })
+        except Exception as eval_error:
+            print(f"評価時にエラーが発生: {eval_error}")
+            # DBに完了報告
+            update_db(db_path, experiment_id, {
+                'status': 'completed',
+                'end_time': datetime.now().isoformat(),
+                'final_total_loss': history['train_loss'][-1],
+                'best_val_loss': best_val_loss,
+                'model_path': final_model_path,
+                'image_path': plot_path,
+                'notes': f"Training completed, but evaluation failed: {str(eval_error)}"
+            })
+
         print(f"--- 実験ID: {experiment_id} 正常に終了 ---")
 
     except Exception as e:
