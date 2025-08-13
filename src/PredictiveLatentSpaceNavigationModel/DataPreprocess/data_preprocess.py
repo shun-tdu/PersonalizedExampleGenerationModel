@@ -170,7 +170,23 @@ def main():
     # 5. 熟練度の情報を含めたデータフレーム
     filtered_df = raw_df[raw_df['TrialState'] == 'TRIAL_RUNNING'].copy()
     filtered_df['is_expert'] = filtered_df['subject_id'].map(expertise_labels)
-    master_df = filtered_df
+    
+    # 6. パフォーマンス指標を軌道データに結合
+    # performance_dfの列名にprefixを追加してコンフリクトを避ける
+    performance_df_renamed = performance_df.copy()
+    for col in performance_df_renamed.columns:
+        if col not in ['subject_id', 'trial_num']:
+            performance_df_renamed.rename(columns={col: f'perf_{col}'}, inplace=True)
+    
+    # 軌道データとパフォーマンス指標をマージ
+    master_df = filtered_df.merge(
+        performance_df_renamed, 
+        on=['subject_id', 'trial_num'], 
+        how='left'
+    )
+    
+    print(f"結合後のデータフレーム形状: {master_df.shape}")
+    print(f"パフォーマンス指標列: {[col for col in master_df.columns if col.startswith('perf_')]}")
 
     # データフレームを保存
     master_df.to_parquet(DATAFRAME_PATH)

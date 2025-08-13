@@ -1,6 +1,7 @@
 import os
 import sys
 import argparse
+import warnings
 import numpy as np
 import pandas as pd
 import torch
@@ -17,13 +18,14 @@ from  sklearn.manifold import TSNE
 from scipy.stats import pearsonr
 import seaborn as sns
 
-from src.DataPreprocess.RawDataVisualizer import subject_ids
 
 # --- パス設定とインポート ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
 from models.beta_vae import BetaVAE
+from DataPreprocess.data_preprocess import calculate_jerk, calculate_path_efficiency, calculate_approach_angle, calculate_sparc
+
 
 class TrajectoryDataset(Dataset):
     def __init__(self, df: pd.DataFrame, seq_len: int = 100, feature_cols=['HandlePosX', 'HandlePosY']):
@@ -184,7 +186,7 @@ def extract_latent_variables(model, test_loader, device):
             trajectories = trajectories.to(device)
 
             # エンコード
-            encoded = model.encoder(trajectories)
+            encoded = model.encode(trajectories)
             z_style = encoded['z_style']
             z_skill = encoded['z_skill']
 
@@ -208,36 +210,29 @@ def extract_latent_variables(model, test_loader, device):
         'originals': np.vstack(all_originals)
     }
 
-def quantitative_evaluation(latent_data: dict, test_df: pd.DataFrame, output_dir: str):
-    """定量的評価を実行"""
-    print("=== 定量的評価開始 ===")
+def create_performance_dataframe(test_df: pd.DataFrame):
+    """パフォーマンス指標を計算"""
 
-    # 1. 再構成性能
-    mse = np.mean((latent_data['originals'] - latent_data['reconstructions']) ** 2)
-    print(f"再構成MSE: {mse:.6f}")
-
-    # 2. 分離表現の検証: test_dfからパフォーマンス指標を計算
-    # data_preprocess.pyと同じ方法でパフォーマンス指標を計算
-    from DataPreprocess.data_preprocess import calculate_jerk, calculate_path_efficiency, calculate_approach_angle, calculate_sparc
-    
-    # 被験者・試行ごとのパフォーマンス指標を計算
     performance_data = []
     for (subject_id, trial_num), trial_df in test_df.groupby(['subject_id', 'trial_num']):
         trajectory = trial_df[['HandlePosX', 'HandlePosY']].values
-        velocity = trial_df[['HandleVelX', 'HandleVelY']].values if 'HandleVelX' in trial_df.columns else np.zeros_like(trajectory)
-        acceleration = trial_df[['HandleAccX', 'HandleAccY']].values if 'HandleAccX' in trial_df.columns else np.zeros_like(trajectory)
-        time_stamps = trial_df['Timestamp'].values if 'Timestamp' in trial_df.columns else np.arange(len(trajectory)) * 0.01
-        
+        velocity = trial_df[['HandleVelX', 'HandleVelY']].values if 'HandleVelX' in trial_df.columns else np.zeros_like(
+            trajectory)
+        acceleration = trial_df[
+            ['HandleAccX', 'HandleAccY']].values if 'HandleAccX' in trial_df.columns else np.zeros_like(trajectory)
+        time_stamps = trial_df['Timestamp'].values if 'Timestamp' in trial_df.columns else np.arange(
+            len(trajectory)) * 0.01
+
         # 目標位置
         if 'TargetEndPosX' in trial_df.columns and 'TargetEndPosY' in trial_df.columns:
             target_end_pos = trial_df[['TargetEndPosX', 'TargetEndPosY']].iloc[-1].values
         else:
             target_end_pos = trajectory[-1]  # 最終位置を目標位置とする
-        
+
         dt = np.mean(np.diff(time_stamps)) if len(time_stamps) > 1 else 0.01
         if np.isnan(dt) or dt == 0:
             dt = 0.01
-        
+
         performance_data.append({
             'subject_id': subject_id,
             'trial_num': trial_num,
@@ -249,142 +244,233 @@ def quantitative_evaluation(latent_data: dict, test_df: pd.DataFrame, output_dir
             'sparc': calculate_sparc(velocity, dt),
             'is_expert': trial_df['is_expert'].iloc[0] if 'is_expert' in trial_df.columns else 0
         })
+
+    return pd.DataFrame(performance_data)
+
+def quantitative_evaluation(latent_data: dict, test_df: pd.DataFrame, output_dir: str):
+    """定量的評価を実行"""
+    print("=== 定量的評価開始 ===")
+
+    # 1. 再構成性能
+    mse = np.mean((latent_data['originals'] - latent_data['reconstructions']) ** 2)
+    print(f"再構成MSE: {mse:.6f}")
+
+    # 2. 事前計算されたパフォーマンス指標を抽出
+    perf_cols = [col for col in test_df.columns if col.startswith('perf_')]
+    if not perf_cols:
+        raise ValueError("パフォーマンス指標列（perf_で始まる列）が見つかりません。data_preprocess.pyでパフォーマンス指標を計算してください。")
     
-    performance_df = pd.DataFrame(performance_data)
+    print(f"利用可能なパフォーマンス指標: {perf_cols}")
     
-    # 3. z_skillの各次元とパフォーマンス指標の相関分析
+    # 試行ごとのパフォーマンス指標を取得
+    performance_df = test_df.groupby(['subject_id', 'trial_num']).first()[['is_expert'] + perf_cols].reset_index()
+    
+    print(f"パフォーマンス指標データの形状: {performance_df.shape}")
+
+    # 3. 潜在変数をDataFrameに変換
+    z_skill_df = pd.DataFrame(
+        latent_data['z_skill'],
+        columns=[f'z_skill_{i}' for i in range(latent_data['z_skill'].shape[1])]
+    )
+    z_style_df = pd.DataFrame(
+        latent_data['z_style'],
+        columns=[f'z_style_{i}' for i in range(latent_data['z_style'].shape[1])]
+    )
+
+    # データの長さが一致するかチェック
+    if len(performance_df) != len(z_skill_df):
+        warnings.warn(
+            f"警告: パフォーマンス指標の試行数 ({len(performance_df)}) と "
+            f"潜在変数の試行数 ({len(z_skill_df)}) が一致しません。相関分析が不正確になる可能性があります。"
+        )
+
+    # パフォーマンス指標と潜在変数を結合
+    analysis_df = pd.concat([
+        performance_df.reset_index(drop=True),
+        z_skill_df,
+        z_style_df
+    ], axis=1)
+
+    print(f"分析用データフレームを作成しました。形状: {analysis_df.shape}")
+
+    # --- 4. 分離表現の検証（相関分析） ---
+    print("\n--- スキル潜在変数とパフォーマンス指標の相関分析 ---")
     correlations = {}
-    z_skill = latent_data['z_skill']
-    subject_ids = latent_data['subject_ids']
-    
-    # 被験者IDのリストを平坦化
-    flat_subject_ids = []
-    for batch in subject_ids:
-        if isinstance(batch, (list, tuple, np.ndarray)):
-            flat_subject_ids.extend(batch)
-        else:
-            flat_subject_ids.append(batch)
-    
-    # 各パフォーマンス指標について相関分析
-    metric_names = ['trial_time', 'trial_error', 'jerk', 'path_efficiency', 'approach_angle', 'sparc']
-    
-    for metric_name in metric_names:
+    # 'perf_'プレフィックスを除いた指標名で相関分析
+    metric_names = ['trial_time', 'trial_error', 'jerk', 'path_efficiency', 'approach_angle', 'sparc', 'trial_variability']
+    available_metrics = [metric for metric in metric_names if f'perf_{metric}' in analysis_df.columns]
+    z_skill_cols = [col for col in analysis_df.columns if 'z_skill' in str(col)]
+
+    for metric_name in available_metrics:
+        metric_col = f'perf_{metric_name}'
         correlations[metric_name] = []
         
-        # 被験者ごとの平均パフォーマンスを計算
-        subject_metrics = performance_df.groupby('subject_id')[metric_name].mean()
-        
-        # z_skillに対応するメトリック値を取得
-        metric_values = []
-        for sid in flat_subject_ids:
-            if sid in subject_metrics.index:
-                metric_values.append(subject_metrics[sid])
-            else:
-                metric_values.append(np.nan)
-        
-        metric_values = np.array(metric_values)
-        
-        # 各次元との相関を計算
-        for dim in range(z_skill.shape[1]):
-            if len(metric_values) == len(z_skill) and not np.all(np.isnan(metric_values)):
-                # NaN値を除去
-                valid_mask = ~np.isnan(metric_values)
-                if np.sum(valid_mask) > 1:
-                    corr, p_value = pearsonr(z_skill[valid_mask, dim], metric_values[valid_mask])
-                else:
-                    corr, p_value = 0.0, 1.0
-            else:
-                corr, p_value = 0.0, 1.0
-            correlations[metric_name].append((corr, p_value))
-        
-        # 最大相関を表示
-        max_corr = max(correlations[metric_name], key=lambda x: abs(x[0]))
-        print(f"{metric_name}の最大相関: {max_corr[0]:.4f} (p={max_corr[1]:.4f})")
+        for z_col in z_skill_cols:
+            # NaN値を除外して計算
+            subset = analysis_df[[metric_col, z_col]].dropna()
 
-    # 結果を保存
+            # 定数値の列でないことを確認（標準偏差がほぼゼロでないか）
+            if len(subset) > 1 and subset[metric_col].std() > 1e-6 and subset[z_col].std() > 1e-6:
+                corr, p_value = pearsonr(subset[z_col], subset[metric_col])
+            else:
+                corr, p_value = 0.0, 1.0  # 計算不能な場合は無相関とする
+
+            correlations[metric_name].append((corr, p_value))
+
+        # この指標で最も相関が高かった次元を表示
+        valid_corrs = [(abs(c[0]), c) for c in correlations[metric_name] if not np.isnan(c[0])]
+        if valid_corrs:
+            max_abs_corr, (max_corr_val, max_corr_p) = max(valid_corrs)
+            max_abs_corr_idx = [i for i, c in enumerate(correlations[metric_name]) if abs(c[0]) == max_abs_corr][0]
+            print(
+                f"{metric_name}の最大相関: z_skill_{max_abs_corr_idx} (r={max_corr_val:.4f}, p={max_corr_p:.4f})")
+        else:
+            print(f"{metric_name}の最大相関: 0.0000 (p=1.0000) - 相関計算不可")
+
+    # --- 5. 結果のパッケージ化 ---
     eval_results = {
         'reconstruction_mse': mse,
         'correlations': correlations,
-        'performance_data': performance_data
+        'performance_data': performance_df.to_dict('records')
     }
-    
-    return eval_results
 
-def visualize_latent_space(latent_data, test_df, output_dir, save_path=None):
-    """潜在空間の可視化"""
-    print("=== 潜在空間可視化開始 ===")
-    
-    if save_path is None:
-        save_path = os.path.join(output_dir, 'latent_space_visualization.png')
+    print("=" * 20 + " 定量的評価完了 " + "=" * 20)
 
-    z_style = latent_data['z_style']
-    z_skill = latent_data['z_skill']
-    subject_ids = latent_data['subject_ids']
-    is_expert = latent_data['is_expert']
+    return eval_results, analysis_df
 
-    # PCAで２次元に圧縮
+
+def visualize_latent_space(
+        analysis_df: pd.DataFrame,
+        save_path: str
+    ):
+    """
+    分析用DataFrameから潜在空間の可視化グラフを生成し、指定されたパスに保存する。
+
+    Args:
+        analysis_df (pd.DataFrame): パフォーマンス指標と潜在変数が結合されたDataFrame。
+        save_path (str): 生成したグラフを保存するファイルパス (例: './plots/latent_space.png')。
+    """
+    print("=" * 20 + " 潜在空間の可視化開始 " + "=" * 20)
+
+    # --- 1. 潜在変数の抽出と次元削減 ---
+    # z_styleとz_skillの列名を特定
+    z_style_cols = [col for col in analysis_df.columns if 'z_style' in str(col)]
+    z_skill_cols = [col for col in analysis_df.columns if 'z_skill' in str(col)]
+
+    if not z_style_cols or not z_skill_cols:
+        print("エラー: 潜在変数の列が見つかりません。")
+        return
+
+    # PCAで2次元に圧縮
     pca_style = PCA(n_components=2)
+    z_style_2d = pca_style.fit_transform(analysis_df[z_style_cols])
+
     pca_skill = PCA(n_components=2)
+    z_skill_2d = pca_skill.fit_transform(analysis_df[z_skill_cols])
 
-    z_style_2d = pca_style.fit_transform(z_style)
-    z_skill_2d = pca_skill.fit_transform(z_skill)
+    # 可視化のためにDataFrameに次元削減後のデータを追加
+    analysis_df['z_style_pc1'] = z_style_2d[:, 0]
+    analysis_df['z_style_pc2'] = z_style_2d[:, 1]
+    analysis_df['z_skill_pc1'] = z_skill_2d[:, 0]
+    analysis_df['z_skill_pc2'] = z_skill_2d[:, 1]
 
-    # todo 総合スキルスコアの計算
-    skill_scores = np.mean(z_skill, axis=1)  # 簡単な平均値をスコアとする
+    # --- 2. グラフの描画 ---
+    # スタイルの設定
+    sns.set_theme(style="whitegrid")
+    fig, axes = plt.subplots(1, 3, figsize=(21, 6))
+    fig.suptitle("Latent Space Visualization", fontsize=16)
 
-    # 可視化
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    # --- グラフ1: z_style空間を被験者IDで色分け ---
+    sns.scatterplot(
+        data=analysis_df,
+        x='z_style_pc1',
+        y='z_style_pc2',
+        hue='subject_id',
+        palette='viridis',  # 色覚多様性に対応したカラーマップ
+        style='subject_id',  # マーカーの形も変える
+        s=100,  # マーカーのサイズ
+        alpha=0.8,
+        ax=axes[0]
+    )
+    axes[0].set_title('z_style Space (colored by Subject ID)')
+    axes[0].set_xlabel('Principal Component 1')
+    axes[0].set_ylabel('Principal Component 2')
+    axes[0].legend(title='Subject ID', bbox_to_anchor=(1.05, 1), loc='upper left')
 
-    # 1. z_style空間: 被験者IDで色分け
-    unique_subjects = list(set(subject_ids))
-    colors = plt.cm.Set1(np.linspace(0, 1, len(unique_subjects)))
-    subject_color_map = {subj: colors[i] for i, subj in enumerate(unique_subjects)}
+    # --- グラフ2: z_skill空間を熟達度ラベルで色分け ---
+    # 'is_expert'列がない場合はスキップ
+    if 'is_expert' in analysis_df.columns:
+        analysis_df['Expertise'] = analysis_df['is_expert'].map({0: 'Novice', 1: 'Expert'})
+        sns.scatterplot(
+            data=analysis_df,
+            x='z_skill_pc1',
+            y='z_skill_pc2',
+            hue='Expertise',
+            palette={'Novice': 'blue', 'Expert': 'red'},
+            style='Expertise',
+            s=100,
+            alpha=0.8,
+            ax=axes[1]
+        )
+    axes[1].set_title('z_skill Space (colored by Expertise)')
+    axes[1].set_xlabel('Principal Component 1')
+    axes[1].set_ylabel('Principal Component 2')
+    axes[1].legend(title='Expertise')
 
-    for subject in unique_subjects:
-        mask = [sid == subject for sid in subject_ids]
-        axes[0].scatter(z_style_2d[mask, 0], z_style_2d[mask, 1],
-                        c=[subject_color_map[subject]],
-                        label=f'Subject {subject}', alpha=0.7)
+    # --- グラフ3: z_skill空間をパフォーマンス指標でグラデーション ---
+    # perf_trial_timeをスコアとして使用
+    performance_col = 'perf_trial_time' if 'perf_trial_time' in analysis_df.columns else None
+    
+    if performance_col and not analysis_df[performance_col].isna().all():
+        scatter = sns.scatterplot(
+            data=analysis_df,
+            x='z_skill_pc1',
+            y='z_skill_pc2',
+            hue=performance_col,
+            palette='plasma',  # グラデーション用のカラーマップ
+            s=100,
+            alpha=0.8,
+            ax=axes[2]
+        )
+        axes[2].set_title('z_skill Space (colored by Trial Time)')
+        axes[2].set_xlabel('Principal Component 1')
+        axes[2].set_ylabel('Principal Component 2')
+        # カラーバーの追加
+        norm = plt.Normalize(analysis_df[performance_col].min(), analysis_df[performance_col].max())
+        sm = plt.cm.ScalarMappable(cmap="plasma", norm=norm)
+        sm.set_array([])
+        fig.colorbar(sm, ax=axes[2], label='Trial Time (s)')
+    else:
+        # パフォーマンス指標がない場合は熟達度で色分け
+        if 'is_expert' in analysis_df.columns:
+            sns.scatterplot(
+                data=analysis_df,
+                x='z_skill_pc1',
+                y='z_skill_pc2',
+                hue='is_expert',
+                palette={0: 'blue', 1: 'red'},
+                s=100,
+                alpha=0.8,
+                ax=axes[2]
+            )
+            axes[2].set_title('z_skill Space (colored by Expertise)')
+        else:
+            # 単色でプロット
+            axes[2].scatter(analysis_df['z_skill_pc1'], analysis_df['z_skill_pc2'], alpha=0.8)
+            axes[2].set_title('z_skill Space')
+        axes[2].set_xlabel('Principal Component 1')
+        axes[2].set_ylabel('Principal Component 2')
 
-    axes[0].set_title('z_style space(per subject) ')
-    axes[0].set_xlabel('PC1')
-    axes[0].set_ylabel('PC2')
-    axes[0].legend()
-    axes[0].grid(True, alpha=0.3)
+    # --- 3. 保存と終了 ---
+    plt.tight_layout(rect=[0, 0, 1, 0.96])  # suptitleとの重なりを調整
+    # 保存先のディレクトリがなければ作成
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=300)
+        print(f"潜在空間の可視化グラフを保存しました: {save_path}")
 
-    # 2. z_skill空間: 熟練度ラベルで色分け
-    expert_mask = is_expert == 1
-    novice_mask = is_expert == 0
-
-    axes[1].scatter(z_skill_2d[novice_mask, 0], z_skill_2d[novice_mask, 1],
-                    c='blue',
-                    label='Novice', alpha=0.7)
-    axes[1].scatter(z_skill_2d[expert_mask, 0], z_skill_2d[expert_mask, 1],
-                    c='red',
-                    label='Expert', alpha=0.7)
-
-    axes[1].set_title('z_skill空間（熟達度別）')
-    axes[1].set_xlabel('PC1')
-    axes[1].set_ylabel('PC2')
-    axes[1].legend()
-    axes[1].grid(True, alpha=0.3)
-
-    # 3. z_skill空間: スキルスコアでグラデーション
-    scatter = axes[2].scatter(z_skill_2d[:, 0], z_skill_2d[:, 1],
-                              c=skill_scores, cmap='viridis', alpha=0.7)
-
-    axes[2].set_title('z_skill空間（Skill Score）')
-    axes[2].set_xlabel('PC1')
-    axes[2].set_ylabel('PC2')
-    axes[2].grid(True, alpha=0.3)
-    plt.colorbar(scatter, ax=axes[2], label='Skill Score')
-
-    plt.tight_layout()
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
-
-    print(f"潜在空間可視化完了: {save_path}")
+    print("=" * 20 + " 潜在空間の可視化完了 " + "=" * 20)
 
 def generate_qualitative_trajectories(model, latent_data, output_dir, device, save_path=None):
     """定性評価用の軌道生成"""
@@ -397,15 +483,24 @@ def generate_qualitative_trajectories(model, latent_data, output_dir, device, sa
 
     # 代表的な被験者を選択(最初の被験者)
     subject_ids = latent_data['subject_ids']
-    unique_subjects = list(set(subject_ids))
+    # subject_idsを平坦化
+    flat_subject_ids = []
+    for batch in subject_ids:
+        if isinstance(batch, (list, tuple, np.ndarray)):
+            flat_subject_ids.extend(batch)
+        else:
+            flat_subject_ids.append(batch)
+    
+    unique_subjects = list(set(flat_subject_ids))
     representative_subject = unique_subjects[0]
 
     # 代表被験者のz_styleの平均を計算
-    subject_mask = [sid == representative_subject for sid in subject_ids]
+    subject_mask = np.array([sid == representative_subject for sid in flat_subject_ids])
     z_style_mean = np.mean(latent_data['z_style'][subject_mask], axis=0)
     z_style_tensor = torch.tensor(z_style_mean, dtype=torch.float32).unsqueeze(0).to(device)
 
     # スキル軸の定義(主成分分析で最大分散方向を求める)
+    # todo 最も相関の強かった次元を用いた方がストーリー的に良い
     z_skill = latent_data['z_skill']
     pca = PCA(n_components=1)
     pca.fit(z_skill)
@@ -465,15 +560,15 @@ def run_evaluation(model, test_loader, test_df, output_dir, device, experiment_i
     latent_data = extract_latent_variables(model, test_loader, device)
 
     # 定量的評価
-    eval_results = quantitative_evaluation(latent_data, test_df, output_dir)
+    eval_results, performance_df_with_latents = quantitative_evaluation(latent_data, test_df, output_dir)
 
     # 潜在空間可視化
     latent_viz_path = os.path.join(output_dir, 'plots', f'latent_space_visualization_exp{experiment_id}.png')
-    visualize_latent_space(latent_data, test_df, output_dir, latent_viz_path)
+    visualize_latent_space(performance_df_with_latents, latent_viz_path)
 
     # 定性的評価用軌道生成
     traj_gen_path = os.path.join(output_dir, 'plots', f'generated_trajectories_exp{experiment_id}.png')
-    generate_qualitative_trajectories(model, latent_data, output_dir, device, traj_gen_path)
+    generate_qualitative_trajectories(model, latent_data, eval_results, device, traj_gen_path)
 
     # 評価結果をファイルに保存
     import json
@@ -481,10 +576,27 @@ def run_evaluation(model, test_loader, test_df, output_dir, device, experiment_i
     os.makedirs(os.path.dirname(eval_results_path), exist_ok=True)
     
     # JSON serializable形式に変換
+    def convert_to_serializable(obj):
+        """NumPy型やその他の非JSON型をPython標準型に変換"""
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, dict):
+            return {k: convert_to_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_to_serializable(item) for item in obj]
+        else:
+            return obj
+    
     serializable_results = {
         'reconstruction_mse': float(eval_results['reconstruction_mse']),
-        'correlations': {k: [(float(corr), float(p)) for corr, p in v] for k, v in eval_results['correlations'].items()},
-        'performance_data': eval_results['performance_data']
+        'correlations': {k: [(float(corr) if not np.isnan(corr) else 0.0, 
+                             float(p) if not np.isnan(p) else 1.0) for corr, p in v] 
+                        for k, v in eval_results['correlations'].items()},
+        'performance_data': convert_to_serializable(eval_results['performance_data'])
     }
     
     with open(eval_results_path, 'w') as f:

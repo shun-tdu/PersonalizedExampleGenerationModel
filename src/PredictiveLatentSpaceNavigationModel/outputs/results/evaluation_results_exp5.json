@@ -1,0 +1,500 @@
+{
+  "reconstruction_mse": 4.621487460099161e-05,
+  "correlations": {
+    "trial_time": [
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ]
+    ],
+    "trial_error": [
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ]
+    ],
+    "jerk": [
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ]
+    ],
+    "path_efficiency": [
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ]
+    ],
+    "approach_angle": [
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ]
+    ],
+    "sparc": [
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ]
+    ]
+  },
+  "performance_data": [
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 1,
+      "trial_time": 781.4310399999999,
+      "trial_error": 0.009331885373947761,
+      "jerk": 0.23823026873026598,
+      "path_efficiency": 0.04352089782113238,
+      "approach_angle": -31.090610448822908,
+      "sparc": 5.769436645157065,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 2,
+      "trial_time": 780.9909500000001,
+      "trial_error": 0.015043752771499544,
+      "jerk": 0.11949348828072694,
+      "path_efficiency": 0.11088092462881975,
+      "approach_angle": -28.423100066341778,
+      "sparc": 7.103057853484029,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 3,
+      "trial_time": 780.53104,
+      "trial_error": 0.010686631937612519,
+      "jerk": 0.13453860885782903,
+      "path_efficiency": 0.18022399752169005,
+      "approach_angle": 163.30075576629815,
+      "sparc": 5.666466649165219,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 4,
+      "trial_time": 779.65094,
+      "trial_error": 0.010831962821211107,
+      "jerk": 0.11646129045993998,
+      "path_efficiency": 0.0965095128741791,
+      "approach_angle": 180.0,
+      "sparc": 6.0047583918507295,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 5,
+      "trial_time": 779.96095,
+      "trial_error": 0.021802220670839943,
+      "jerk": 0.15856447644585642,
+      "path_efficiency": 0.02276487457677712,
+      "approach_angle": -88.79268073395552,
+      "sparc": 5.881690287398657,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 6,
+      "trial_time": 779.67105,
+      "trial_error": 0.02340808928446745,
+      "jerk": 0.14384936848705374,
+      "path_efficiency": 0.11822771876614163,
+      "approach_angle": -59.74356283673853,
+      "sparc": 6.559379375296442,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 7,
+      "trial_time": 780.1612500000001,
+      "trial_error": 0.02357412701268065,
+      "jerk": 0.14142058720119943,
+      "path_efficiency": 0.10257553233428424,
+      "approach_angle": 180.0,
+      "sparc": 6.429648055006896,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 8,
+      "trial_time": 778.82124,
+      "trial_error": 0.009508055394290678,
+      "jerk": 0.1486166362282454,
+      "path_efficiency": 0.12752957378981286,
+      "approach_angle": -179.3806102967784,
+      "sparc": 5.649783089513947,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 9,
+      "trial_time": 778.2512499999999,
+      "trial_error": 0.02342605717346817,
+      "jerk": 0.13184534779196141,
+      "path_efficiency": 0.07736359328838117,
+      "approach_angle": -20.61507244407429,
+      "sparc": 5.450557621507189,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 10,
+      "trial_time": 778.2412400000001,
+      "trial_error": 0.021531612526304186,
+      "jerk": 0.11002637376682099,
+      "path_efficiency": 0.06747590790019609,
+      "approach_angle": 179.1777863599227,
+      "sparc": 6.347855423812547,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 11,
+      "trial_time": 777.9712000000001,
+      "trial_error": 0.010234668098585323,
+      "jerk": 0.10836813276553871,
+      "path_efficiency": 0.08937778343880687,
+      "approach_angle": 0.0,
+      "sparc": 5.6280038024743835,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 12,
+      "trial_time": 778.2012,
+      "trial_error": 0.026018896977826732,
+      "jerk": 0.12724367565893718,
+      "path_efficiency": 0.05182545008154572,
+      "approach_angle": 0.0,
+      "sparc": 5.819785379584859,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 13,
+      "trial_time": 778.7312000000001,
+      "trial_error": 0.01458119029415637,
+      "jerk": 0.13577941448570496,
+      "path_efficiency": 0.13941375764547922,
+      "approach_angle": 180.0,
+      "sparc": 5.667832359179626,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 14,
+      "trial_time": 777.7212,
+      "trial_error": 0.004038906923908982,
+      "jerk": 0.12668987840816764,
+      "path_efficiency": 0.1320794037032087,
+      "approach_angle": 138.81407483604949,
+      "sparc": 5.971385716082712,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 15,
+      "trial_time": 777.4513,
+      "trial_error": 0.012148546157051058,
+      "jerk": 0.10782293481388554,
+      "path_efficiency": 0.01976061048201568,
+      "approach_angle": 180.0,
+      "sparc": 5.869814171470159,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 16,
+      "trial_time": 777.9513,
+      "trial_error": 0.014904164840812122,
+      "jerk": 0.09348663573567276,
+      "path_efficiency": 0.1239340732645956,
+      "approach_angle": 0.0,
+      "sparc": 6.20482296987229,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 17,
+      "trial_time": 776.9912999999999,
+      "trial_error": 0.013310395011422445,
+      "jerk": 0.15558597776950192,
+      "path_efficiency": 0.042928114930295545,
+      "approach_angle": -90.0,
+      "sparc": 5.449388850452918,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 18,
+      "trial_time": 776.4512,
+      "trial_error": 0.018917796240577284,
+      "jerk": 0.11420053772215151,
+      "path_efficiency": 0.05046674924487467,
+      "approach_angle": 175.95197064924145,
+      "sparc": 5.165906529759092,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 19,
+      "trial_time": 776.1613,
+      "trial_error": 0.002731626219690385,
+      "jerk": 0.12812401829219897,
+      "path_efficiency": 0.1612233548180608,
+      "approach_angle": 0.0,
+      "sparc": 6.0542727678949895,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 20,
+      "trial_time": 776.1312,
+      "trial_error": 0.021899486003557254,
+      "jerk": 0.07509790153946219,
+      "path_efficiency": 0.17054836264818848,
+      "approach_angle": -170.90972307908467,
+      "sparc": 6.83607775475116,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 21,
+      "trial_time": 776.0612,
+      "trial_error": 0.012775140231715661,
+      "jerk": 0.11434784696837878,
+      "path_efficiency": 0.09855717405382518,
+      "approach_angle": 180.0,
+      "sparc": 6.171311789901611,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 22,
+      "trial_time": 775.5311999999999,
+      "trial_error": 0.007485576210953979,
+      "jerk": 0.09224596690009332,
+      "path_efficiency": 0.13460424501965496,
+      "approach_angle": 180.0,
+      "sparc": 6.14544959385277,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 23,
+      "trial_time": 775.3213,
+      "trial_error": 0.028987777153555612,
+      "jerk": 0.12859929741049145,
+      "path_efficiency": 0.04625250691882331,
+      "approach_angle": 62.62429495107732,
+      "sparc": 5.188444296188646,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 24,
+      "trial_time": 775.1612,
+      "trial_error": 0.02328404543712497,
+      "jerk": 0.087048052706667,
+      "path_efficiency": 0.018771503422501647,
+      "approach_angle": -168.69006752594157,
+      "sparc": 5.8737398557665195,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 25,
+      "trial_time": 776.0612000000001,
+      "trial_error": 0.025965286835274902,
+      "jerk": 0.12594366399590834,
+      "path_efficiency": 0.13166158592933394,
+      "approach_angle": -90.0,
+      "sparc": 5.515024726221689,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 26,
+      "trial_time": 775.9113,
+      "trial_error": 0.0060814834744493,
+      "jerk": 0.11512939119757935,
+      "path_efficiency": 0.0685161621549382,
+      "approach_angle": -158.1985905137853,
+      "sparc": 6.247884554022834,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 27,
+      "trial_time": 775.5412,
+      "trial_error": 0.006432038075136063,
+      "jerk": 0.08951086182618777,
+      "path_efficiency": 0.14716659554347836,
+      "approach_angle": 0.0,
+      "sparc": 5.467650370158281,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 28,
+      "trial_time": 775.2412,
+      "trial_error": 0.004207868165710524,
+      "jerk": 0.19451510305107664,
+      "path_efficiency": 0.0364014923851536,
+      "approach_angle": 0.0,
+      "sparc": 6.820719730648519,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 29,
+      "trial_time": 774.6712,
+      "trial_error": 0.02937459823406101,
+      "jerk": 0.1384616199671176,
+      "path_efficiency": 0.1560112946381804,
+      "approach_angle": 180.0,
+      "sparc": 4.729264631426542,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 30,
+      "trial_time": 774.1912,
+      "trial_error": 0.014092510290306687,
+      "jerk": 0.1396392845895867,
+      "path_efficiency": 0.11369927679265437,
+      "approach_angle": -135.00000000016567,
+      "sparc": 5.724268660973528,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 31,
+      "trial_time": 773.8911999999999,
+      "trial_error": 0.005277783395517455,
+      "jerk": 0.18730121666142144,
+      "path_efficiency": 0.13389911332181192,
+      "approach_angle": 90.0,
+      "sparc": 5.261163079084696,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 32,
+      "trial_time": 773.6112,
+      "trial_error": 0.00839766479981191,
+      "jerk": 0.10613084679274526,
+      "path_efficiency": 0.10706153664473549,
+      "approach_angle": 30.256437164106053,
+      "sparc": 5.98442931537032,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 33,
+      "trial_time": 772.8812,
+      "trial_error": 0.013549715899239353,
+      "jerk": 0.13947773579199274,
+      "path_efficiency": 0.0755138818445329,
+      "approach_angle": 180.0,
+      "sparc": 6.156587599792837,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 34,
+      "trial_time": 772.8912,
+      "trial_error": 0.006666280037622189,
+      "jerk": 0.12424458615073136,
+      "path_efficiency": 0.03970261132735015,
+      "approach_angle": 90.0,
+      "sparc": 5.400983091687631,
+      "is_expert": 0
+    },
+    {
+      "subject_id": "s.miyama",
+      "trial_num": 35,
+      "trial_time": 772.9612000000001,
+      "trial_error": 0.005415828462017612,
+      "jerk": 0.08591398870432315,
+      "path_efficiency": 0.09422317144584348,
+      "approach_angle": 44.99999999933739,
+      "sparc": 7.160488480179531,
+      "is_expert": 0
+    }
+  ]
+}
