@@ -21,7 +21,7 @@ class Encoder(nn.Module):
     def forward(self, x:torch.Tensor) -> torch.Tensor:
         """
         :param x: [batch, seq_len, input_dim]
-        :return:
+        :return: (mu_style, logvar_style, mu_skill, logvar_skill)
         """
         _, (hidden, _ ) = self.lstm(x)
 
@@ -109,6 +109,24 @@ class BetaVAE(nn.Module):
         eps = torch.randn_like(std)
         return mu + eps * std
 
+    def encode(self, x):
+        """エンコードのみを実行(評価用)"""
+        mu_style, logvar_style, mu_skill, logvar_skill =self.encoder(x)
+        z_style = self.reparameterize(mu_style, logvar_style)
+        z_skill = self.reparameterize(mu_skill, logvar_skill)
+        return {
+            'z_style': z_style,
+            'z_skill': z_skill,
+            'mu_style': mu_style,
+            'logvar_style': logvar_style,
+            'mu_skill': mu_skill,
+            'logvar_skill': logvar_skill
+        }
+
+    def decode(self, z_style, z_skill):
+        """デコードのみを実行（評価用）"""
+        return self.decoder(z_style, z_skill)
+
     def forward(self, x):
         # エンコード
         mu_style, logvar_style, mu_skill, logvar_skill = self.encoder(x)
@@ -123,11 +141,36 @@ class BetaVAE(nn.Module):
         total_loss, reconstruct_loss, kl_style,kl_skill = loss_function(reconstructed_x, x, mu_style, logvar_style, mu_skill, logvar_skill, self.beta)
 
         return {
-                'total_loss': total_loss,
-                'reconstruct_loss':reconstruct_loss,
-                'kl_style':kl_style,
-                'kl_skill':kl_skill
-                }
+            'total_loss': total_loss,
+            'reconstruct_loss': reconstruct_loss,
+            'kl_style': kl_style,
+            'kl_skill': kl_skill,
+            'reconstructed_x': reconstructed_x,
+            'z_style': z_style,
+            'z_skill': z_skill
+        }
+
+    def reconstruct(self, x):
+        """再構成のみを実行（評価用）"""
+        encoded = self.encode(x)
+        reconstructed = self.decode(encoded['z_style'], encoded['z_skill'])
+        return reconstructed
+
+    def generate_trajectory(self, z_style, z_skill):
+        """潜在変数から軌道を生成（評価用）"""
+        with torch.no_grad():
+            return self.decode(z_style, z_skill)
+
+    def interpolate_skill(self, z_style, z_skill_start, z_skill_end, num_steps=10):
+        """スキル軸での補間軌道生成"""
+        trajectories = []
+        with torch.no_grad():
+            for i in range(num_steps):
+                alpha = i / (num_steps - 1)
+                z_skill_interp = (1 - alpha) * z_skill_start + alpha * z_skill_end
+                traj = self.decode(z_style, z_skill_interp)
+                trajectories.append(traj)
+        return torch.stack(trajectories)
 
     def update_epoch(self, epoch: int, max_epoch: int):
         """エポックを更新(β-annealing)"""
