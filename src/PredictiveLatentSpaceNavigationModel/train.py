@@ -180,7 +180,7 @@ def extract_latent_variables(model, test_loader, device):
     all_originals = []
 
     with torch.no_grad():
-        for trajectories, subject_ids, is_expert in tqdm(test_loader, decs="潜在変数抽出中"):
+        for trajectories, subject_ids, is_expert in tqdm(test_loader, desc="潜在変数抽出中"):
             trajectories = trajectories.to(device)
 
             # エンコード
@@ -203,7 +203,7 @@ def extract_latent_variables(model, test_loader, device):
         'z_style': np.vstack(all_z_style),
         'z_skill': np.vstack(all_z_skill),
         'subject_ids': all_subject_ids,
-        'is_expert': np.concatenate(is_expert),
+        'is_expert': np.concatenate(all_is_expert),
         'reconstructions': np.vstack(all_reconstructions),
         'originals': np.vstack(all_originals)
     }
@@ -213,37 +213,109 @@ def quantitative_evaluation(latent_data: dict, test_df: pd.DataFrame, output_dir
     print("=== 定量的評価開始 ===")
 
     # 1. 再構成性能
-    mse = np.mean((latent_data['original'] - latent_data['reconstructions']) ** 2)
+    mse = np.mean((latent_data['originals'] - latent_data['reconstructions']) ** 2)
     print(f"再構成MSE: {mse:.6f}")
 
-    # 2. 分離表現の検証 dfから取ってくる
-
-    # z_skillの各次元とパフォーマンス指標の相関
+    # 2. 分離表現の検証: test_dfからパフォーマンス指標を計算
+    # data_preprocess.pyと同じ方法でパフォーマンス指標を計算
+    from DataPreprocess.data_preprocess import calculate_jerk, calculate_path_efficiency, calculate_approach_angle, calculate_sparc
+    
+    # 被験者・試行ごとのパフォーマンス指標を計算
+    performance_data = []
+    for (subject_id, trial_num), trial_df in test_df.groupby(['subject_id', 'trial_num']):
+        trajectory = trial_df[['HandlePosX', 'HandlePosY']].values
+        velocity = trial_df[['HandleVelX', 'HandleVelY']].values if 'HandleVelX' in trial_df.columns else np.zeros_like(trajectory)
+        acceleration = trial_df[['HandleAccX', 'HandleAccY']].values if 'HandleAccX' in trial_df.columns else np.zeros_like(trajectory)
+        time_stamps = trial_df['Timestamp'].values if 'Timestamp' in trial_df.columns else np.arange(len(trajectory)) * 0.01
+        
+        # 目標位置
+        if 'TargetEndPosX' in trial_df.columns and 'TargetEndPosY' in trial_df.columns:
+            target_end_pos = trial_df[['TargetEndPosX', 'TargetEndPosY']].iloc[-1].values
+        else:
+            target_end_pos = trajectory[-1]  # 最終位置を目標位置とする
+        
+        dt = np.mean(np.diff(time_stamps)) if len(time_stamps) > 1 else 0.01
+        if np.isnan(dt) or dt == 0:
+            dt = 0.01
+        
+        performance_data.append({
+            'subject_id': subject_id,
+            'trial_num': trial_num,
+            'trial_time': time_stamps[-1] - time_stamps[0],
+            'trial_error': np.linalg.norm(trajectory[-1] - target_end_pos),
+            'jerk': calculate_jerk(acceleration, dt),
+            'path_efficiency': calculate_path_efficiency(trajectory),
+            'approach_angle': calculate_approach_angle(trajectory),
+            'sparc': calculate_sparc(velocity, dt),
+            'is_expert': trial_df['is_expert'].iloc[0] if 'is_expert' in trial_df.columns else 0
+        })
+    
+    performance_df = pd.DataFrame(performance_data)
+    
+    # 3. z_skillの各次元とパフォーマンス指標の相関分析
     correlations = {}
     z_skill = latent_data['z_skill']
-
-    for metric_name, metric_value in performance_metrics.items():
+    subject_ids = latent_data['subject_ids']
+    
+    # 被験者IDのリストを平坦化
+    flat_subject_ids = []
+    for batch in subject_ids:
+        if isinstance(batch, (list, tuple, np.ndarray)):
+            flat_subject_ids.extend(batch)
+        else:
+            flat_subject_ids.append(batch)
+    
+    # 各パフォーマンス指標について相関分析
+    metric_names = ['trial_time', 'trial_error', 'jerk', 'path_efficiency', 'approach_angle', 'sparc']
+    
+    for metric_name in metric_names:
         correlations[metric_name] = []
-        for dim in range(z_skill.shape[1]):
-            if len(metric_value) == len(z_skill):
-                corr, p_value = pearsonr(z_skill[:, dim], metric_value)
-                correlations[metric_name].append((corr, p_value))
+        
+        # 被験者ごとの平均パフォーマンスを計算
+        subject_metrics = performance_df.groupby('subject_id')[metric_name].mean()
+        
+        # z_skillに対応するメトリック値を取得
+        metric_values = []
+        for sid in flat_subject_ids:
+            if sid in subject_metrics.index:
+                metric_values.append(subject_metrics[sid])
             else:
-                correlations[metric_name].append((0.0, 1.0))
+                metric_values.append(np.nan)
+        
+        metric_values = np.array(metric_values)
+        
+        # 各次元との相関を計算
+        for dim in range(z_skill.shape[1]):
+            if len(metric_values) == len(z_skill) and not np.all(np.isnan(metric_values)):
+                # NaN値を除去
+                valid_mask = ~np.isnan(metric_values)
+                if np.sum(valid_mask) > 1:
+                    corr, p_value = pearsonr(z_skill[valid_mask, dim], metric_values[valid_mask])
+                else:
+                    corr, p_value = 0.0, 1.0
+            else:
+                corr, p_value = 0.0, 1.0
+            correlations[metric_name].append((corr, p_value))
+        
+        # 最大相関を表示
+        max_corr = max(correlations[metric_name], key=lambda x: abs(x[0]))
+        print(f"{metric_name}の最大相関: {max_corr[0]:.4f} (p={max_corr[1]:.4f})")
 
     # 結果を保存
     eval_results = {
         'reconstruction_mse': mse,
-        'correlations': correlations
+        'correlations': correlations,
+        'performance_data': performance_data
     }
+    
+    return eval_results
 
-    # todo 結果をDBに保存
-
-def visualize_latent_space(latent_data, test_df, output_dir):
+def visualize_latent_space(latent_data, test_df, output_dir, save_path=None):
     """潜在空間の可視化"""
     print("=== 潜在空間可視化開始 ===")
-
-    # todo 保存したデータをDBに紐づけ
+    
+    if save_path is None:
+        save_path = os.path.join(output_dir, 'latent_space_visualization.png')
 
     z_style = latent_data['z_style']
     z_skill = latent_data['z_skill']
@@ -308,14 +380,18 @@ def visualize_latent_space(latent_data, test_df, output_dir):
     plt.colorbar(scatter, ax=axes[2], label='Skill Score')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'latent_space_visualization.png'), dpi=300, bbox_inches='tight')
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    print("潜在空間可視化完了")
+    print(f"潜在空間可視化完了: {save_path}")
 
-def generate_qualitative_trajectories(model, latent_data, output_dir, device):
+def generate_qualitative_trajectories(model, latent_data, output_dir, device, save_path=None):
     """定性評価用の軌道生成"""
     print("=== 定性評価用軌道生成開始 ===")
+    
+    if save_path is None:
+        save_path = os.path.join(output_dir, 'generated_trajectories.png')
 
     model.eval()
 
@@ -373,12 +449,13 @@ def generate_qualitative_trajectories(model, latent_data, output_dir, device):
 
     plt.suptitle(f'Generated Trajectories (Subject: {representative_subject})', fontsize=16)
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'generated_trajectories.png'), dpi=300, bbox_inches='tight')
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
-    print("定性評価用軌道生成完了")
+    print(f"定性評価用軌道生成完了: {save_path}")
 
-def run_evaluation(model, test_loader, test_df, output_dir, device):
+def run_evaluation(model, test_loader, test_df, output_dir, device, experiment_id):
     """評価プロセス全体を実行"""
     print("\n" + "="*50)
     print("評価開始")
@@ -391,10 +468,32 @@ def run_evaluation(model, test_loader, test_df, output_dir, device):
     eval_results = quantitative_evaluation(latent_data, test_df, output_dir)
 
     # 潜在空間可視化
-    visualize_latent_space(latent_data, test_df, output_dir)
+    latent_viz_path = os.path.join(output_dir, 'plots', f'latent_space_visualization_exp{experiment_id}.png')
+    visualize_latent_space(latent_data, test_df, output_dir, latent_viz_path)
 
     # 定性的評価用軌道生成
-    generate_qualitative_trajectories(model, latent_data, output_dir, device)
+    traj_gen_path = os.path.join(output_dir, 'plots', f'generated_trajectories_exp{experiment_id}.png')
+    generate_qualitative_trajectories(model, latent_data, output_dir, device, traj_gen_path)
+
+    # 評価結果をファイルに保存
+    import json
+    eval_results_path = os.path.join(output_dir, 'results', f'evaluation_results_exp{experiment_id}.json')
+    os.makedirs(os.path.dirname(eval_results_path), exist_ok=True)
+    
+    # JSON serializable形式に変換
+    serializable_results = {
+        'reconstruction_mse': float(eval_results['reconstruction_mse']),
+        'correlations': {k: [(float(corr), float(p)) for corr, p in v] for k, v in eval_results['correlations'].items()},
+        'performance_data': eval_results['performance_data']
+    }
+    
+    with open(eval_results_path, 'w') as f:
+        json.dump(serializable_results, f, indent=2)
+
+    # パスを追加
+    eval_results['latent_visualization_path'] = latent_viz_path
+    eval_results['generated_trajectories_path'] = traj_gen_path
+    eval_results['evaluation_results_path'] = eval_results_path
 
     print("="*50)
     print("評価完了")
@@ -540,7 +639,14 @@ def train_model(config_path: str, experiment_id: int, db_path: str):
 
         # 7. 評価実行
         try:
-            eval_results = run_evaluation(model, test_loader, test_df, output_dir, device)
+            eval_results = run_evaluation(model, test_loader, test_df, output_dir, device, experiment_id)
+
+            # 相関結果をJSON形式で保存
+            import json
+            skill_correlations_json = json.dumps({
+                k: [(float(corr), float(p)) for corr, p in v] 
+                for k, v in eval_results['correlations'].items()
+            })
 
             # 評価結果をDBに記録
             update_db(db_path, experiment_id, {
@@ -550,6 +656,11 @@ def train_model(config_path: str, experiment_id: int, db_path: str):
                 'best_val_loss': best_val_loss,
                 'model_path': final_model_path,
                 'image_path': plot_path,
+                'reconstruction_mse': eval_results['reconstruction_mse'],
+                'latent_visualization_path': eval_results['latent_visualization_path'],
+                'generated_trajectories_path': eval_results['generated_trajectories_path'],
+                'evaluation_results_path': eval_results['evaluation_results_path'],
+                'skill_correlations': skill_correlations_json,
                 'notes': f"Reconstruction MSE: {eval_results['reconstruction_mse']:.6f}"
             })
         except Exception as eval_error:
