@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS experiments(
     style_latent_dim INTEGER,
     skill_latent_dim INTEGER,
     n_layers INTEGER,
+    beta REAL,
 
     -- 学習結果
     final_total_loss REAL,

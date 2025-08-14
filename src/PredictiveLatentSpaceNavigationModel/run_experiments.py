@@ -72,6 +72,7 @@ def register_experiment(db_path: str, config: Dict[str, Any], config_filename: s
         'style_latent_dim': config.get('model', {}).get('style_latent_dim'),
         'skill_latent_dim': config.get('model', {}).get('skill_latent_dim'),
         'n_layers': config.get('model', {}).get('n_layers'),
+        'beta': config.get('model', {}).get('beta')
     }
 
     with sqlite3.connect(db_path) as conn:

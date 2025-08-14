@@ -15,6 +15,7 @@ model:
   style_latent_dim: 16
   skill_latent_dim: 4
   n_layers: 2
+  beta: 1.0
 
 training:
   batch_size: 32
