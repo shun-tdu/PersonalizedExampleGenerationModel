@@ -18,6 +18,12 @@ from  sklearn.manifold import TSNE
 from scipy.stats import pearsonr
 import seaborn as sns
 
+# ===== numpy型のSQLite自動変換を登録 =====
+sqlite3.register_adapter(np.float32, float)
+sqlite3.register_adapter(np.float64, float)
+sqlite3.register_adapter(np.int32, int)
+sqlite3.register_adapter(np.int64, int)
+sqlite3.register_adapter(np.bool_, bool)
 
 # --- パス設定とインポート ---
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -126,6 +132,11 @@ def create_dataloaders(master_data_path: str, seq_len: int, batch_size: int, ran
 
 def update_db(db_path: str, experiment_id: int, data: dict):
     """データベースの指定された実験IDのレコードを更新する"""
+    # DB更新前にデバッグ情報を出力
+    # print(f"=== DB更新デバッグ ===")
+    # for key, value in data.items():
+    #     print(f"{key}: {type(value)} - {repr(value)}")
+
     try:
         with sqlite3.connect(db_path) as conn:
             set_clause = ", ".join([f"{key} = ?" for key in data.keys()])

@@ -11,6 +11,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 DEFAULT_DB_PATH = os.path.join(SCRIPT_DIR, "experiments.db")
 DEFAULT_CONFIG_DIR = os.path.join(SCRIPT_DIR, "configs")
+DEFAULT_PROCESSED_CONFIG_DIR = os.path.join(SCRIPT_DIR, "configs_processed")
 DEFAULT_SCHEMA_PATH = os.path.join(SCRIPT_DIR, "schema.sql")
 
 def setup_database(db_path : str, schema_path: str = DEFAULT_SCHEMA_PATH):
@@ -110,10 +111,25 @@ def run_experiment_subprocess(experiment_id: int, config_path: str, db_path: str
         # サブプロセスとして学習を実行
         subprocess.run(command, check=True)
         print(f"--- 実験 {experiment_id} 正常終了 ---")
+        return True
     except subprocess.CalledProcessError as e:
         print(f"!!! エラー: 実験 {experiment_id} が失敗しました !!!")
         print(e)
+        return False
 
+def move_processed_config(config_path: str, processed_dir: str):
+    """
+    処理済みの設定ファイルを別ディレクトリに移動
+    """
+    os.makedirs(processed_dir, exist_ok=True)
+
+    filename = os.path.basename(config_path)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    processed_filename = f"{timestamp}_{filename}"
+
+    processed_path = os.path.join(processed_dir, processed_filename)
+    os.rename(config_path, processed_path)
+    print(f"設定ファイルを移動: {config_path} -> {processed_path}")
 
 def main(args):
     setup_database(args.db_path, args.schema_path)
@@ -143,7 +159,10 @@ def main(args):
         experiment_id = register_experiment(args.db_path, config, config_filename)
 
         # サブプロセスとして実験を実行
-        run_experiment_subprocess(experiment_id, config_path, args.db_path)
+        is_success = run_experiment_subprocess(experiment_id, config_path, args.db_path)
+
+        if is_success:
+            move_processed_config(config_path, args.processed_config_dir)
 
     print("\n全ての実験が完了しました． ")
 
@@ -156,6 +175,13 @@ if __name__ == "__main__":
         type=str,
         default=DEFAULT_CONFIG_DIR,
         help=f'実験設定のYAMLファイルが含まれるディレクトリ (デフォルト: {DEFAULT_CONFIG_DIR})'
+    )
+
+    parser.add_argument(
+        '--processed_config-dir',
+        type=str,
+        default=DEFAULT_PROCESSED_CONFIG_DIR,
+        help=f'実行後の実験設定のYAMLファイルの移動先ディレクトリ (デフォルト: {DEFAULT_PROCESSED_CONFIG_DIR})'
     )
 
     parser.add_argument(
