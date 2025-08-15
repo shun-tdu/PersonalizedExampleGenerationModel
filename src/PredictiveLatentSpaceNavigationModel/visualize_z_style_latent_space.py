@@ -69,7 +69,7 @@ def load_model_config_from_db(db_path: str, experiment_id: int):
     with sqlite3.connect(db_path) as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT hidden_dim, style_latent_dim, skill_latent_dim, beta
+            SELECT hidden_dim, style_latent_dim, skill_latent_dim, n_layers, beta
             FROM experiments WHERE id = ?
         """, (experiment_id,))
         result = cursor.fetchone()
@@ -77,13 +77,13 @@ def load_model_config_from_db(db_path: str, experiment_id: int):
         if result is None:
             raise ValueError(f"実験ID {experiment_id} が見つかりません")
         
-        hidden_dim, style_latent_dim, skill_latent_dim, beta = result
+        hidden_dim, style_latent_dim, skill_latent_dim, n_layers, beta = result
         
         # 固定値と組み合わせてmodel_configを作成
         model_config = {
             'input_dim': 2,
             'seq_len': 100,
-            'n_layers': 2,
+            'n_layers': int(n_layers),
             'hidden_dim': int(hidden_dim),
             'style_latent_dim': int(style_latent_dim),
             'skill_latent_dim': int(skill_latent_dim),
@@ -416,7 +416,7 @@ def main(experiment_id: int):
         traceback.print_exc()
 
 if __name__ == "__main__":
-    start_idx = 1
-    end_idx = 42
+    start_idx =43
+    end_idx = 51
     for id in range(start_idx, end_idx):
         main(id)
