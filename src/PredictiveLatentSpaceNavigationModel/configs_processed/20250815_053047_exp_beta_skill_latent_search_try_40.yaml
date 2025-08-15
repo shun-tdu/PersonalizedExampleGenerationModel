@@ -1,0 +1,29 @@
+data:
+  data_path: PredictiveLatentSpaceNavigationModel/DataPreprocess/my_data.parquet
+
+logging:
+  log_interval: 10
+  save_interval: 20
+  output_dir: PredictiveLatentSpaceNavigationModel/outputs
+
+# モデルの定義セクション
+model:
+  # モデル全体で共通のパラメータ
+  input_dim: 2
+  seq_len: 100
+  hidden_dim: 128
+  style_latent_dim: 8
+  skill_latent_dim: 8
+  n_layers: 2
+  beta: 40.0
+
+training:
+  batch_size: 32
+  clip_grad_norm: 1.0
+  num_epochs: 200
+  scheduler_T_0: 20
+  scheduler_T_mult: 2
+  scheduler_eta_min: 1.0e-06
+  warmup_epochs: 10
+  weight_decay: 0.0001
+  lr: 1.0e-04

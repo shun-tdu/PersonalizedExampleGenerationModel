@@ -334,12 +334,11 @@ def visualize_z_style_comparison(z_style_all, subject_labels, save_path: str = N
     
     return pca, reducer if UMAP_AVAILABLE else None
 
-def main():
+def main(experiment_id: int):
     # 設定
     DATA_PATH = "PredictiveLatentSpaceNavigationModel/DataPreprocess/my_data.parquet"
     DB_PATH = "PredictiveLatentSpaceNavigationModel/experiments.db"
-    EXPERIMENT_ID = 17  # 使用したい実験ID
-    MODEL_PATH = f"PredictiveLatentSpaceNavigationModel/outputs/checkpoints/best_model_exp{EXPERIMENT_ID}.pth"
+    MODEL_PATH = f"PredictiveLatentSpaceNavigationModel/outputs/checkpoints/best_model_exp{experiment_id}.pth"
     
     # 可視化方法の選択
     # 'pca', 'umap', 'comparison' から選択
@@ -358,7 +357,7 @@ def main():
         print("=" * 50)
         
         # 1. データベースからモデル設定を読み込み
-        model_config = load_model_config_from_db(DB_PATH, EXPERIMENT_ID)
+        model_config = load_model_config_from_db(DB_PATH, experiment_id)
         
         # 2. データ読み込みと前処理
         trajectory_data, subject_labels, trial_info = load_and_preprocess_data(
@@ -373,22 +372,22 @@ def main():
         
         # 5. 可視化実行
         if VISUALIZATION_METHOD == 'pca':
-            save_path = f"PredictiveLatentSpaceNavigationModel/z_style_pca_exp{EXPERIMENT_ID}.png"
+            save_path = f"PredictiveLatentSpaceNavigationModel/z_style_pca_exp{experiment_id}.png"
             viz_df, reducer = visualize_z_style_pca(z_style_all, subject_labels, save_path)
             
         elif VISUALIZATION_METHOD == 'umap':
             if not UMAP_AVAILABLE:
                 print("❌ UMAPが利用できません。PCAで実行します。")
-                save_path = f"PredictiveLatentSpaceNavigationModel/z_style_pca_exp{EXPERIMENT_ID}.png"
+                save_path = f"PredictiveLatentSpaceNavigationModel/z_style_pca_exp{experiment_id}.png"
                 viz_df, reducer = visualize_z_style_pca(z_style_all, subject_labels, save_path)
             else:
-                save_path = f"PredictiveLatentSpaceNavigationModel/z_style_umap_exp{EXPERIMENT_ID}.png"
+                save_path = f"PredictiveLatentSpaceNavigationModel/z_style_umap_exp{experiment_id}.png"
                 viz_df, reducer = visualize_z_style_umap(
                     z_style_all, subject_labels, save_path, **UMAP_PARAMS
                 )
                 
         elif VISUALIZATION_METHOD == 'comparison':
-            save_path = f"PredictiveLatentSpaceNavigationModel/z_style_comparison_exp{EXPERIMENT_ID}.png"
+            save_path = f"PredictiveLatentSpaceNavigationModel/z_style_comparison_exp{experiment_id}.png"
             pca, reducer = visualize_z_style_comparison(z_style_all, subject_labels, save_path)
             
         else:
@@ -417,4 +416,7 @@ def main():
         traceback.print_exc()
 
 if __name__ == "__main__":
-    main()
+    start_idx = 1
+    end_idx = 42
+    for id in range(start_idx, end_idx):
+        main(id)
