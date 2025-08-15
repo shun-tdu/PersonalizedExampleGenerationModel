@@ -14,7 +14,6 @@ from datetime import datetime
 import yaml
 import sqlite3
 from  sklearn.decomposition import PCA
-from  sklearn.manifold import TSNE
 from scipy.stats import pearsonr
 import seaborn as sns
 
@@ -30,7 +29,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
 from models.beta_vae import BetaVAE
-from DataPreprocess.data_preprocess import calculate_jerk, calculate_path_efficiency, calculate_approach_angle, calculate_sparc
+from src.PredictiveLatentSpaceNavigationModel.DataPreprocess.data_preprocess import calculate_jerk, calculate_path_efficiency, calculate_approach_angle, calculate_sparc
 
 
 class TrajectoryDataset(Dataset):
