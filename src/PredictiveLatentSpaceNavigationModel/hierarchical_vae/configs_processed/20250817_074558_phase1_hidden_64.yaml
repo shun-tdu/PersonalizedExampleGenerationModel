@@ -1,0 +1,55 @@
+config_path: PredictiveLatentSpaceNavigationModel/hierarchical_vae/configs
+data:
+  data_path: PredictiveLatentSpaceNavigationModel/DataPreprocess/my_data.parquet
+model:
+  input_dim: 2
+  seq_len: 100
+  hidden_dim: 64
+  primitive_latent_dim: 32
+  skill_latent_dim: 16
+  style_latent_dim: 8
+  beta_primitive: 1.0
+  beta_skill: 2.0
+  beta_style: 4.0
+  precision_lr: 0.1
+training:
+  batch_size: 32
+  num_epochs: 200
+  lr: 0.0001
+  weight_decay: 1.0e-05
+  clip_grad_norm: 1.0
+  warmup_epochs: 10
+  scheduler_T_0: 15
+  scheduler_T_mult: 2
+  scheduler_eta_min: 1.0e-06
+  patience: 20
+logging:
+  output_dir: PredictiveLatentSpaceNavigationModel/hierarchical_vae/outputs
+hierarchical_settings:
+  primitive_learning_start: 0.0
+  skill_learning_start: 0.3
+  style_learning_start: 0.6
+  prediction_error_weights:
+    level1: 10.0
+    level2: 1.0
+    level3: 0.1
+  exemplar_generation:
+    skill_enhancement_factor: 0.1
+    style_preservation_weight: 1.0
+    max_enhancement_steps: 5
+evaluation:
+  disentanglement_metrics:
+  - style_subject_separation
+  - skill_performance_correlation
+  - primitive_reconstruction_quality
+  visualization:
+    pca_components: 2
+    save_individual_trajectories: true
+    save_exemplar_comparisons: true
+experiment:
+  description: 'Hidden dimension validation: 64'
+  tags:
+  - hierarchical_vae
+  - validation
+  - hyperparameter_search
+  - hidden_64
