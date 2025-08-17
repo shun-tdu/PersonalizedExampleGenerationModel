@@ -1,0 +1,96 @@
+# 階層型VAE設定ファイル
+# 自由エネルギー原理に基づく予測符号化アーキテクチャ
+config_path: "PredictiveLatentSpaceNavigationModel/hierarchical_vae/configs"
+
+data:
+  data_path: "PredictiveLatentSpaceNavigationModel/DataPreprocess/my_data.parquet"
+
+model:
+  # 基本設定
+  input_dim: 2  # HandlePosX, HandlePosY
+  seq_len: 100
+  hidden_dim: 128
+
+  # 階層的潜在次元（下位から上位へ）
+  primitive_latent_dim: 32  # Level 1: 運動プリミティブ（基本動作パターン）
+  skill_latent_dim: 16      # Level 2: スキル・技能レベル
+  style_latent_dim: 8       # Level 3: 個人のスタイル・特性
+
+  # 階層別β値（複雑性制約の重み）
+  beta_primitive: 1.0   # 運動プリミティブの制約（標準）
+  beta_skill: 2.0       # スキルの制約（中程度）
+  beta_style: 4.0       # スタイルの制約（強め - 個人差を明確化）
+
+  # 精度学習率（予測誤差の重み調整）
+  precision_lr: 0.1
+
+training:
+  # 基本学習設定
+  batch_size: 32
+  num_epochs: 200
+  lr: 1e-4  # 階層学習のため少し低めに設定
+  weight_decay: 1e-5
+
+  # 勾配クリッピング
+  clip_grad_norm: 1.0
+
+  # スケジューラ設定
+  warmup_epochs: 10
+  scheduler_T_0: 15
+  scheduler_T_mult: 2
+  scheduler_eta_min: 1e-6
+
+  # 早期停止
+  patience: 20  # 階層学習は時間がかかるため長めに設定
+
+logging:
+  output_dir: "PredictiveLatentSpaceNavigationModel/hierarchical_vae/outputs"
+
+# 階層型VAE特有の設定
+hierarchical_settings:
+  # 階層別学習スケジュール
+  primitive_learning_start: 0.0    # エポック0から学習開始
+  skill_learning_start: 0.3        # 全体の30%から学習開始
+  style_learning_start: 0.6        # 全体の60%から学習開始
+
+  # 予測誤差の重み（階層別）
+  prediction_error_weights:
+    level1: 10.0  # データレベル（高精度）
+    level2: 1.0   # スキルレベル（中精度）
+    level3: 0.1   # スタイルレベル（低精度）
+
+  # 個人最適化お手本生成設定
+  exemplar_generation:
+    skill_enhancement_factor: 0.1  # スキル向上の段階サイズ
+    style_preservation_weight: 1.0  # スタイル保持の重み
+    max_enhancement_steps: 5       # 最大向上ステップ数
+
+# 評価設定
+evaluation:
+  # 分散表現評価
+  disentanglement_metrics:
+    - "style_subject_separation"  # スタイルと被験者IDの分離性
+    - "skill_performance_correlation"  # スキルとパフォーマンスの相関
+    - "primitive_reconstruction_quality"  # プリミティブの再構成品質
+
+  # 可視化設定
+  visualization:
+    pca_components: 2
+    save_individual_trajectories: true
+    save_exemplar_comparisons: true
+
+# 実験管理設定
+experiment:
+  description: "Hierarchical VAE based on Free Energy Principle for personalized motor learning support"
+  tags:
+    - "hierarchical_vae"
+    - "free_energy_principle"
+    - "predictive_coding"
+    - "motor_learning"
+    - "personalized_exemplars"
+
+  # 比較実験用設定
+  ablation_studies:
+    - "no_hierarchy"  # 通常のVAEとの比較
+    - "different_beta_schedules"  # 異なるβスケジュール
+    - "fixed_vs_adaptive_precision"  # 固定vs適応精度

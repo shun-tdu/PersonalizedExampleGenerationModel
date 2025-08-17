@@ -2,9 +2,205 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
+from scipy.stats import pearsonr
+from sklearn.linear_model import LinearRegression
+
+
+class SkillAxisAnalyzer:
+    def __init__(self):
+        self.skill_improvement_directions = {}
+        self.performance_correlations = {}
+        self.skill_pca = None
+
+    def analyze_skill_axes(self, z_skill_data, performance_data):
+        """
+        スキル潜在変数とパフォーマンス指標の相関分析
+
+        :param z_skill_data: [n_samples, skill_latent_dim] スキル潜在変数
+        :param performance_data: dict of [n_samples] パフォーマンス指標
+        """
+        print("=== スキル軸分析開始 ===")
+
+        # 1. 各パフォーマンス指標との相関計算
+        skill_dim = z_skill_data.shape[1]
+
+        for metric_name, metric_values in performance_data.items():
+            if len(metric_values) == 0 or np.std(metric_values) < 1e-6:
+                continue
+
+            correlations = []
+
+            for dim in range(skill_dim):
+                try:
+                    if len(set(metric_values)) > 1:
+                        corr, p_value = pearsonr(z_skill_data[:, dim], metric_values)
+                        correlations.append((corr, p_value, dim))
+                    else:
+                        correlations.append((0.0, 1.0, dim))
+                except Exception as e:
+                    correlations.append((0.0, 1.0, dim))
+
+            if not correlations:
+                continue
+
+            # 最も相関の高い次元とその方向を記録
+            correlations.sort(key=lambda x: abs(x[0]), reverse=True)
+            best_corr, best_p, best_dim = correlations[0]
+
+            self.performance_correlations[metric_name] = {
+                'best_dimension': best_dim,
+                'correlation': best_corr,
+                'p_value': best_p,
+                'all_correlations': correlations
+            }
+
+            print(f"{metric_name}: 最強相関次元={best_dim}, r={best_corr:.4f}, p={best_p:.4f}")
+
+        # 2. 総合的な上手さ軸の抽出
+        self._extract_overall_improvement_directions(z_skill_data, performance_data)
+
+        # 3. 個別指標の改善方向
+        self._extract_specific_improvement_directions(z_skill_data, performance_data)
+
+    def _extract_overall_improvement_directions(self, z_skill_data, performance_data):
+        """総合的なスキル向上軸を抽出"""
+        print("\n--- 総合スキル軸の抽出 ---")  # typo修正
+
+        # 複数の指標を統合したスキルスコアを作成
+        normalized_metrics = {}
+
+        for metric_name, values in performance_data.items():
+            values = np.array(values)
+
+            if len(values) == 0 or np.std(values) < 1e-6:
+                continue
+
+            # 指標の方向性を統一
+            if metric_name in ['trial_time', 'trial_error', 'jerk', 'trial_variability']:
+                normalized_values = -values
+            else:
+                normalized_values = values
+
+            # 標準化
+            if np.std(normalized_values) > 1e-6:
+                normalized_values = (normalized_values - normalized_values.mean()) / normalized_values.std()
+                normalized_metrics[metric_name] = normalized_values
+
+        if len(normalized_metrics) == 0:
+            print("警告: 有効なパフォーマンス指標がありません")
+            return
+
+        # 総合スキルスコア（等重み平均）
+        overall_skill_score = np.zeros(len(z_skill_data))
+        weight_sum = 0
+
+        # 利用可能な指標で重み付き平均
+        available_weights = {
+            'trial_time': 0.3,
+            'trial_error': 0.3,
+            'path_efficiency': 0.2,
+            'jerk': 0.1,
+            'sparc': 0.1
+        }
+
+        for metric_name, normalized_values in normalized_metrics.items():
+            weight = available_weights.get(metric_name, 0.2)  # デフォルト重み
+            overall_skill_score += weight * normalized_values
+            weight_sum += weight
+
+        if weight_sum > 0:
+            overall_skill_score /= weight_sum
+
+        # スキル潜在変数との回帰分析
+        try:
+            reg = LinearRegression()
+            reg.fit(z_skill_data, overall_skill_score)
+
+            # 回帰係数が改善方向
+            overall_improvement_direction = reg.coef_
+            improvement_magnitude = np.linalg.norm(overall_improvement_direction)
+
+            if improvement_magnitude > 1e-6:
+                overall_improvement_direction = overall_improvement_direction / improvement_magnitude
+
+                self.skill_improvement_directions['overall'] = {
+                    'direction': overall_improvement_direction,
+                    'r_squared': reg.score(z_skill_data, overall_skill_score),
+                    'coefficients': reg.coef_
+                }
+
+                print(f"総合スキル軸: R²={reg.score(z_skill_data, overall_skill_score):.4f}")
+                print(f"改善方向: {overall_improvement_direction}")
+            else:
+                print("警告: 総合改善方向の計算に失敗")
+        except Exception as e:
+            print(f"総合スキル軸抽出エラー: {e}")
+
+    def _extract_specific_improvement_directions(self, z_skill_data, performance_data):
+        """個別指標の改善方向を抽出"""
+        print("\n--- 個別指標改善方向の抽出 ---")
+
+        for metric_name, values in performance_data.items():
+            values = np.array(values)
+
+            if len(values) == 0 or np.std(values) < 1e-6:
+                continue
+
+            # 方向性を統一
+            if metric_name in ['trial_time', 'trial_error', 'jerk', 'trial_variability']:
+                target_values = -values  # 減少方向が改善
+            else:
+                target_values = values  # 増加方向が改善
+
+            # 線形回帰で改善方向を求める
+            try:
+                if len(set(target_values)) > 1:
+                    reg = LinearRegression()
+                    reg.fit(z_skill_data, target_values)
+
+                    improvement_direction = reg.coef_
+                    improvement_magnitude = np.linalg.norm(improvement_direction)
+
+                    if improvement_magnitude > 1e-6:
+                        improvement_direction = improvement_direction / improvement_magnitude
+
+                        self.skill_improvement_directions[metric_name] = {
+                            'direction': improvement_direction,
+                            'r_squared': reg.score(z_skill_data, target_values),
+                            'coefficients': reg.coef_
+                        }
+
+                        print(f"{metric_name}: R²={reg.score(z_skill_data, target_values):.4f}")
+            except Exception as e:
+                print(f"{metric_name}の改善方向抽出エラー: {e}")
+
+    def get_improvement_direction(self, metric='overall', confidence_threshold=0.1):
+        """
+        指定された指標の改善方向を取得
+
+        :param metric: 改善したい指標名('overall', 'trial_time', etc.)
+        :param confidence_threshold: 最小R²閾値
+        :return: improvement_direction: 正規化された改善方向ベクトル
+        """
+        if metric not in self.skill_improvement_directions:
+            print(f"警告: {metric}の改善方向が見つかりません。")
+            if 'overall' in self.skill_improvement_directions:
+                print("総合方向を使用します。")
+                metric = 'overall'
+            else:
+                raise ValueError("利用可能な改善方向がありません")
+
+        direction_info = self.skill_improvement_directions[metric]
+
+        if direction_info['r_squared'] < confidence_threshold:
+            print(f"警告: {metric}のR²={direction_info['r_squared']:.4f}が閾値{confidence_threshold}を下回ります")
+
+        return direction_info['direction']
+
 
 class PredictionErrorModule(nn.Module):
     """予測誤差を計算するモジュール(自由エネルギー原理)"""
+
     def __init__(self, dim: int):
         super().__init__()
         self.precision = nn.Parameter(torch.ones(dim))  # 精度パラメータ
@@ -18,10 +214,11 @@ class PredictionErrorModule(nn.Module):
 
 class MotorPrimitiveEncoder(nn.Module):
     """レベル1: 運動プリミティブをエンコード"""
+
     def __init__(self, input_dim: int, hidden_dim: int, latent_dim: int):
         super().__init__()
-        self.conv1d = nn.Conv1d(input_dim, hidden_dim//2, kernel_size=3, padding=1)
-        self.conv2d = nn.Conv1d(hidden_dim//2, hidden_dim, kernel_size=3, padding=1)
+        self.conv1d = nn.Conv1d(input_dim, hidden_dim // 2, kernel_size=3, padding=1)
+        self.conv2d = nn.Conv1d(hidden_dim // 2, hidden_dim, kernel_size=3, padding=1)
 
         self.lstm = nn.LSTM(hidden_dim, hidden_dim, batch_first=True)
         self.attention = nn.MultiheadAttention(hidden_dim, num_heads=4, batch_first=True)
@@ -31,7 +228,7 @@ class MotorPrimitiveEncoder(nn.Module):
 
         self.prediction_error = PredictionErrorModule(input_dim)
 
-    def forward(self, x: torch.Tensor, top_down_pred: torch.Tensor=None):
+    def forward(self, x: torch.Tensor, top_down_pred: torch.Tensor = None):
         """
         :param x: [batch, seq_len, input_dim] 入力軌道
         :param top_down_pred: [batch, seq_len, input_dim] 上位からの予測
@@ -41,8 +238,8 @@ class MotorPrimitiveEncoder(nn.Module):
         # conv1D処理のための次元入れ替え [batch, input_dim, seq_len]
         x_conv = x.transpose(1, 2)
         conv_out = F.relu(self.conv1d(x_conv))
-        conv_out = F.relu(self.conv1d(conv_out))
-        x_conv = x.transpose(1, 2)
+        conv_out = F.relu(self.conv2d(conv_out))  # 修正: conv2dを使用
+        conv_out = conv_out.transpose(1, 2)  # 修正: conv_outを使用
 
         # LSTM処理
         lstm_out, (h_n, c_n) = self.lstm(conv_out)
@@ -51,7 +248,7 @@ class MotorPrimitiveEncoder(nn.Module):
         attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
 
         # 時系列全体をアテンションプール
-        feature = attn_out.mean(dim=1) # [batch, hidden_dim]
+        feature = attn_out.mean(dim=1)  # [batch, hidden_dim]
 
         mu = self.mu_layer(feature)
         logvar = self.logvar_layer(feature)
@@ -63,8 +260,10 @@ class MotorPrimitiveEncoder(nn.Module):
 
         return mu, logvar, pred_error
 
+
 class SkillEncoder(nn.Module):
     """レベル2: スキル・技能レベルをエンコード"""
+
     def __init__(self, level1_latent_dim: int, hidden_dim: int, latent_dim: int):
         super().__init__()
 
@@ -83,7 +282,7 @@ class SkillEncoder(nn.Module):
 
         self.prediction_error = PredictionErrorModule(level1_latent_dim)
 
-    def forward(self, z1: torch.Tensor, top_down_pred: torch.Tensor=None):
+    def forward(self, z1: torch.Tensor, top_down_pred: torch.Tensor = None):
         """
         :param z1: [batch, level1_latent_dim] 下位レベルの潜在変数
         :param top_down_pred: [batch, level1_latent_dim] 上位からの予測
@@ -103,6 +302,7 @@ class SkillEncoder(nn.Module):
 
 class StyleEncoder(nn.Module):
     """レベル3: 個人のスタイル・特性をエンコード"""
+
     def __init__(self, level2_latent_dim: int, hidden_dim: int, latent_dim: int):
         super().__init__()
 
@@ -110,9 +310,9 @@ class StyleEncoder(nn.Module):
             nn.Linear(level2_latent_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
-            nn.Dropout(0.1),    # スタイルは過学習しやすいので軽くDropout
-            nn.Linear(hidden_dim, hidden_dim//2),
-            nn.LayerNorm(hidden_dim//2),
+            nn.Dropout(0.1),  # スタイルは過学習しやすいので軽くDropout
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.LayerNorm(hidden_dim // 2),
             nn.ReLU()
         )
 
@@ -121,7 +321,7 @@ class StyleEncoder(nn.Module):
 
         self.prediction_error = PredictionErrorModule(level2_latent_dim)
 
-    def forward(self, z2: torch.Tensor, top_down_pred: torch.Tensor=None):
+    def forward(self, z2: torch.Tensor, top_down_pred: torch.Tensor = None):
         """
         :param z2: [batch, level2_latent_dim] 下位レベルの潜在変数
         :param top_down_pred: [batch, level2_latent_dim] 上位からの予測(現状だとNone)
@@ -139,14 +339,15 @@ class StyleEncoder(nn.Module):
 
 class StyleDecoder(nn.Module):
     """レベル3デコーダ: スタイルからスキルレベルを予測"""
-    def __init__(self,style_latent_dim: int, hidden_dim: int, skill_latent_dim: int):
+
+    def __init__(self, style_latent_dim: int, hidden_dim: int, skill_latent_dim: int):
         super().__init__()
 
         self.decoder = nn.Sequential(
-            nn.Linear(style_latent_dim, hidden_dim//2),
-            nn.LayerNorm(hidden_dim//2),
+            nn.Linear(style_latent_dim, hidden_dim // 2),
+            nn.LayerNorm(hidden_dim // 2),
             nn.ReLU(),
-            nn.Linear(hidden_dim//2, hidden_dim),
+            nn.Linear(hidden_dim // 2, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, skill_latent_dim)
@@ -159,6 +360,7 @@ class StyleDecoder(nn.Module):
 
 class SkillDecoder(nn.Module):
     """レベル2デコーダ: スキルから運動プリミティブを予測"""
+
     def __init__(self, skill_latent_dim: int, hidden_dim: int, primitive_latent_dim: int):
         super().__init__()
 
@@ -173,7 +375,7 @@ class SkillDecoder(nn.Module):
             nn.Linear(hidden_dim, primitive_latent_dim)
         )
 
-    def forward(self, z_skill: torch.Tensor, style_pred:torch.Tensor=None):
+    def forward(self, z_skill: torch.Tensor, style_pred: torch.Tensor = None):
         """
         スキルから運動プリミティブを予測
         :param z_skill: [batch, skill_latent_dim]
@@ -190,6 +392,7 @@ class SkillDecoder(nn.Module):
 
 class MotorDecoder(nn.Module):
     """レベル1デコーダ: 運動プリミティブから軌道を生成"""
+
     def __init__(self, primitive_latent_dim: int, hidden_dim: int, output_dim: int, seq_len: int):
         super().__init__()
         self.seq_len = seq_len
@@ -202,14 +405,14 @@ class MotorDecoder(nn.Module):
         # 軌道生成LSTM
         self.lstm = nn.LSTM(output_dim, hidden_dim, num_layers=2, batch_first=True)
 
-        # 出力層
+        # 出力層 - 修正: output_dimを使用
         self.output_layer = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim//2),
+            nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
-            nn.Linear(hidden_dim//2, hidden_dim)
+            nn.Linear(hidden_dim // 2, output_dim)  # 修正: output_dimに変更
         )
 
-    def forward(self, z_primitive: torch.Tensor, skill_pred: torch.Tensor=None):
+    def forward(self, z_primitive: torch.Tensor, skill_pred: torch.Tensor = None):
         """
         運動プリミティブから軌道を生成
 
@@ -224,8 +427,8 @@ class MotorDecoder(nn.Module):
             combined = z_primitive
 
         # LSTMの初期状態を設定
-        h_0 = self.init_hidden(combined).unsqueeze(0).repeat(2, 1, 1)   # [2, batch, hidden]
-        c_0 = self.init_cell(combined).unsqueeze(0).repeat(2, 1, 1)     # [2, batch, hidden]
+        h_0 = self.init_hidden(combined).unsqueeze(0).repeat(2, 1, 1)  # [2, batch, hidden]
+        c_0 = self.init_cell(combined).unsqueeze(0).repeat(2, 1, 1)  # [2, batch, hidden]
 
         # 自己回帰的に軌道を生成
         outputs = []
@@ -238,11 +441,12 @@ class MotorDecoder(nn.Module):
             outputs.append(output)
             input_t = output
 
-        return torch.cat(outputs, dim=1)    # [batch, seq_len, output_dim]
+        return torch.cat(outputs, dim=1)  # [batch, seq_len, output_dim]
 
 
 class HierarchicalVAE(nn.Module):
     """階層型VAE - 自由エネルギー原理に基づく予測符号化"""
+
     def __init__(
             self,
             input_dim: int,
@@ -272,7 +476,12 @@ class HierarchicalVAE(nn.Module):
         # デコーダ(トップダウン)
         self.style_decoder = StyleDecoder(style_latent_dim, hidden_dim, skill_latent_dim)
         self.skill_decoder = SkillDecoder(skill_latent_dim, hidden_dim, primitive_latent_dim)
-        self.primitive_decoder = MotorDecoder(primitive_latent_dim, hidden_dim, input_dim, seq_len)
+        self.primitive_decoder = MotorDecoder(primitive_latent_dim, hidden_dim, input_dim,
+                                              seq_len)  # 修正: motor_decoder → primitive_decoder
+
+        # スキル軸分析器
+        self.skill_axis_analyzer = SkillAxisAnalyzer()
+        self.is_skill_axes_analyzed = False
 
     def reparameterize(self, mu, logvar):
         """再パラメータ化トリック"""
@@ -280,7 +489,7 @@ class HierarchicalVAE(nn.Module):
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def encode_hierarchical(self, x):
+    def encode_hierarchically(self, x):
         """階層的エンコーディング（ボトムアップ推論）"""
         # Level 1: 運動プリミティブ
         mu1, logvar1, _ = self.primitive_encoder(x)
@@ -313,7 +522,7 @@ class HierarchicalVAE(nn.Module):
         # Level 1 -> 0: 運動プリミティブから軌道生成
         if z_primitive is None:
             z_primitive = primitive_pred
-        trajectory = self.motor_decoder(z_primitive, primitive_pred)
+        trajectory = self.primitive_decoder(z_primitive, primitive_pred)  # 修正: primitive_decoderを使用
 
         return trajectory
 
@@ -335,7 +544,7 @@ class HierarchicalVAE(nn.Module):
         primitive_pred = self.skill_decoder(z2, skill_pred)
 
         # Level 1 -> 0 予測（軌道再構成）
-        reconstructed_x = self.motor_decoder(z1, primitive_pred)
+        reconstructed_x = self.primitive_decoder(z1, primitive_pred)
 
         # === 予測誤差の計算 ===
         # Level 1での予測誤差（データとの比較）
@@ -390,8 +599,111 @@ class HierarchicalVAE(nn.Module):
         """評価用のデコード関数"""
         return self.decode_hierarchically(z_style, z_skill)
 
-    def generate_personalized_exemplar(self, learner_trajectory, skill_enhancement_factor=0.1):
-        """個人最適化お手本生成"""
+    def analyze_and_cache_skill_axes(self, test_loader, test_df, device):
+        """スキル軸分析の実装（学習コードと互換性確保）"""
+        print("スキル軸の分析とキャッシュを開始...")
+
+        self.eval()
+        all_z_skill = []
+        all_subject_ids = []
+
+        # 1. スキル潜在変数を抽出
+        with torch.no_grad():
+            for trajectories, subject_ids, is_expert in test_loader:
+                trajectories = trajectories.to(device)
+                encoded = self.encode_hierarchically(trajectories)
+                all_z_skill.append(encoded['z_skill'].cpu().numpy())
+                all_subject_ids.extend(subject_ids)
+
+        z_skill_data = np.vstack(all_z_skill)
+
+        # 2. パフォーマンス指標を取得
+        perf_cols = [col for col in test_df.columns if col.startswith('perf_')]
+        if not perf_cols:
+            print("警告: パフォーマンス指標が見つかりません。ダミーデータで分析を実行します。")
+            # ダミーデータを生成
+            performance_data = {
+                'trial_time': np.random.randn(len(z_skill_data)),
+                'trial_error': np.random.randn(len(z_skill_data)),
+                'path_efficiency': np.random.randn(len(z_skill_data)),
+                'jerk': np.random.randn(len(z_skill_data)),
+                'sparc': np.random.randn(len(z_skill_data))
+            }
+        else:
+            performance_df = test_df.groupby(['subject_id', 'trial_num']).first()[perf_cols].reset_index()
+
+            # データの長さを合わせる
+            min_length = min(len(z_skill_data), len(performance_df))
+            z_skill_data = z_skill_data[:min_length]
+            performance_df = performance_df.iloc[:min_length]
+
+            # パフォーマンス指標辞書を作成
+            performance_data = {}
+            for col in perf_cols:
+                metric_name = col.replace('perf_', '')
+                performance_data[metric_name] = performance_df[col].values
+
+        # 3. スキル軸を分析
+        self.skill_axis_analyzer.analyze_skill_axes(z_skill_data, performance_data)
+        self.is_skill_axes_analyzed = True
+
+        print("スキル軸の分析完了！")
+
+        # 4. 分析結果を返す
+        return {
+            'skill_improvement_directions': self.skill_axis_analyzer.skill_improvement_directions,
+            'performance_correlations': self.skill_axis_analyzer.performance_correlations
+        }
+
+    def generate_personalized_exemplar_v2(
+            self,
+            learner_trajectory,
+            skill_enhancement_factor=0.1,
+            target_metric='overall',
+            adaptive_enhancement=True
+    ):
+        """
+        改良版: パフォーマンス軸に沿った個人最適化お手本生成
+        """
+        if not hasattr(self, 'is_skill_axes_analyzed') or not self.is_skill_axes_analyzed:
+            print("警告: スキル軸の分析がされていません。ランダム改善にフォールバック")
+            return self.generate_personalized_exemplar_fallback(learner_trajectory, skill_enhancement_factor)
+
+        with torch.no_grad():
+            # 1. 階層的エンコーディング
+            encoded = self.encode_hierarchically(learner_trajectory)
+            z_style = encoded['z_style']
+            current_skill = encoded['z_skill']
+
+            # 2. 改善方向の取得
+            try:
+                improvement_direction = self.skill_axis_analyzer.get_improvement_direction(target_metric)
+                improvement_direction = torch.tensor(
+                    improvement_direction,
+                    dtype=torch.float32,
+                    device=current_skill.device
+                )
+            except Exception as e:
+                print(f"改善方向取得エラー: {e}. ランダム改善にフォールバック")
+                return self.generate_personalized_exemplar_fallback(learner_trajectory, skill_enhancement_factor)
+
+            # 3. 適応的向上係数の計算
+            if adaptive_enhancement:
+                skill_magnitude = torch.norm(current_skill, dim=1, keepdim=True)
+                adaptive_factor = 1.0 / (1.0 + skill_magnitude)
+                skill_enhancement_factor = skill_enhancement_factor * adaptive_factor.item()
+
+            # 4. パフォーマンス軸に沿った向上
+            skill_delta = skill_enhancement_factor * improvement_direction.unsqueeze(0)
+            enhanced_skill = current_skill + skill_delta
+
+            # 5. 個人最適化お手本生成
+            exemplar = self.decode_hierarchically(z_style, enhanced_skill)
+
+            return exemplar
+
+    def generate_personalized_exemplar_fallback(self, learner_trajectory, skill_enhancement_factor=0.1):
+        """フォールバック用の従来版お手本生成"""
         with torch.no_grad():
             encoded = self.encode_hierarchically(learner_trajectory)
 
@@ -399,7 +711,7 @@ class HierarchicalVAE(nn.Module):
             z_style = encoded['z_style']
             current_skill = encoded['z_skill']
 
-            # スキルを段階的に向上（自由エネルギー原理に基づく最適ステップ）
+            # スキルを段階的に向上（ランダムノイズ）
             skill_noise = torch.randn_like(current_skill) * 0.1
             enhanced_skill = current_skill + skill_enhancement_factor * skill_noise
 
@@ -407,6 +719,25 @@ class HierarchicalVAE(nn.Module):
             exemplar = self.decode_hierarchically(z_style, enhanced_skill)
 
             return exemplar
+
+    def generate_personalized_exemplar(
+            self,
+            learner_trajectory,
+            skill_enhancement_factor=0.1,
+            target_metric='overall',
+            adaptive_enhancement=True
+    ):
+        """
+        パフォーマンス軸に沿った個人最適化お手本生成（互換性保持）
+        """
+        # v2版を試し、失敗したらフォールバック
+        try:
+            return self.generate_personalized_exemplar_v2(
+                learner_trajectory, skill_enhancement_factor, target_metric, adaptive_enhancement
+            )
+        except Exception as e:
+            print(f"軸ベース生成に失敗: {e}. フォールバックを使用")
+            return self.generate_personalized_exemplar_fallback(learner_trajectory, skill_enhancement_factor)
 
     def update_epoch(self, epoch: int, max_epoch: int):
         """エポック更新（β-annealing）"""
@@ -439,3 +770,12 @@ class HierarchicalVAE(nn.Module):
     def save_model(self, filepath: str):
         """モデル保存"""
         torch.save(self.state_dict(), filepath)
+
+    def load_model(self, filepath: str, device=None):
+        """モデル読み込み"""
+        if device is None:
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        state_dict = torch.load(filepath, map_location=device)
+        self.load_state_dict(state_dict)
+        self.to(device)
