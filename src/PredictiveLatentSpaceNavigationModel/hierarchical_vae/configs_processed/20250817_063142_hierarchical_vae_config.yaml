@@ -28,7 +28,7 @@ training:
   # 基本学習設定
   batch_size: 32
   num_epochs: 200
-  lr: 1e-4  # 階層学習のため少し低めに設定
+  lr: 1.0e-04  # 階層学習のため少し低めに設定
   weight_decay: 1e-5
 
   # 勾配クリッピング
@@ -81,7 +81,7 @@ evaluation:
 
 # 実験管理設定
 experiment:
-  description: "Hierarchical VAE based on Free Energy Principle for personalized motor learning support"
+  description: "System running test"
   tags:
     - "hierarchical_vae"
     - "free_energy_principle"

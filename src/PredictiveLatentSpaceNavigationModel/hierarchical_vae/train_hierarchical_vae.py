@@ -317,8 +317,98 @@ def update_db(db_path: str, experiment_id: int, data: dict):
             print(f"フォールバックも失敗: {e2}")
 
 
-def validate_config(config: dict) -> None:
-    """設定ファイルの妥当性を検証"""
+def validate_and_convert_config(config: dict) -> dict:
+    """設定ファイルの妥当性検証と型変換"""
+
+    # 型変換が必要な数値パラメータのマッピング
+    numeric_conversions = {
+        # モデル設定
+        'model.input_dim': int,
+        'model.seq_len': int,
+        'model.hidden_dim': int,
+        'model.primitive_latent_dim': int,
+        'model.skill_latent_dim': int,
+        'model.style_latent_dim': int,
+        'model.beta_primitive': float,
+        'model.beta_skill': float,
+        'model.beta_style': float,
+        'model.precision_lr': float,
+
+        # 学習設定
+        'training.batch_size': int,
+        'training.num_epochs': int,
+        'training.lr': float,  # ← ここが重要
+        'training.weight_decay': float,
+        'training.clip_grad_norm': float,
+        'training.warmup_epochs': int,
+        'training.scheduler_T_0': int,
+        'training.scheduler_T_mult': int,
+        'training.scheduler_eta_min': float,
+        'training.patience': int,
+
+        # 階層設定
+        'hierarchical_settings.primitive_learning_start': float,
+        'hierarchical_settings.skill_learning_start': float,
+        'hierarchical_settings.style_learning_start': float,
+        'hierarchical_settings.prediction_error_weights.level1': float,
+        'hierarchical_settings.prediction_error_weights.level2': float,
+        'hierarchical_settings.prediction_error_weights.level3': float,
+        'hierarchical_settings.exemplar_generation.skill_enhancement_factor': float,
+        'hierarchical_settings.exemplar_generation.style_preservation_weight': float,
+        'hierarchical_settings.exemplar_generation.max_enhancement_steps': int,
+    }
+
+    def get_nested_value(data, key_path):
+        """ネストした辞書から値を取得"""
+        keys = key_path.split('.')
+        value = data
+        for key in keys:
+            if isinstance(value, dict) and key in value:
+                value = value[key]
+            else:
+                return None
+        return value
+
+    def set_nested_value(data, key_path, value):
+        """ネストした辞書に値を設定"""
+        keys = key_path.split('.')
+        current = data
+        for key in keys[:-1]:
+            if key not in current:
+                current[key] = {}
+            current = current[key]
+        current[keys[-1]] = value
+
+    # 数値変換の実行
+    for key_path, target_type in numeric_conversions.items():
+        current_value = get_nested_value(config, key_path)
+
+        if current_value is not None:
+            try:
+                # 文字列の場合は数値に変換
+                if isinstance(current_value, str):
+                    if target_type == float:
+                        converted_value = float(current_value)
+                    elif target_type == int:
+                        converted_value = int(float(current_value))  # 1e3 → 1000.0 → 1000
+                    else:
+                        converted_value = target_type(current_value)
+                elif isinstance(current_value, (int, float)):
+                    converted_value = target_type(current_value)
+                else:
+                    converted_value = current_value
+
+                set_nested_value(config, key_path, converted_value)
+
+                # デバッグ出力
+                if str(current_value) != str(converted_value):
+                    print(
+                        f"型変換: {key_path} = {current_value} ({type(current_value)}) → {converted_value} ({type(converted_value)})")
+
+            except (ValueError, TypeError) as e:
+                print(f"警告: {key_path}の型変換に失敗: {current_value} → {target_type.__name__} (エラー: {e})")
+
+    # 必須セクションの検証
     required_sections = {
         'data': ['data_path'],
         'model': ['input_dim', 'seq_len', 'hidden_dim', 'primitive_latent_dim', 'skill_latent_dim', 'style_latent_dim'],
@@ -333,10 +423,12 @@ def validate_config(config: dict) -> None:
             if key not in config[section]:
                 raise ValueError(f"'{section}.{key}'が設定されていません")
 
-    data_path = config['data']['data_path']
-    if not os.path.exists(data_path):
-        raise ValueError(f"データファイルが見つかりません: {data_path}")
+    # データパスの存在確認
+    data_path = config['data'].get('data_path', '')
+    if data_path and not os.path.exists(data_path):
+        print(f"警告: データファイル {data_path} が見つかりません")
 
+    return config
 
 def extract_latent_variables_hierarchical(model, test_loader, device):
     """階層型VAEからテストデータの潜在変数を抽出"""
@@ -734,13 +826,14 @@ def train_hierarchical_model_v2(config_path: str, experiment_id: int, db_path: s
         config = yaml.safe_load(f)
 
     try:
-        validate_config(config)
+        config = validate_and_convert_config(config)
         print("階層型VAE設定ファイルの検証: ✅ 正常")
     except ValueError as e:
         print(f"❌ 設定ファイルエラー: {e}")
         update_db(db_path, experiment_id, {
             'status': 'failed',
-            'end_time': datetime.now().isoformat()
+            'end_time': datetime.now().isoformat(),
+            'notes': f"Config validation error: {str(e)}"
         })
         raise e
 

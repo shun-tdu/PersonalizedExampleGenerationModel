@@ -279,4 +279,6 @@ def generate_all_validation_configs(output_dir="configs_validation"):
 
 
 if __name__ == "__main__":
-    generate_all_validation_configs()
+    SCRIPT_DIR = os.path.dirname((os.path.abspath(__file__)))
+    CONFIG_DIR = os.path.join(SCRIPT_DIR, 'configs')
+    generate_all_validation_configs(CONFIG_DIR)

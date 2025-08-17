@@ -18,62 +18,303 @@ DEFAULT_CONFIG_DIR = os.path.join(SCRIPT_DIR, "configs")
 DEFAULT_PROCESSED_CONFIG_DIR = os.path.join(SCRIPT_DIR, "configs_processed")
 DEFAULT_SCHEMA_PATH = os.path.join(SCRIPT_DIR, "hierarchical_vae_schema.sql")
 
-def setup_database(db_path: str, schema_path: str = DEFAULT_SCHEMA_PATH):
+
+def setup_database_safe(db_path: str, schema_path: str = None):
     """
-    階層型VAE用データベースとテーブルの初期化
+    安全な階層型VAE用データベース初期化
     """
     print(f"階層型VAE実験データベースを初期化/確認中: {db_path}")
 
-    if not os.path.exists(schema_path):
-        print(f"警告: スキーマファイル '{schema_path}' が見つかりません。")
-        print("階層型VAE用の基本テーブルを作成します...")
-        create_basic_schema(db_path)
-        return
-
     try:
-        with open(schema_path, 'r', encoding='utf-8') as f:
-            schema_script = f.read()
+        # データベースディレクトリの作成
+        db_dir = os.path.dirname(db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
 
+        # データベース接続テスト
         with sqlite3.connect(db_path) as conn:
             cursor = conn.cursor()
 
             # 外部キー制約を有効化
             cursor.execute("PRAGMA foreign_keys = ON")
 
-            # スキーマを実行
-            cursor.executescript(schema_script)
+            # 既存テーブルの確認
+            cursor.execute("""
+                           SELECT name
+                           FROM sqlite_master
+                           WHERE type = 'table'
+                             AND name = 'hierarchical_experiments'
+                           """)
+
+            if cursor.fetchone():
+                print("既存のhierarchical_experimentsテーブルを発見")
+                # テーブル構造の確認
+                cursor.execute("PRAGMA table_info(hierarchical_experiments)")
+                columns = [row[1] for row in cursor.fetchall()]
+                print(f"既存カラム数: {len(columns)}")
+
+                # 必要に応じてカラム追加
+                add_missing_columns(cursor, columns)
+
+            else:
+                print("新規テーブルを作成中...")
+                create_tables_directly(cursor)
+
             conn.commit()
-
             print("階層型VAE実験データベースの準備完了")
-
-            # データベース情報を表示
-            cursor.execute("SELECT * FROM database_info")
-            db_info = cursor.fetchone()
-            if db_info:
-                print(f"データベース: {db_info[0]} v{db_info[1]}")
-                print(f"説明: {db_info[2]}")
 
     except Exception as e:
         print(f"データベース初期化エラー: {e}")
-        raise
+        print("基本テーブル作成にフォールバック")
+        create_basic_schema_safe(db_path)
 
 
-def create_basic_schema(db_path: str):
-    """基本的な階層型VAEテーブルを作成（スキーマファイルがない場合）"""
+def create_tables_directly(cursor):
+    """
+    テーブルを直接作成（スキーマファイルを使わずに）
+    """
+
+    # database_infoテーブル
+    cursor.execute("""
+                   CREATE TABLE IF NOT EXISTS database_info
+                   (
+                       name
+                       TEXT
+                       PRIMARY
+                       KEY,
+                       version
+                       TEXT
+                       NOT
+                       NULL,
+                       description
+                       TEXT,
+                       created_at
+                       TIMESTAMP
+                       DEFAULT
+                       CURRENT_TIMESTAMP
+                   )
+                   """)
+
+    # 初期データ挿入
+    cursor.execute("""
+        INSERT OR REPLACE INTO database_info (name, version, description) 
+        VALUES ('hierarchical_vae_experiments', '1.0', 'Hierarchical VAE experiment tracking database')
+    """)
+
+    # hierarchical_experimentsテーブル
+    cursor.execute("""
+                   CREATE TABLE IF NOT EXISTS hierarchical_experiments
+                   (
+                       -- 基本情報
+                       id
+                       INTEGER
+                       PRIMARY
+                       KEY
+                       AUTOINCREMENT,
+                       experiment_name
+                       TEXT
+                       NOT
+                       NULL,
+                       status
+                       TEXT
+                       DEFAULT
+                       'pending'
+                       CHECK (
+                       status
+                       IN
+                   (
+                       'pending',
+                       'running',
+                       'completed',
+                       'failed',
+                       'dry_run'
+                   )),
+                       config_path TEXT,
+                       config_backup_path TEXT,
+                       description TEXT,
+                       tags TEXT,
+
+                       -- タイムスタンプ
+                       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                       start_time TIMESTAMP,
+                       end_time TIMESTAMP,
+                       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+                       -- データ設定
+                       data_path TEXT,
+
+                       -- モデル設定
+                       input_dim INTEGER,
+                       seq_len INTEGER,
+                       hidden_dim INTEGER,
+                       primitive_latent_dim INTEGER,
+                       skill_latent_dim INTEGER,
+                       style_latent_dim INTEGER,
+
+                       -- 階層別β値
+                       beta_primitive REAL,
+                       beta_skill REAL,
+                       beta_style REAL,
+                       precision_lr REAL,
+
+                       -- 学習設定
+                       batch_size INTEGER,
+                       num_epochs INTEGER,
+                       lr REAL,
+                       weight_decay REAL,
+                       clip_grad_norm REAL,
+                       warmup_epochs INTEGER,
+                       scheduler_T_0 INTEGER,
+                       scheduler_T_mult INTEGER,
+                       scheduler_eta_min REAL,
+                       patience INTEGER,
+
+                       -- 階層型VAE特有設定
+                       primitive_learning_start REAL,
+                       skill_learning_start REAL,
+                       style_learning_start REAL,
+
+                       -- 予測誤差重み
+                       prediction_error_weight_level1 REAL,
+                       prediction_error_weight_level2 REAL,
+                       prediction_error_weight_level3 REAL,
+
+                       -- お手本生成設定
+                       skill_enhancement_factor REAL,
+                       style_preservation_weight REAL,
+                       max_enhancement_steps INTEGER,
+
+                       -- 実験結果
+                       final_total_loss REAL,
+                       best_val_loss REAL,
+                       final_epoch INTEGER,
+                       early_stopped BOOLEAN,
+
+                       -- 階層別最終損失
+                       final_recon_loss REAL,
+                       final_kl_primitive REAL,
+                       final_kl_skill REAL,
+                       final_kl_style REAL,
+
+                       -- 評価指標
+                       reconstruction_mse REAL,
+                       style_separation_score REAL,
+                       skill_performance_correlation REAL,
+                       best_skill_correlation_metric TEXT,
+
+                       -- スキル軸分析結果
+                       skill_axis_analysis_completed BOOLEAN DEFAULT FALSE,
+                       skill_improvement_directions_count INTEGER DEFAULT 0,
+                       axis_based_improvement_enabled BOOLEAN DEFAULT FALSE,
+
+                       -- ファイルパス
+                       model_path TEXT,
+                       best_model_path TEXT,
+                       training_curves_path TEXT,
+                       axis_based_exemplars_path TEXT,
+                       evaluation_results_path TEXT,
+
+                       -- ログ設定
+                       output_dir TEXT,
+
+                       -- システム情報
+                       python_version TEXT,
+                       pytorch_version TEXT,
+                       cuda_version TEXT,
+                       gpu_info TEXT,
+                       system_info TEXT,
+
+                       -- アブレーション研究
+                       is_ablation_study BOOLEAN DEFAULT FALSE,
+
+                       -- 備考
+                       notes TEXT
+                       )
+                   """)
+
+    # インデックス作成
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_experiments_status ON hierarchical_experiments(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_experiments_created_at ON hierarchical_experiments(created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_experiments_tags ON hierarchical_experiments(tags)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_experiments_performance ON hierarchical_experiments(reconstruction_mse)")
+
+    print("全テーブルとインデックスを作成しました")
+
+
+def add_missing_columns(cursor, existing_columns):
+    """
+    既存テーブルに不足しているカラムを追加
+    """
+    required_columns = {
+        'skill_axis_analysis_completed': 'BOOLEAN DEFAULT FALSE',
+        'skill_improvement_directions_count': 'INTEGER DEFAULT 0',
+        'axis_based_improvement_enabled': 'BOOLEAN DEFAULT FALSE',
+        'axis_based_exemplars_path': 'TEXT',
+        'best_skill_correlation_metric': 'TEXT',
+        'final_kl_primitive': 'REAL',
+        'final_kl_skill': 'REAL',
+        'final_kl_style': 'REAL'
+    }
+
+    for column_name, column_def in required_columns.items():
+        if column_name not in existing_columns:
+            try:
+                cursor.execute(f"ALTER TABLE hierarchical_experiments ADD COLUMN {column_name} {column_def}")
+                print(f"カラム追加: {column_name}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e):
+                    print(f"カラム追加失敗 {column_name}: {e}")
+
+
+def create_basic_schema_safe(db_path: str):
+    """基本的な階層型VAEテーブルを安全に作成"""
     basic_sql = """
-                CREATE TABLE IF NOT EXISTS hierarchical_experiments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                    experiment_name TEXT NOT NULL,
-                    status TEXT DEFAULT 'pending', 
-                    config_path TEXT, 
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                ); 
+                CREATE TABLE IF NOT EXISTS hierarchical_experiments \
+                ( \
+                    id \
+                    INTEGER \
+                    PRIMARY \
+                    KEY \
+                    AUTOINCREMENT, \
+                    experiment_name \
+                    TEXT \
+                    NOT \
+                    NULL, \
+                    status \
+                    TEXT \
+                    DEFAULT \
+                    'pending', \
+                    config_path \
+                    TEXT, \
+                    created_at \
+                    TIMESTAMP \
+                    DEFAULT \
+                    CURRENT_TIMESTAMP, \
+                    reconstruction_mse \
+                    REAL, \
+                    style_separation_score \
+                    REAL, \
+                    skill_performance_correlation \
+                    REAL, \
+                    notes \
+                    TEXT
+                ); \
                 """
 
-    with sqlite3.connect(db_path) as conn:
-        conn.executescript(basic_sql)
-        print("基本テーブルを作成しました")
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.executescript(basic_sql)
+            print("基本テーブルを作成しました")
+    except Exception as e:
+        print(f"基本テーブル作成も失敗: {e}")
+        raise
 
+def setup_database(db_path: str, schema_path: str = None):
+    """
+    階層型VAE用データベースとテーブルの初期化（安全版）
+    """
+    return setup_database_safe(db_path, schema_path)
 
 def extract_config_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
     """

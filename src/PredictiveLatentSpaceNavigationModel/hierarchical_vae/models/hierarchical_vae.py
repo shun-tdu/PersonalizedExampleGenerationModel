@@ -551,10 +551,10 @@ class HierarchicalVAE(nn.Module):
         _, _, pred_error1 = self.primitive_encoder(x, reconstructed_x)
 
         # Level 2での予測誤差（スキル予測との比較）
-        _, _, pred_error2 = self.skill_encoder(z1, skill_pred)
+        _, _, pred_error2 = self.skill_encoder(z1, primitive_pred)
 
         # Level 3での予測誤差（最上位なので0）
-        _, _, pred_error3 = self.style_encoder(z2)
+        _, _, pred_error3 = self.style_encoder(z2, skill_pred)
 
         # === 損失計算 ===
         # 再構成損失（Level 1の予測誤差）
