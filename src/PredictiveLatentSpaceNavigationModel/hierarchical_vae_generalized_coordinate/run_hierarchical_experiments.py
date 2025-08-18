@@ -6,18 +6,14 @@ import yaml
 import sqlite3
 import argparse
 import datetime
-from typing import Dict, Any
+from typing import  Dict, Any
 import json
 import torch
-import threading
-import queue
-import re
-import time
 
 # ---グローバル設定---
 SCRIPT_DIR = os.path.dirname((os.path.abspath(__file__)))
 
-DEFAULT_DB_PATH = os.path.join(SCRIPT_DIR, "hierarchical_experiments.db")
+DEFAULT_DB_PATH = os.path.join(SCRIPT_DIR, "hierarchical_experiments_generalized_coordinate.db")
 DEFAULT_CONFIG_DIR = os.path.join(SCRIPT_DIR, "configs")
 DEFAULT_PROCESSED_CONFIG_DIR = os.path.join(SCRIPT_DIR, "configs_processed")
 DEFAULT_SCHEMA_PATH = os.path.join(SCRIPT_DIR, "hierarchical_vae_generalized_coordinate_schema.sql")
@@ -147,9 +143,8 @@ def create_tables_directly(cursor):
                        -- データ設定
                        data_path TEXT,
 
-                       -- モデル設定（一般化座標VAE用）
-                       basic_coord_dim INTEGER,
-                       derived_coord_dim INTEGER,
+                       -- モデル設定
+                       input_dim INTEGER,
                        seq_len INTEGER,
                        hidden_dim INTEGER,
                        primitive_latent_dim INTEGER,
@@ -160,10 +155,7 @@ def create_tables_directly(cursor):
                        beta_primitive REAL,
                        beta_skill REAL,
                        beta_style REAL,
-                       
-                       -- 一般化座標VAE特有の損失重み
-                       physics_weight REAL,
-                       separation_weight REAL,
+                       precision_lr REAL,
 
                        -- 学習設定
                        batch_size INTEGER,
@@ -177,10 +169,20 @@ def create_tables_directly(cursor):
                        scheduler_eta_min REAL,
                        patience INTEGER,
 
+                       -- 階層型VAE特有設定
+                       primitive_learning_start REAL,
+                       skill_learning_start REAL,
+                       style_learning_start REAL,
+
+                       -- 予測誤差重み
+                       prediction_error_weight_level1 REAL,
+                       prediction_error_weight_level2 REAL,
+                       prediction_error_weight_level3 REAL,
 
                        -- お手本生成設定
                        skill_enhancement_factor REAL,
-                       confidence_threshold REAL,
+                       style_preservation_weight REAL,
+                       max_enhancement_steps INTEGER,
 
                        -- 実験結果
                        final_total_loss REAL,
@@ -316,7 +318,7 @@ def setup_database(db_path: str, schema_path: str = None):
 
 def extract_config_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
     """
-    設定ファイルから一般化座標階層型VAE用のパラメータを抽出
+    設定ファイルから階層型VAE用のパラメータを抽出
     """
     params = {}
 
@@ -329,9 +331,7 @@ def extract_config_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
 
     # モデル設定
     model_config = config.get('model', {})
-    # 一般化座標VAE特有のパラメータ
-    params['basic_coord_dim'] = model_config.get('basic_coord_dim')
-    params['derived_coord_dim'] = model_config.get('derived_coord_dim')
+    params['input_dim'] = model_config.get('input_dim')
     params['seq_len'] = model_config.get('seq_len')
     params['hidden_dim'] = model_config.get('hidden_dim')
     params['primitive_latent_dim'] = model_config.get('primitive_latent_dim')
@@ -342,10 +342,7 @@ def extract_config_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
     params['beta_primitive'] = model_config.get('beta_primitive')
     params['beta_skill'] = model_config.get('beta_skill')
     params['beta_style'] = model_config.get('beta_style')
-    
-    # 一般化座標VAE特有の損失重み
-    params['physics_weight'] = model_config.get('physics_weight')
-    params['separation_weight'] = model_config.get('separation_weight')
+    params['precision_lr'] = model_config.get('precision_lr')
 
     # 学習設定
     training_config = config.get('training', {})
@@ -360,12 +357,23 @@ def extract_config_parameters(config: Dict[str, Any]) -> Dict[str, Any]:
     params['scheduler_eta_min'] = training_config.get('scheduler_eta_min')
     params['patience'] = training_config.get('patience')
 
-    # 一般化座標VAEには階層型VAE特有設定は不要
+    # 階層型VAE特有設定
+    hierarchical_config = config.get('hierarchical_settings', {})
+    params['primitive_learning_start'] = hierarchical_config.get('primitive_learning_start')
+    params['skill_learning_start'] = hierarchical_config.get('skill_learning_start')
+    params['style_learning_start'] = hierarchical_config.get('style_learning_start')
+
+    # 予測誤差重み
+    prediction_weights = hierarchical_config.get('prediction_error_weights', {})
+    params['prediction_error_weight_level1'] = prediction_weights.get('level1')
+    params['prediction_error_weight_level2'] = prediction_weights.get('level2')
+    params['prediction_error_weight_level3'] = prediction_weights.get('level3')
 
     # お手本生成設定
-    exemplar_config = config.get('exemplar_generation', {})
+    exemplar_config = hierarchical_config.get('exemplar_generation', {})
     params['skill_enhancement_factor'] = exemplar_config.get('skill_enhancement_factor')
-    params['confidence_threshold'] = exemplar_config.get('confidence_threshold')
+    params['style_preservation_weight'] = exemplar_config.get('style_preservation_weight')
+    params['max_enhancement_steps'] = exemplar_config.get('max_enhancement_steps')
 
     # ログ設定
     logging_config = config.get('logging', {})
@@ -455,33 +463,21 @@ def register_experiment(db_path: str, config: Dict[str, Any], config_filename: s
         raise
 
 
-def stream_reader(stream, output_queue, stream_type):
-    """サブプロセスの出力をリアルタイムで読み取り"""
-    try:
-        for line in iter(stream.readline, ''):
-            if line:
-                output_queue.put((stream_type, line.rstrip()))
-        stream.close()
-    except Exception as e:
-        output_queue.put(('error', f"Stream reader error: {e}"))
-
-
 def run_experiment_subprocess(experiment_id: int, config_path: str, db_path: str):
     """
-    階層型VAE実験をサブプロセスとして実行（リアルタイム出力付き）
+    階層型VAE実験をサブプロセスとして実行
     """
     print(f"--- 階層型VAE実験 {experiment_id} をサブプロセスとして開始 ---")
 
     # 実行前にステータスを更新
     update_experiment_status(db_path, experiment_id, 'running', start_time=datetime.datetime.now().isoformat())
 
-    # train_hierarchical_vae_generalized_coordinate.py を使用
+    # train_hierarchical_vae.py を使用
     train_script_path = os.path.join(SCRIPT_DIR, 'train_hierarchical_vae_generalized_coordinate.py')
 
     if not os.path.exists(train_script_path):
-        print(f"エラー: {train_script_path} が見つかりません")
-        print("train_hierarchical_vae_generalized_coordinate.pyが必要です")
-        return False
+        print(f"警告: {train_script_path} が見つかりません。train.py を使用します")
+        train_script_path = os.path.join(SCRIPT_DIR, 'train.py')
 
     command = [
         'python', train_script_path,
@@ -492,105 +488,32 @@ def run_experiment_subprocess(experiment_id: int, config_path: str, db_path: str
 
     try:
         print(f"実行コマンド: {' '.join(command)}")
-        print("=" * 80)
 
-        # サブプロセスを開始（リアルタイム出力用）
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            universal_newlines=True,
-            bufsize=1
+        # サブプロセスとして実行
+        result = subprocess.run(command, check=True)
+
+        print(f"--- 階層型VAE実験 {experiment_id} 正常終了 ---")
+        # print("標準出力:", result.stdout[-500:] if len(result.stdout) > 500 else result.stdout)
+
+        # 成功時のステータス更新
+        update_experiment_status(db_path, experiment_id, 'completed', end_time=datetime.datetime.now().isoformat())
+
+        return True
+
+    except subprocess.CalledProcessError as e:
+        print(f"!!! エラー: 階層型VAE実験 {experiment_id} が失敗しました !!!")
+        print(f"エラーコード: {e.returncode}")
+        print(f"標準エラー: {e.stderr}")
+        print(f"標準出力: {e.stdout}")
+
+        # 失敗時のステータス更新
+        update_experiment_status(
+            db_path, experiment_id, 'failed',
+            end_time=datetime.datetime.now().isoformat(),
+            notes=f"subprocess error: {e.stderr}"
         )
 
-        # 出力読み取り用のキューとスレッド
-        output_queue = queue.Queue()
-        
-        stdout_thread = threading.Thread(
-            target=stream_reader, 
-            args=(process.stdout, output_queue, 'stdout')
-        )
-        stderr_thread = threading.Thread(
-            target=stream_reader, 
-            args=(process.stderr, output_queue, 'stderr')
-        )
-        
-        stdout_thread.daemon = True
-        stderr_thread.daemon = True
-        stdout_thread.start()
-        stderr_thread.start()
-
-        # プログレス追跡用変数
-        current_epoch = 0
-        total_epochs = 0
-        last_progress_time = time.time()
-        
-        # プログレスバーのパターン
-        epoch_pattern = re.compile(r'Epoch (\d+)/(\d+)')
-        progress_pattern = re.compile(r'(\d+)%|(\d+\.\d+)%')
-        
-        # リアルタイム出力処理
-        while process.poll() is None or not output_queue.empty():
-            try:
-                stream_type, line = output_queue.get(timeout=0.1)
-                
-                # エポック情報の抽出
-                epoch_match = epoch_pattern.search(line)
-                if epoch_match:
-                    current_epoch = int(epoch_match.group(1))
-                    total_epochs = int(epoch_match.group(2))
-                    
-                # プログレス表示
-                if current_epoch > 0 and total_epochs > 0:
-                    progress = (current_epoch / total_epochs) * 100
-                    bar_length = 40
-                    filled_length = int(bar_length * current_epoch // total_epochs)
-                    bar = '█' * filled_length + '░' * (bar_length - filled_length)
-                    
-                    # 1秒ごとまたは重要な行でプログレス更新
-                    current_time = time.time()
-                    if (current_time - last_progress_time > 1.0 or 
-                        'Epoch' in line or 'Loss:' in line or 'Val Loss:' in line):
-                        print(f"\r[実験 {experiment_id}] [{bar}] {progress:.1f}% (Epoch {current_epoch}/{total_epochs})", end='', flush=True)
-                        last_progress_time = current_time
-                
-                # 重要な行は常に表示
-                if any(keyword in line for keyword in ['Epoch', 'Loss:', 'Val Loss:', 'Error', 'WARNING', 'ERROR', '完了', '開始', 'Best']):
-                    if current_epoch > 0:
-                        print()  # プログレスバーの改行
-                    print(f"[実験 {experiment_id}] {line}")
-                    
-            except queue.Empty:
-                continue
-            except Exception as e:
-                print(f"[実験 {experiment_id}] 出力処理エラー: {e}")
-
-        # プロセス終了待機
-        return_code = process.wait()
-        
-        # スレッド終了待機
-        stdout_thread.join(timeout=1)
-        stderr_thread.join(timeout=1)
-        
-        print()  # 最終的な改行
-        print("=" * 80)
-
-        if return_code == 0:
-            print(f"--- 階層型VAE実験 {experiment_id} 正常終了 ---")
-            # 成功時のステータス更新
-            update_experiment_status(db_path, experiment_id, 'completed', end_time=datetime.datetime.now().isoformat())
-            return True
-        else:
-            print(f"!!! エラー: 階層型VAE実験 {experiment_id} が失敗しました (終了コード: {return_code}) !!!")
-            # 失敗時のステータス更新
-            update_experiment_status(
-                db_path, experiment_id, 'failed',
-                end_time=datetime.datetime.now().isoformat(),
-                notes=f"subprocess failed with return code: {return_code}"
-            )
-            return False
-
+        return False
     except Exception as e:
         print(f"!!! 予期しないエラー: {e} !!!")
         update_experiment_status(
@@ -646,7 +569,7 @@ def move_processed_config(config_path: str, processed_dir: str):
         print(f"設定ファイル移動エラー: {e}")
 
 def validate_config(config: Dict[str, Any], config_path: str) -> bool:
-    """設定ファイルの妥当性検証（一般化座標VAE用）"""
+    """設定ファイルの妥当性検証"""
     required_sections = ['data', 'model', 'training', 'logging']
 
     for section in required_sections:
@@ -654,22 +577,15 @@ def validate_config(config: Dict[str, Any], config_path: str) -> bool:
             print(f"エラー: 設定ファイル {config_path} に '{section}' セクションがありません")
             return False
 
-    # モデル設定の必須パラメータ（一般化座標VAE用）
-    model_required = ['basic_coord_dim', 'derived_coord_dim', 'seq_len', 'hidden_dim', 
-                      'primitive_latent_dim', 'skill_latent_dim', 'style_latent_dim',
-                      'beta_primitive', 'beta_skill', 'beta_style']
+    # モデル設定の必須パラメータ
+    model_required = ['input_dim', 'seq_len', 'hidden_dim', 'primitive_latent_dim', 'skill_latent_dim',
+                      'style_latent_dim']
     model_config = config['model']
 
     for param in model_required:
         if param not in model_config:
             print(f"エラー: model.{param} が設定されていません")
             return False
-
-    # 一般化座標VAE特有の損失重み検証
-    weight_params = ['physics_weight', 'separation_weight']
-    for param in weight_params:
-        if param not in model_config:
-            print(f"警告: model.{param} が設定されていません（デフォルト値を使用）")
 
     # データパスの存在確認
     data_path = config['data'].get('data_path', '')
