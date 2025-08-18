@@ -558,15 +558,15 @@ class HierarchicalVAEGeneralizedCoordinate(nn.Module):
 
         # === 損失計算 ===
         # 再構成損失（Level 1の予測誤差）
-        recon_loss = F.mse_loss(reconstructed_x, x, reduction='sum')
+        recon_loss = F.mse_loss(reconstructed_x, x, reduction='mean')
 
         # KL損失（各レベルでの複雑性コスト）
-        kl_primitive = -0.5 * torch.sum(1 + logvar1 - mu1.pow(2) - logvar1.exp())
-        kl_skill = -0.5 * torch.sum(1 + logvar2 - mu2.pow(2) - logvar2.exp())
-        kl_style = -0.5 * torch.sum(1 + logvar3 - mu3.pow(2) - logvar3.exp())
+        kl_primitive = -0.5 * torch.mean(torch.sum(1 + logvar1 - mu1.pow(2) - logvar1.exp(),dim=1))
+        kl_skill = -0.5 * torch.mean(torch.sum(1 + logvar2 - mu2.pow(2) - logvar2.exp()),dim=1)
+        kl_style = -0.5 * torch.mean(torch.sum(1 + logvar3 - mu3.pow(2) - logvar3.exp()),dim=1)
 
         # 予測誤差項
-        prediction_error = pred_error1.sum() + pred_error2.sum() + pred_error3.sum()
+        prediction_error = (pred_error1.mean() + pred_error2.mean() + pred_error3.mean())/3.0
 
         # 自由エネルギー = 精度項 + 複雑性項
         free_energy = (recon_loss + prediction_error +
