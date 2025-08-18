@@ -1,0 +1,58 @@
+experiment:
+  name: "generalized_coordinate_vae_baseline"
+  description: "一般化座標を用いた階層型VAEによる個人最適化お手本生成"
+  tags: ["generalized_coordinates", "hierarchical_vae", "personalized_exemplar"]
+
+# データ設定
+data:
+  data_path: "PredictiveLatentSpaceNavigationModel/DataPreprocess/my_data.parquet"
+  use_precomputed: true  # 事前計算済み速度・加速度を使用
+  random_seed: 42
+
+# モデル設定
+model:
+  # 一般化座標の次元設定
+  basic_coord_dim: 8      # 基本座標: pos(2) + vel(2) + acc(2) + jerk(2)
+  derived_coord_dim: 4    # 合成特徴: speed(1) + acc_mag(1) + jerk_mag(1) + curvature(1)
+  seq_len: 100           # シーケンス長
+  hidden_dim: 128        # 隠れ層次元数
+  
+  # 潜在空間の次元設定
+  primitive_latent_dim: 32  # 運動プリミティブ潜在次元
+  skill_latent_dim: 16     # スキル潜在次元
+  style_latent_dim: 8      # スタイル潜在次元
+  
+  # β-VAE重み（KL損失の重み）
+  beta_primitive: 1.0      # 運動プリミティブのKL重み
+  beta_skill: 2.0          # スキルのKL重み
+  beta_style: 4.0          # スタイルのKL重み（個人差を強調）
+  
+  # 損失重み
+  physics_weight: 0.1      # 物理制約損失の重み
+  separation_weight: 0.5   # スタイル・スキル分離損失の重み
+
+# 学習設定
+training:
+  batch_size: 16
+  num_epochs: 200
+  lr: 1e-4               # 学習率
+  weight_decay: 1e-5     # 重み減衰
+  clip_grad_norm: 1.0    # 勾配クリッピング
+  
+  # スケジューラ設定
+  warmup_epochs: 10
+  scheduler_T_0: 15      # CosineAnnealingWarmRestarts の T_0
+  scheduler_T_mult: 2    # CosineAnnealingWarmRestarts の T_mult
+  scheduler_eta_min: 1e-6 # 最小学習率
+  
+  # アーリーストップ
+  patience: 20
+
+# ログ・出力設定
+logging:
+  output_dir: "PredictiveLatentSpaceNavigationModel/hierarchical_vae_generalized_coordinate/outputs"
+
+# 個人最適化お手本生成設定
+exemplar_generation:
+  skill_enhancement_factor: 0.15    # スキル向上係数
+  confidence_threshold: 0.1         # 改善方向の信頼度閾値
