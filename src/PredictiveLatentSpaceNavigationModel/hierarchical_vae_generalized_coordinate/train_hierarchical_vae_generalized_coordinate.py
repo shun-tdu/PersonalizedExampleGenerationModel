@@ -218,17 +218,10 @@ class SkillAxisAnalyzer:
 
 
 class GeneralizedCoordinateDataset(Dataset):
-    def __init__(self, df: pd.DataFrame, scaler: StandardScaler, seq_len: int = 100):
+    def __init__(self, df: pd.DataFrame, scalers: dict,feature_cols: list, seq_len: int = 100):
         self.seq_len = seq_len
-        self.scaler = scaler
-
-        # モデルの入力として使用する特徴量のカラム名を定義
-        self.feature_cols = [
-            'HandlePosX', 'HandlePosY',
-            'HandleVelX', 'HandleVelY',
-            'HandleAccX', 'HandleAccY',
-            'JerkX', 'JerkY'
-        ]
+        self.scalers = scalers
+        self.feature_cols = feature_cols
 
         # データを試行（trial）ごとにグループ化してリストに変換
         self.trials = list(df.groupby(['subject_id', 'trial_num']))
@@ -248,18 +241,17 @@ class GeneralizedCoordinateDataset(Dataset):
         # 2. 特徴量データをNumpy配列に変換
         features = trial_df[self.feature_cols].values
 
-        # 3. fit済みのスケーラーでデータを標準化
-        scaled_features = self.scaler.transform(features)
+        # 3. 物理量別にスケーリングを適用
+        scaled_features = apply_physics_based_scaling(features, self.scalers)
 
         # 4. 固定長化
         if len(scaled_features) > self.seq_len:
-            # 長い場合は切り捨て
             processed_trajectory = scaled_features[:self.seq_len]
         else:
-            # シーケンス長より長い場合はゼロパディング
-            padding_shape = (self.seq_len - len(scaled_features), scaled_features.shape[1])
-            padding = np.zeros(padding_shape)
-            processed_trajectory = np.vstack([scaled_features, padding])
+            # 最後の値を繰り返し
+            padding_length = self.seq_len - len(scaled_features)
+            last_value = scaled_features[-1:].repeat(padding_length, axis=0)
+            processed_trajectory = np.vstack([scaled_features, last_value])
 
         # 5. ラベルを取得
         is_expert = trial_df['is_expert'].iloc[0]
@@ -274,24 +266,20 @@ class GeneralizedCoordinateDataset(Dataset):
 
 def create_dataloaders(processed_data_dir: str, seq_len: int, batch_size: int, random_seed: int = 42) -> tuple:
     """データローダーを作成"""
-    # --- 1. 必要なファイルのパスを定義 ---
-    train_data_path = os.path.join(processed_data_dir, 'train_data.parquet')
-    test_data_path = os.path.join(processed_data_dir, 'test_data.parquet')
-    scaler_path = os.path.join(processed_data_dir, 'scaler.joblib')
+    # データ読み込み
+    train_val_df = pd.read_parquet(os.path.join(processed_data_dir, 'train_data.parquet'))
+    test_df = pd.read_parquet(os.path.join(processed_data_dir, 'test_data.parquet'))
 
-    try:
-        # 学習/検証用の元データを読み込み
-        train_val_df = pd.read_parquet(train_data_path)
-        # テストデータを読み込み
-        test_df = pd.read_parquet(test_data_path)
-        # 学習済みのスケーラーを読み込み
-        scaler = joblib.load(scaler_path)
-    except FileNotFoundError as e:
-        print(f"エラー: 必要なファイルが見つかりません。-> {e}")
-        return None, None, None, None
+    # スケーラーと設定読み込み
+    scalers = joblib.load(os.path.join(processed_data_dir, 'scalers.joblib'))
+    feature_config = joblib.load(os.path.join(processed_data_dir,'feature_config.joblib'))
+    feature_cols = feature_config['feature_cols']
 
-    # --- 3. 学習データと検証データに分割 ---
-    # train_val_dfから被験者IDを基準に分割する
+    print(f"Loaded scalers: {list(scalers.keys())}")
+    print(f"Feature columns: {feature_cols}")
+
+    # データセット作成
+    # 学習データと検証データに分割 ---
     train_val_subject_ids = train_val_df['subject_id'].unique()
 
     if len(train_val_subject_ids) < 2:
@@ -312,21 +300,38 @@ def create_dataloaders(processed_data_dir: str, seq_len: int, batch_size: int, r
     print(f"データ分割: 学習用={len(train_ids)}人, 検証用={len(val_ids)}人, テスト用={len(test_df['subject_id'].unique())}人")
 
     # --- 4. Datasetの作成 (scalerを渡す) ---
-    train_dataset = GeneralizedCoordinateDataset(train_df, scaler=scaler, seq_len=seq_len)
-    # 検証セットが存在する場合のみ作成
-    val_dataset = GeneralizedCoordinateDataset(val_df, scaler=scaler, seq_len=seq_len) if not val_df.empty else None
-    test_dataset = GeneralizedCoordinateDataset(test_df, scaler=scaler, seq_len=seq_len)
+    train_dataset = GeneralizedCoordinateDataset(train_df, scalers, feature_cols ,seq_len)
+    val_dataset = GeneralizedCoordinateDataset(val_df, scalers, feature_cols, seq_len) if not val_df.empty else None
+    test_dataset = GeneralizedCoordinateDataset(test_df, scalers,feature_cols, seq_len)
 
     # --- 5. DataLoaderの作成 ---
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-
-    val_loader = None
-    if val_dataset:
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False) if val_dataset else None
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     return train_loader, val_loader, test_loader, test_df
+
+def apply_physics_based_scaling(data: np.ndarray, scalers: dict) -> np.ndarray:
+    """物理量別スケーリングを適用"""
+
+    if data.shape[1] != 6:
+        raise ValueError(f"Expected 6 features, got {data.shape[1]}")
+
+    scaled_data = np.zeros_like(data)
+
+    # 位置 (0:2)
+    if 'position' in scalers:
+        scaled_data[:, 0:2] = scalers['position'].transform(data[:, 0:2])
+
+    # 速度 (2:4)
+    if 'velocity' in scalers:
+        scaled_data[:, 2:4] = scalers['velocity'].transform(data[:, 2:4])
+
+    # 加速度 (4:6)
+    if 'acceleration' in scalers:
+        scaled_data[:, 4:6] = scalers['acceleration'].transform(data[:, 4:6])
+
+    return scaled_data
 
 def update_db(db_path: str, experiment_id: int, data: dict):
     """階層型VAE実験データベースを更新"""

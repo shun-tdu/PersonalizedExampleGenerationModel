@@ -148,6 +148,44 @@ def classify_by_median_split(skill_scores: pd.Series) -> pd.Series:
     return (skill_scores > median_score).astype(int).rename('is_expert')
 
 
+def prepare_scaler(feature_df:pd.DataFrame):
+    """特徴量タイプごとに個別スケーリング"""
+
+    # 利用可能なカラムを確認
+    available_cols = feature_df.columns.tolist()
+    print(f"Available columns: {available_cols}")
+
+    scalers = {}
+
+
+    # 特徴量をタイプ別に分類
+    # 位置
+    position_cols = ['HandlePosX', 'HandlePosY']
+    if all(col in available_cols for col in position_cols):
+        scalers['position'] = StandardScaler().fit(feature_df[position_cols])
+        print(f"Position scaler created:{position_cols}")
+
+    # 速度
+    velocity_cols = ['HandleVelX', 'HandleVelY']
+    if all(col in available_cols for col in velocity_cols):
+        scalers['velocity'] = StandardScaler().fit(feature_df[velocity_cols])
+        print(f"Velocity scaler created:{velocity_cols}")
+
+    # 加速度
+    acceleration_cols = ['HandleAccX', 'HandleAccY']
+    if all(col in available_cols for col in acceleration_cols):
+        scalers['acceleration'] = StandardScaler().fit(feature_df[acceleration_cols])
+        print(f"acceleration scaler created:{acceleration_cols}")
+
+     # 将来的なジャーク（オプション）
+    jerk_cols = ['JerkX', 'JerkY']
+    if all(col in available_cols for col in jerk_cols):
+        scalers['jerk'] = StandardScaler().fit(feature_df[jerk_cols])
+        print(f"Jerk scaler created: {jerk_cols}")
+
+    return scalers
+
+
 def main():
     TARGET_SEQ_LEN = 100
     RAWDATA_DIR = '../../../data/RawDatas/'
@@ -182,17 +220,7 @@ def main():
         how='left'
     )
 
-    # 7. ジャークを計算して列に追加
-    def calculate_jerk_for_df(group):
-        acc_data = group[['HandleAccX', 'HandleAccY']].values
-        jerk_data = np.diff(acc_data, axis=0, prepend=np.array([[0,0]]))
-        group['JerkX'] = jerk_data[:, 0]
-        group['JerkY'] = jerk_data[:, 1]
-        return group
-
-    master_df = master_df.groupby(['subject_id', 'trial_num'], group_keys=False).apply(calculate_jerk_for_df)
-
-    # 8. 訓練データとテストデータに分割
+    # 7. 訓練データとテストデータに分割
     subject_ids = master_df['subject_id'].unique()
     train_subjects, test_subjects = train_test_split(subject_ids, test_size=0.2, random_state=42)
 
@@ -201,25 +229,25 @@ def main():
 
     print(f"訓練データ被験者数: {len(train_subjects)}, テストデータ被験者数: {len(test_subjects)}")
 
-    # ### NEW STEP 3: スケーラーを訓練データで学習 ###
-    # モデルの入力となる特徴量を定義
+    # 8. スケーラの用意
     feature_cols = [
         'HandlePosX', 'HandlePosY',
         'HandleVelX', 'HandleVelY',
         'HandleAccX', 'HandleAccY',
-        'JerkX', 'JerkY'
     ]
 
-    scaler = StandardScaler()
-    # 訓練データから特徴量部分だけを抽出してfit
-    scaler.fit(train_df[feature_cols])
+    scalers = prepare_scaler(train_df[feature_cols])
     print("StandardScalerを訓練データで学習しました。✅")
 
-    # ### NEW STEP 4: 学習済みスケーラーとデータを保存 ###
-    # スケーラーを保存
+    # 9. スケーラと特徴量定義を保存
     scaler_path = os.path.join(PROCESSED_DATA_DIR, 'scaler.joblib')
-    joblib.dump(scaler, scaler_path)
+    feature_config_path = os.path.join(PROCESSED_DATA_DIR, 'feature_config.joblib')
+
+    joblib.dump(scalers, scaler_path)
+    joblib.dump({'feature_cols': feature_cols}, feature_config_path)
+
     print(f"スケーラーを {scaler_path} に保存しました。")
+    print(f"特徴量設定を {feature_config_path} に保存しました。")
 
     # 訓練データとテストデータをそれぞれ保存
     train_df.to_parquet(os.path.join(PROCESSED_DATA_DIR, 'train_data.parquet'))
