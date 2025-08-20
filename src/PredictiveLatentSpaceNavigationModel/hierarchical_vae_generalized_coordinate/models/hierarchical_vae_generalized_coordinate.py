@@ -758,20 +758,15 @@ class HierarchicalVAEGeneralizedCoordinate(nn.Module):
         progress = epoch / max_epoch
 
         # 運動プリミティブは早めに学習
-        self.beta_primitive = min(self.initial_betas['primitive'],
-                                  0.1 + progress * self.initial_betas['primitive'])
+        self.beta_primitive = self.initial_betas['primitive']
 
         # スキルは中期で学習
-        if progress > 0.3:
-            skill_progress = (progress - 0.3) / 0.4
-            self.beta_skill = min(self.initial_betas['skill'],
-                                  0.1 + skill_progress * self.initial_betas['skill'])
+        if progress > 0.1:
+            self.beta_skill = self.initial_betas['skill']
 
         # スタイルは後期で学習（個人差は最後に）
-        if progress > 0.6:
-            style_progress = (progress - 0.6) / 0.4
-            self.beta_style = min(self.initial_betas['style'],
-                                  0.1 + style_progress * self.initial_betas['style'])
+        if progress > 0.15:
+            self.beta_style = self.initial_betas['style']
 
     def save_model(self, filepath: str):
         """モデル保存"""
