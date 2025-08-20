@@ -1,0 +1,17 @@
+{
+  "z_style": {
+    "silhouette_score": 0.05775429680943489,
+    "adjusted_rand_index": 0.0005267087875999505,
+    "n_clusters": 6
+  },
+  "z_skill": {
+    "silhouette_score": 0.02683856524527073,
+    "adjusted_rand_index": -0.008308054152917646,
+    "n_clusters": 6
+  },
+  "z_primitive": {
+    "silhouette_score": 0.014202386140823364,
+    "adjusted_rand_index": 0.0016444410185256558,
+    "n_clusters": 6
+  }
+}

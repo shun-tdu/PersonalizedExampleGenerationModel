@@ -147,6 +147,29 @@ def classify_by_median_split(skill_scores: pd.Series) -> pd.Series:
     median_score = skill_scores.median()
     return (skill_scores > median_score).astype(int).rename('is_expert')
 
+def add_diffs(group):
+    """各種物理量を差分表示変換"""
+    pos_data = group[['HandlePosX', 'HandlePosY']].values
+    pos_diffs = np.diff(pos_data, axis=0, prepend=pos_data[0:1])
+
+    vel_data = group[['HandleVelX', 'HandleVelY']].values
+    vel_diffs = np.diff(vel_data, axis=0, prepend=vel_data[0:1])
+
+    acc_data = group[['HandleAccX', 'HandleAccY']].values
+    acc_diffs = np.diff(acc_data, axis=0, prepend=acc_data[0:1])
+
+    group = group.copy()
+    group['HandlePosDiffX'] = pos_diffs[:, 0]
+    group['HandlePosDiffY'] = pos_diffs[:, 1]
+
+    group['HandleVelDiffX'] = vel_diffs[:, 0]
+    group['HandleVelDiffY'] = vel_diffs[:, 1]
+
+    group['HandleAccDiffX'] = acc_diffs[:, 0]
+    group['HandleAccDiffY'] = acc_diffs[:, 1]
+
+    return group
+
 
 def prepare_scaler(feature_df:pd.DataFrame):
     """特徴量タイプごとに個別スケーリング"""
@@ -157,13 +180,17 @@ def prepare_scaler(feature_df:pd.DataFrame):
 
     scalers = {}
 
-
-    # 特徴量をタイプ別に分類
     # 位置
     position_cols = ['HandlePosX', 'HandlePosY']
     if all(col in available_cols for col in position_cols):
         scalers['position'] = StandardScaler().fit(feature_df[position_cols])
         print(f"Position scaler created:{position_cols}")
+
+    # 位置差分
+    position_diff_cols = ['HandlePosDiffX', 'HandlePosDiffY']
+    if all(col in available_cols for col in position_diff_cols):
+        scalers['position_diff'] = StandardScaler().fit(feature_df[position_diff_cols])
+        print(f"Position diff scaler created:{position_diff_cols}")
 
     # 速度
     velocity_cols = ['HandleVelX', 'HandleVelY']
@@ -171,11 +198,23 @@ def prepare_scaler(feature_df:pd.DataFrame):
         scalers['velocity'] = StandardScaler().fit(feature_df[velocity_cols])
         print(f"Velocity scaler created:{velocity_cols}")
 
+    # 速度差分
+    velocity_diff_cols = ['HandleVelDiffX', 'HandleVelDiffY']
+    if all(col in available_cols for col in velocity_diff_cols):
+        scalers['velocity_diff'] = StandardScaler().fit(feature_df[velocity_diff_cols])
+        print(f"Velocity diff scaler created:{velocity_diff_cols}")
+
     # 加速度
     acceleration_cols = ['HandleAccX', 'HandleAccY']
     if all(col in available_cols for col in acceleration_cols):
         scalers['acceleration'] = StandardScaler().fit(feature_df[acceleration_cols])
         print(f"acceleration scaler created:{acceleration_cols}")
+
+    # 加速度差分
+    acceleration_diff_cols = ['HandleAccDiffX', 'HandleAccDiffY']
+    if all(col in available_cols for col in acceleration_diff_cols):
+        scalers['acceleration_diff'] = StandardScaler().fit(feature_df[acceleration_diff_cols])
+        print(f"acceleration diff scaler created:{acceleration_diff_cols}")
 
      # 将来的なジャーク（オプション）
     jerk_cols = ['JerkX', 'JerkY']
@@ -190,7 +229,7 @@ def main():
     TARGET_SEQ_LEN = 100
     RAWDATA_DIR = '../../../data/RawDatas/'
     PROCESSED_DATA_DIR = 'PredictiveLatentSpaceNavigationModel/DataPreprocess/ForGeneralizedCoordinate'
-    os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)  # ディレクトリがなければ作成
+    os.makedirs(PROCESSED_DATA_DIR, exist_ok=True)
 
     # --- データ処理の実行 ---
     # 1. 生データ読み込み
@@ -229,18 +268,23 @@ def main():
 
     print(f"訓練データ被験者数: {len(train_subjects)}, テストデータ被験者数: {len(test_subjects)}")
 
+    # 8. 差分表示の計算
+    train_df = train_df.groupby(['subject_id', 'trial_num'], group_keys=False).apply(add_diffs)
+    test_df = test_df.groupby(['subject_id', 'trial_num'], group_keys=False).apply(add_diffs)
+    print("差分表示の計算完了 ✅ ")
+
     # 8. スケーラの用意
     feature_cols = [
-        'HandlePosX', 'HandlePosY',
-        'HandleVelX', 'HandleVelY',
-        'HandleAccX', 'HandleAccY',
+        'HandlePosDiffX', 'HandlePosDiffY',
+        'HandleVelDiffX', 'HandleVelDiffY',
+        'HandleAccDiffX', 'HandleAccDiffY',
     ]
 
     scalers = prepare_scaler(train_df[feature_cols])
     print("StandardScalerを訓練データで学習しました。✅")
 
     # 9. スケーラと特徴量定義を保存
-    scaler_path = os.path.join(PROCESSED_DATA_DIR, 'scaler.joblib')
+    scaler_path = os.path.join(PROCESSED_DATA_DIR, 'scalers.joblib')
     feature_config_path = os.path.join(PROCESSED_DATA_DIR, 'feature_config.joblib')
 
     joblib.dump(scalers, scaler_path)

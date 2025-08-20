@@ -225,6 +225,9 @@ class GeneralizedCoordinateDataset(Dataset):
 
         # データを試行（trial）ごとにグループ化してリストに変換
         self.trials = list(df.groupby(['subject_id', 'trial_num']))
+        print(f"Dataset initialized with {len(self.trials)} trials")
+        print(f"Feature columns: {self.feature_cols}")
+        print(f"Available scalers: {list(self.scalers.keys())}")
 
     def __len__(self) -> int:
         return len(self.trials)
@@ -242,7 +245,7 @@ class GeneralizedCoordinateDataset(Dataset):
         features = trial_df[self.feature_cols].values
 
         # 3. 物理量別にスケーリングを適用
-        scaled_features = apply_physics_based_scaling(features, self.scalers)
+        scaled_features = apply_physics_based_scaling(features, self.scalers, self.feature_cols)
 
         # 4. 固定長化
         if len(scaled_features) > self.seq_len:
@@ -266,19 +269,27 @@ class GeneralizedCoordinateDataset(Dataset):
 
 def create_dataloaders(processed_data_dir: str, seq_len: int, batch_size: int, random_seed: int = 42) -> tuple:
     """データローダーを作成"""
-    # データ読み込み
-    train_val_df = pd.read_parquet(os.path.join(processed_data_dir, 'train_data.parquet'))
-    test_df = pd.read_parquet(os.path.join(processed_data_dir, 'test_data.parquet'))
+    # 必要なファイルのパス
+    train_data_path = os.path.join(processed_data_dir, 'train_data.parquet')
+    test_data_path = os.path.join(processed_data_dir, 'test_data.parquet')
+    scalers_path = os.path.join(processed_data_dir, 'scalers.joblib')
+    feature_config_path = os.path.join(processed_data_dir, 'feature_config.joblib')
 
-    # スケーラーと設定読み込み
-    scalers = joblib.load(os.path.join(processed_data_dir, 'scalers.joblib'))
-    feature_config = joblib.load(os.path.join(processed_data_dir,'feature_config.joblib'))
-    feature_cols = feature_config['feature_cols']
+    try:
+        # データとスケーラーを読み込み
+        train_val_df = pd.read_parquet(train_data_path)
+        test_df = pd.read_parquet(test_data_path)
+        scalers = joblib.load(scalers_path)
+        feature_config = joblib.load(feature_config_path)
+        feature_cols = feature_config['feature_cols']
 
-    print(f"Loaded scalers: {list(scalers.keys())}")
-    print(f"Feature columns: {feature_cols}")
+        print(f"Loaded scalers: {list(scalers.keys())}")
+        print(f"Feature columns: {feature_cols}")
 
-    # データセット作成
+    except FileNotFoundError as e:
+        print(f"エラー: 必要なファイルが見つかりません。-> {e}")
+        return None, None, None, None
+
     # 学習データと検証データに分割 ---
     train_val_subject_ids = train_val_df['subject_id'].unique()
 
@@ -311,25 +322,53 @@ def create_dataloaders(processed_data_dir: str, seq_len: int, batch_size: int, r
 
     return train_loader, val_loader, test_loader, test_df
 
-def apply_physics_based_scaling(data: np.ndarray, scalers: dict) -> np.ndarray:
+def apply_physics_based_scaling(data: np.ndarray, scalers: dict, feature_cols: list = None) -> np.ndarray:
     """物理量別スケーリングを適用"""
 
-    if data.shape[1] != 6:
-        raise ValueError(f"Expected 6 features, got {data.shape[1]}")
+    # デフォルトの特徴量順序
+    if feature_cols is None:
+        feature_cols = ['HandlePosDiffX', 'HandlePosDiffY', 'HandleVelX', 'HandleVelY',
+                        'HandleAccX', 'HandleAccY']
+
+    if data.shape[1] != len(feature_cols):
+        raise ValueError(f"Expected {len(feature_cols)} features, got {data.shape[1]}")
 
     scaled_data = np.zeros_like(data)
 
-    # 位置 (0:2)
-    if 'position' in scalers:
-        scaled_data[:, 0:2] = scalers['position'].transform(data[:, 0:2])
+    # 特徴量タイプのマッピング
+    feature_type_map = {
+        'HandlePosDiffX': 'position_diff',
+        'HandlePosDiffY': 'position_diff',
+        'HandleVelDiffX': 'velocity_diff',
+        'HandleVelDiffY': 'velocity_diff',
+        'HandleAccDiffX': 'acceleration_diff',
+        'HandleAccDiffY': 'acceleration_diff',
+        'HandlePosX': 'position',
+        'HandlePosY': 'position',
+        'HandleVelX': 'velocity',
+        'HandleVelY': 'velocity',
+        'HandleAccX': 'acceleration',
+        'HandleAccY': 'acceleration',
+        'JerkX': 'jerk',
+        'JerkY': 'jerk'
+    }
 
-    # 速度 (2:4)
-    if 'velocity' in scalers:
-        scaled_data[:, 2:4] = scalers['velocity'].transform(data[:, 2:4])
+    # 各特徴量タイプごとにグループ化
+    type_indices = {}
+    for i, col in enumerate(feature_cols):
+        feature_type = feature_type_map.get(col, 'unknown')
+        if feature_type not in type_indices:
+            type_indices[feature_type] = []
+        type_indices[feature_type].append(i)
 
-    # 加速度 (4:6)
-    if 'acceleration' in scalers:
-        scaled_data[:, 4:6] = scalers['acceleration'].transform(data[:, 4:6])
+    # タイプごとにスケーリング適用
+    for feature_type, indices in type_indices.items():
+        if feature_type in scalers:
+            scaled_data[:, indices] = scalers[feature_type].transform(data[:, indices])
+            # print(f"Applied {feature_type} scaling to indices {indices}")
+        else:
+            print(f"Warning: No scaler found for {feature_type}, using original data")
+            scaled_data[:, indices] = data[:, indices]
 
     return scaled_data
 

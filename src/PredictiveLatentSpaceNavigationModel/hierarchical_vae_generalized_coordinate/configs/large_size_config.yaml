@@ -4,7 +4,7 @@ data:
 model:
   input_dim: 6
   seq_len: 100
-  hidden_dim: 256
+  hidden_dim: 512
   primitive_latent_dim: 64
   skill_latent_dim: 32
   style_latent_dim: 16
