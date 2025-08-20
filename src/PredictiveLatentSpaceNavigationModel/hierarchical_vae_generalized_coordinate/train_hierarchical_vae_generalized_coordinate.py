@@ -591,6 +591,248 @@ def run_skill_axis_analysis(model, test_loader, test_df, device):
     return analyzer
 
 
+def simple_vae_diagnosis(model, test_loader, device, output_dir, experiment_id):
+    """シンプルで確実に動作するVAE診断"""
+    print("=== シンプルVAE診断開始 ===")
+
+    # 出力ディレクトリ作成
+    os.makedirs(output_dir, exist_ok=True)
+
+    model.eval()
+    all_z_style = []
+    all_z_skill = []
+    all_subject_ids = []
+
+    print("データ収集中...")
+    with torch.no_grad():
+        for batch_idx, (trajectories, subject_ids, is_expert) in enumerate(test_loader):
+            trajectories = trajectories.to(device)
+
+            try:
+                # エンコード
+                encoded = model.encode_hierarchically(trajectories)
+                all_z_style.append(encoded['z_style'].cpu().numpy())
+                all_z_skill.append(encoded['z_skill'].cpu().numpy())
+                all_subject_ids.extend(subject_ids)
+
+                if batch_idx == 0:
+                    print(f"バッチ形状確認: z_style={encoded['z_style'].shape}, z_skill={encoded['z_skill'].shape}")
+
+            except Exception as e:
+                print(f"バッチ {batch_idx} でエラー: {e}")
+                continue
+
+    if not all_z_style:
+        print("❌ データ収集に失敗しました")
+        return None
+
+    # データ統合
+    z_style = np.vstack(all_z_style)
+    z_skill = np.vstack(all_z_skill)
+
+    print(f"収集完了:")
+    print(f"  z_style: {z_style.shape}")
+    print(f"  z_skill: {z_skill.shape}")
+    print(f"  被験者ID数: {len(set(all_subject_ids))}")
+    print(f"  総サンプル数: {len(all_subject_ids)}")
+
+    # 被験者IDを数値ラベルに変換
+    unique_subjects = sorted(list(set(all_subject_ids)))
+    subject_to_label = {subj: i for i, subj in enumerate(unique_subjects)}
+    subject_labels = [subject_to_label[subj] for subj in all_subject_ids]
+
+    print(f"被験者: {unique_subjects}")
+
+    # === 基本統計 ===
+    print("\n=== 基本統計 ===")
+    style_mean = np.mean(z_style, axis=0)
+    style_std = np.std(z_style, axis=0)
+    style_var_total = np.var(z_style.flatten())
+
+    print(f"スタイル潜在変数:")
+    print(f"  平均の絶対値: {np.mean(np.abs(style_mean)):.4f}")
+    print(f"  標準偏差の平均: {np.mean(style_std):.4f}")
+    print(f"  全体分散: {style_var_total:.4f}")
+    print(f"  最大値: {np.max(z_style):.4f}")
+    print(f"  最小値: {np.min(z_style):.4f}")
+
+    # === 被験者間・被験者内分散分析 ===
+    print("\n=== 分散分析 ===")
+
+    # 被験者ごとの平均計算
+    subject_means = []
+    within_vars = []
+
+    for subj in unique_subjects:
+        mask = np.array(all_subject_ids) == subj
+        subject_data = z_style[mask]
+
+        subject_mean = np.mean(subject_data, axis=0)
+        subject_means.append(subject_mean)
+
+        if len(subject_data) > 1:
+            within_var = np.var(subject_data, axis=0).mean()
+            within_vars.append(within_var)
+            print(f"  {subj}: 試行数={len(subject_data)}, 内分散={within_var:.4f}")
+
+    subject_means = np.array(subject_means)
+    between_var = np.var(subject_means, axis=0).mean()
+    avg_within_var = np.mean(within_vars) if within_vars else 0.01
+
+    separation_ratio = between_var / avg_within_var
+
+    print(f"\n分散分解:")
+    print(f"  被験者間分散: {between_var:.4f}")
+    print(f"  平均被験者内分散: {avg_within_var:.4f}")
+    print(f"  分離比 (between/within): {separation_ratio:.4f}")
+
+    # 判定
+    if separation_ratio < 1.0:
+        print("  ❌ 被験者間分離が不十分")
+    elif separation_ratio < 1.5:
+        print("  ⚠️  被験者間分離が弱い")
+    else:
+        print("  ✅ 被験者間分離が良好")
+
+    # === 可視化 ===
+    print("\n=== 可視化作成中 ===")
+
+    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+    # 1. スタイル空間のPCA
+    try:
+        pca = PCA(n_components=min(2, z_style.shape[1]))
+        z_style_pca = pca.fit_transform(z_style)
+
+        scatter = axes[0, 0].scatter(z_style_pca[:, 0], z_style_pca[:, 1],
+                                     c=subject_labels, cmap='tab10', alpha=0.7, s=20)
+        axes[0, 0].set_title(f'Style PCA\n(Contribution rate: {pca.explained_variance_ratio_.sum():.3f})')
+        axes[0, 0].set_xlabel('PC1')
+        axes[0, 0].set_ylabel('PC2')
+
+        # 被験者ごとの重心をプロット
+        for i, subj in enumerate(unique_subjects):
+            mask = np.array(subject_labels) == i
+            if np.any(mask):
+                center = np.mean(z_style_pca[mask], axis=0)
+                axes[0, 0].scatter(center[0], center[1], c='red', s=100, marker='x')
+                axes[0, 0].annotate(subj, center, xytext=(5, 5), textcoords='offset points')
+
+        plt.colorbar(scatter, ax=axes[0, 0])
+
+    except Exception as e:
+        axes[0, 0].text(0.5, 0.5, f'PCA Error: {str(e)}',
+                        transform=axes[0, 0].transAxes, ha='center')
+        print(f"PCA エラー: {e}")
+
+    # 2. スタイル空間のt-SNE（データが十分な場合のみ）
+    if len(z_style) >= 30:
+        try:
+            perplexity = min(30, len(z_style) // 4)
+            tsne = TSNE(n_components=2, perplexity=perplexity, random_state=42, n_iter=300)
+            z_style_tsne = tsne.fit_transform(z_style)
+
+            scatter = axes[0, 1].scatter(z_style_tsne[:, 0], z_style_tsne[:, 1],
+                                         c=subject_labels, cmap='tab10', alpha=0.7, s=20)
+            axes[0, 1].set_title('Style t-SNE')
+            plt.colorbar(scatter, ax=axes[0, 1])
+
+        except Exception as e:
+            axes[0, 1].text(0.5, 0.5, f't-SNE Error: {str(e)}',
+                            transform=axes[0, 1].transAxes, ha='center')
+            print(f"t-SNE Error: {e}")
+    else:
+        axes[0, 1].text(0.5, 0.5, 'Insufficient number of samples\n(t-SNE)',
+                        transform=axes[0, 1].transAxes, ha='center')
+
+    # 3. 次元別分散
+    dim_vars = np.var(z_style, axis=0)
+    axes[0, 2].bar(range(len(dim_vars)), dim_vars)
+    axes[0, 2].set_title('Style dim variance')
+    axes[0, 2].set_xlabel('dim')
+    axes[0, 2].set_ylabel('variance')
+
+    # 4. 被験者別分布（最初の2次元）
+    for i, subj in enumerate(unique_subjects):
+        mask = np.array(subject_labels) == i
+        if np.any(mask):
+            subject_data = z_style[mask]
+            axes[1, 0].scatter(subject_data[:, 0], subject_data[:, 1],
+                               label=f'{subj}', alpha=0.6, s=20)
+
+    axes[1, 0].set_title('Style Space (dim0 vs 1)')
+    axes[1, 0].set_xlabel('Style dim 0')
+    axes[1, 0].set_ylabel('Style dim 1')
+    axes[1, 0].legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+
+    # 5. 被験者間距離行列
+    distance_matrix = np.zeros((len(unique_subjects), len(unique_subjects)))
+    for i, subj_i in enumerate(unique_subjects):
+        for j, subj_j in enumerate(unique_subjects):
+            mean_i = subject_means[i]
+            mean_j = subject_means[j]
+            distance_matrix[i, j] = np.linalg.norm(mean_i - mean_j)
+
+    im = axes[1, 1].imshow(distance_matrix, cmap='viridis')
+    axes[1, 1].set_title('Inter-subject distance matrix')
+    axes[1, 1].set_xticks(range(len(unique_subjects)))
+    axes[1, 1].set_yticks(range(len(unique_subjects)))
+    axes[1, 1].set_xticklabels(unique_subjects, rotation=45)
+    axes[1, 1].set_yticklabels(unique_subjects)
+    plt.colorbar(im, ax=axes[1, 1])
+
+    # 6. 活性化度分布
+    activation_magnitude = np.linalg.norm(z_style, axis=1)
+    subject_activations = [activation_magnitude[np.array(subject_labels) == i]
+                           for i in range(len(unique_subjects))]
+
+    bp = axes[1, 2].boxplot(subject_activations, labels=unique_subjects)
+    axes[1, 2].set_title('Activation level by subject')
+    axes[1, 2].set_xlabel('subjects')
+    axes[1, 2].set_ylabel('||z_style||')
+    axes[1, 2].tick_params(axis='x', rotation=45)
+
+    plt.tight_layout()
+
+    # 保存
+    save_path = os.path.join(output_dir, f'vae_simple_diagnosis_exp{experiment_id}.png')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"可視化保存: {save_path}")
+
+    # === 結果サマリー ===
+    print("\n" + "=" * 50)
+    print("診断結果サマリー")
+    print("=" * 50)
+    print(f"✅ データ収集: 成功")
+    print(f"📊 サンプル数: {len(z_style)}")
+    print(f"👥 被験者数: {len(unique_subjects)}")
+    print(f"📈 分離比: {separation_ratio:.3f}")
+    print(f"🎯 スタイル活性化: {np.mean(style_std):.3f}")
+    print(f"📉 全体分散: {style_var_total:.3f}")
+
+    if separation_ratio < 1.0:
+        print("\n🚨 問題: 被験者間分離が不十分")
+        print("   💡 推奨: beta_styleを0.05以下に下げる")
+        print("   💡 推奨: style_learning_startを0.15に早める")
+
+    if np.mean(style_std) < 0.2:
+        print("\n⚠️  問題: スタイル潜在変数の活性化不足")
+        print("   💡 推奨: beta_styleをさらに下げる")
+        print("   💡 推奨: 学習率を上げる")
+
+    return {
+        'separation_ratio': separation_ratio,
+        'style_activation': np.mean(style_std),
+        'style_variance': style_var_total,
+        'subject_means': subject_means,
+        'distance_matrix': distance_matrix,
+        'z_style': z_style,
+        'z_skill': z_skill,
+        'subject_labels': subject_labels,
+        'unique_subjects': unique_subjects
+    }
+
 def generate_axis_based_exemplars(model, analyzer, test_loader, device, save_path):
     """軸ベース個人最適化お手本生成"""
     print("=== 軸ベース個人最適化お手本生成 ===")
@@ -780,15 +1022,20 @@ def run_hierarchical_evaluation_v2(model, test_loader, test_df, output_dir, devi
     exemplar_v2_path = os.path.join(output_dir, 'plots', f'axis_based_exemplars_exp{experiment_id}.png')
     generate_axis_based_exemplars(model, analyzer, test_loader, device, exemplar_v2_path)
 
-    # 5. 結果統合
+    # 5. 潜在空間の可視化
+    latent_space_result_path = os.path.join(output_dir, 'latent_space')
+    latent_space_result = simple_vae_diagnosis(model, test_loader, device, latent_space_result_path, experiment_id)
+
+    # 6. 結果統合
     eval_results.update({
         'skill_axis_analysis_completed': True,
         'axis_based_exemplars_path': exemplar_v2_path,
         'skill_improvement_directions_available': list(analyzer.skill_improvement_directions.keys()),
-        'best_skill_correlations': {k: v['correlation'] for k, v in analyzer.performance_correlations.items()}
+        'best_skill_correlations': {k: v['correlation'] for k, v in analyzer.performance_correlations.items()},
+        'latent_space_analysis': latent_space_result
     })
 
-    # 6. 結果保存
+    # 7. 結果保存
     eval_results_path = os.path.join(output_dir, 'results', f'hierarchical_evaluation_v2_exp{experiment_id}.json')
     os.makedirs(os.path.dirname(eval_results_path), exist_ok=True)
 

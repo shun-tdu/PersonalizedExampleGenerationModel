@@ -207,9 +207,10 @@ class PredictionErrorModule(nn.Module):
 
     def forward(self, prediction, target):
         """予測誤差を精度で重み付けして計算"""
+        precision = torch.clamp(self.precision, min=1e-6)
         error = target - prediction
         weighted_error = self.precision * (error ** 2)
-        return weighted_error.sum(dim=-1)
+        return torch.clamp(weighted_error.sum(dim=-1), min=0.0)
 
 
 class MotorPrimitiveEncoder(nn.Module):
@@ -562,9 +563,12 @@ class HierarchicalVAEGeneralizedCoordinate(nn.Module):
         # recon_loss = F.mse_loss(reconstructed_x, x, reduction='sum')
 
         # KL損失（各レベルでの複雑性コスト）
-        kl_primitive = -0.5 * torch.mean(torch.sum(1 + logvar1 - mu1.pow(2) - logvar1.exp(), dim=1))
-        kl_skill = -0.5 * torch.mean(torch.sum(1 + logvar2 - mu2.pow(2) - logvar2.exp(), dim=1))
-        kl_style = -0.5 * torch.mean(torch.sum(1 + logvar3 - mu3.pow(2) - logvar3.exp(), dim=1))
+        kl_primitive = self.kl_divergence(mu1, logvar1)
+        kl_skill = self.kl_divergence(mu2, logvar2)
+        kl_style = self.kl_divergence(mu3, logvar3)
+        # kl_primitive = -0.5 * torch.mean(torch.sum(1 + logvar1 - mu1.pow(2) - logvar1.exp(), dim=1))
+        # kl_skill = -0.5 * torch.mean(torch.sum(1 + logvar2 - mu2.pow(2) - logvar2.exp(), dim=1))
+        # kl_style = -0.5 * torch.mean(torch.sum(1 + logvar3 - mu3.pow(2) - logvar3.exp(), dim=1))
         # kl_primitive = -0.5 * torch.sum(1 + logvar1 - mu1.pow(2) - logvar1.exp())
         # kl_skill = -0.5 * torch.sum(1 + logvar2 - mu2.pow(2) - logvar2.exp())
         # kl_style = -0.5 * torch.sum(1 + logvar3 - mu3.pow(2) - logvar3.exp())
@@ -604,6 +608,14 @@ class HierarchicalVAEGeneralizedCoordinate(nn.Module):
     def decode(self, z_style, z_skill):
         """評価用のデコード関数"""
         return self.decode_hierarchically(z_style, z_skill)
+
+    def kl_divergence(self, mu, logvar):
+        logvar = torch.clamp(logvar,min=-10,max=10)
+
+        kl = 0.5 * torch.sum(mu.pow(2) + torch.exp(logvar) - 1 -logvar, dim=1)
+
+        kl = torch.clamp(kl, min=0.0)
+        return torch.mean(kl)
 
     def analyze_and_cache_skill_axes(self, test_loader, test_df, device):
         """スキル軸分析の実装（学習コードと互換性確保）"""
