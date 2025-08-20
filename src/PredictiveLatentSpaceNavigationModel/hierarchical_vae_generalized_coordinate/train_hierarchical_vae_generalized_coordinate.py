@@ -1236,11 +1236,12 @@ def train_hierarchical_model_v2(config_path: str, experiment_id: int, db_path: s
             }
 
             progress_bar = tqdm(train_loader, desc=f'Epoch {epoch + 1}/{config["training"]["num_epochs"]} [Train]')
-            for trajectories, subject_id, expertise in progress_bar:
+            for trajectories, subject_ids, expertise in progress_bar:
                 trajectories = trajectories.to(device)
+                subject_ids = subject_ids.to(device)
 
                 optimizer.zero_grad()
-                outputs = model(trajectories)
+                outputs = model(trajectories, subject_ids)
 
                 loss = outputs['total_loss']
                 loss.backward()

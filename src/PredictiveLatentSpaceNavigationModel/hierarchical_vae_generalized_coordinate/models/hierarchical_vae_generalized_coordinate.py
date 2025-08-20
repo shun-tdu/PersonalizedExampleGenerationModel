@@ -198,9 +198,123 @@ class SkillAxisAnalyzer:
         return direction_info['direction']
 
 
+class ContrastiveLoss(nn.Module):
+    """対照学習損失"""
+    def __init__(self, temperature=0.1, margin=1.0):
+        super().__init__()
+        self.temperature = temperature
+        self.margin = margin
+
+    def forward(self, z_style, subject_ids):
+        batch_size = z_style.shape[0]
+
+        # 被験者IDを数値にマッピング
+        unique_subjects = list(set(subject_ids))
+        if len(unique_subjects) < 2:
+            return torch.tensor(0.0, device=z_style.device)
+
+        subject_to_idx = {subj: i for i, subj in enumerate(unique_subjects)}
+        subject_labels = torch.tensor([subject_to_idx[subj] for subj in subject_ids],
+                                      device=z_style.device)
+
+        # L2正則化
+        z_style_norm = F.normalize(z_style, p=2, dim=1)
+
+        # コサイン類似度 [batch, batch]
+        similarity_matrix = torch.mm(z_style_norm, z_style_norm.t()) / self.temperature
+
+        # 正例、負例マスク
+        labels_eq = subject_labels.unsqueeze(0) == subject_labels.unsqueeze(1) # [batch, batch]
+        positive_mask = labels_eq.float()
+        negative_mask = (~labels_eq).float()
+
+        # 自分自身を除外
+        mask = torch.eye(batch_size, device=z_style.device).bool()
+        positive_mask = positive_mask.masked_fill(mask, 0)
+        negative_mask = negative_mask.masked_fill(mask, 0)
+
+        # 正例、負例の数をチェック
+        num_positives = positive_mask.sum(dim=1)
+        num_negatives = negative_mask.sum(dim=1)
+
+        # InfoNCE風の損失計算
+        exp_sim = torch.exp(similarity_matrix)
+
+        # 各サンプルについて
+        losses = []
+        for i in range(batch_size):
+            if num_positives[i] > 0 and num_negatives[i] > 0:
+                # 正例の平均
+                pos_exp = (exp_sim[i] * positive_mask[i]).sum() / num_positives[i]
+                # 負例の合計
+                neg_exp = (exp_sim[i] * negative_mask[i]).sum()
+
+                # InfoNCE損失
+                loss = -torch.log(pos_exp / (pos_exp + neg_exp + 1e-8))
+                losses.append(loss)
+
+        if len(losses) == 0:
+            return torch.tensor(0.0, device=z_style.device)
+
+        return torch.stack(losses).mean()
+
+class TripletContrastiveLoss(nn.Module):
+    """トリプレット損失 より強力な被験者分離"""
+    def __init__(self, margin=1.0):
+        super().__init__()
+        self.margin = margin
+
+    def forward(self, z_style, subject_ids):
+        """トリプレット損失による被験者分離"""
+        batch_size = z_style.shape[0]
+
+        unique_subjects =list(set(subject_ids))
+        if len(unique_subjects) < 2:
+            return torch.tensor(0.0, device=z_style.device)
+
+        subject_to_idx = {subj: i for i, subj in enumerate(unique_subjects)}
+        subject_labels = torch.tensor([subject_to_idx[subj] for subj in subject_ids],
+                                      device=z_style.device)
+
+        # 距離行列計算
+        distances = torch.cdist(z_style, z_style, p=2)
+
+        losses = []
+
+        for i in range(batch_size):
+            # アンカー
+            anchor_label = subject_labels[i]
+
+            # 正例
+            positive_mask = (subject_labels == anchor_label) &(torch.arange(batch_size, device=z_style.device) != i)
+            if positive_mask.sum() == 0:
+                continue
+
+            # 負例
+            negative_mask = subject_labels != anchor_label
+            if negative_mask.sum() == 0:
+                continue
+
+            # 最も遠い正例と最も近い負例を選択
+            pos_distance = distances[i][positive_mask]
+            neg_distance = distances[i][negative_mask]
+
+            hardest_positive = pos_distance.max()   # 最も遠い正例
+            hardest_negative = neg_distance.min()   # 最も近い負例
+
+            # トリプレット損失
+            loss = F.relu(hardest_positive - hardest_negative + self.margin)
+            losses.append(loss)
+
+        if len(losses) == 0:
+            return torch.tensor(0.0, device=z_style.device)
+
+        return torch.stack(losses).mean()
+
+
+
 class PredictionErrorModule(nn.Module):
     """予測誤差を計算するモジュール(自由エネルギー原理)"""
-
     def __init__(self, dim: int):
         super().__init__()
         self.precision = nn.Parameter(torch.ones(dim))  # 精度パラメータ
@@ -468,6 +582,9 @@ class HierarchicalVAEGeneralizedCoordinate(nn.Module):
         self.beta_skill = beta_skill
         self.beta_style = beta_style
         self.precision_lr = precision_lr
+        self.contrastive_weight = 0.1
+        use_triple_loss = False
+        contrastive_temperature = 0.1
 
         # エンコーダ(ボトムアップ)
         self.primitive_encoder = MotorPrimitiveEncoder(input_dim, hidden_dim, primitive_latent_dim)
@@ -479,6 +596,12 @@ class HierarchicalVAEGeneralizedCoordinate(nn.Module):
         self.skill_decoder = SkillDecoder(skill_latent_dim, hidden_dim, primitive_latent_dim)
         self.primitive_decoder = MotorDecoder(primitive_latent_dim, hidden_dim, input_dim,
                                               seq_len)  # 修正: motor_decoder → primitive_decoder
+
+        # 対照学習モジュール
+        if use_triple_loss:
+            self.contrastive_loss_fn = TripletContrastiveLoss(margin=1.0)
+        else:
+            self.contrastive_loss_fn = ContrastiveLoss(temperature=contrastive_temperature)
 
         # スキル軸分析器
         self.skill_axis_analyzer = SkillAxisAnalyzer()
@@ -527,7 +650,7 @@ class HierarchicalVAEGeneralizedCoordinate(nn.Module):
 
         return trajectory
 
-    def forward(self, x):
+    def forward(self, x, subject_ids=None):
         """フォワードパス - 自由エネルギー最小化"""
         batch_size = x.shape[0]
 
@@ -574,15 +697,21 @@ class HierarchicalVAEGeneralizedCoordinate(nn.Module):
         # kl_style = -0.5 * torch.sum(1 + logvar3 - mu3.pow(2) - logvar3.exp())
 
         # 予測誤差項
-        prediction_error = (pred_error1.mean() + pred_error2.mean() + pred_error3.mean())/3.0
+        prediction_error = (pred_error1.mean() + pred_error2.mean() + pred_error3.mean()) / 3.0
         # prediction_error = pred_error1.sum() + pred_error2.sum() + pred_error3.sum()
 
+        # 対照学習損失
+        contrastive_loss = torch.tensor(0.0, device=x.device)
+        if subject_ids is not None and len(set(subject_ids)) > 1:
+            # 被験者が2人異常いる場合のみ対照学習を適用
+            contrastive_loss = self.contrastive_loss_fn(z3, subject_ids)
 
-        # 自由エネルギー = 精度項 + 複雑性項
+        # 自由エネルギー = 精度項 + 複雑性項 + 予測誤差項 + 対照学習項
         free_energy = (recon_loss + prediction_error +
                        self.beta_primitive * kl_primitive +
                        self.beta_skill * kl_skill +
-                       self.beta_style * kl_style)
+                       self.beta_style * kl_style +
+                       self.contrastive_weight * contrastive_loss)
 
         return {
             'total_loss': free_energy,
