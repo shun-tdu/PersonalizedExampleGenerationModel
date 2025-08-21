@@ -519,7 +519,7 @@ def run_skill_axis_analysis(model, test_loader, test_df, device):
     with torch.no_grad():
         for trajectories, subject_ids, is_expert in test_loader:
             trajectories = trajectories.to(device)
-            encoded = model.encode_hierarchically(trajectories)
+            encoded = model.encode(trajectories)
             all_z_skill.append(encoded['z_skill'].cpu().numpy())
             all_subject_ids.extend(subject_ids)
 
@@ -567,7 +567,7 @@ def simple_vae_diagnosis(model, test_loader, device, output_dir, experiment_id):
 
             try:
                 # エンコード
-                encoded = model.encode_hierarchically(trajectories)
+                encoded = model.encode(trajectories)
                 all_z_style.append(encoded['z_style'].cpu().numpy())
                 all_z_skill.append(encoded['z_skill'].cpu().numpy())
                 all_subject_ids.extend(subject_ids)
@@ -800,7 +800,7 @@ def generate_axis_based_exemplars(model, analyzer, test_loader, device, save_pat
     with torch.no_grad():
         for trajectories, subject_ids, is_expert in test_loader:
             trajectories = trajectories.to(device)
-            encoded = model.encode_hierarchically(trajectories)
+            encoded = model.encode(trajectories)
 
             # 最初のサンプルを代表として使用
             z_style = encoded['z_style'][[0]]
@@ -815,7 +815,7 @@ def generate_axis_based_exemplars(model, analyzer, test_loader, device, save_pat
 
     with torch.no_grad():
         # 現在レベル
-        current_exemplar = model.decode_hierarchically(z_style, current_skill)
+        current_exemplar = model.decode(z_style, current_skill)
         generated_exemplars['current'] = current_exemplar.cpu().numpy().squeeze()
 
         # 各指標での改善
@@ -829,7 +829,7 @@ def generate_axis_based_exemplars(model, analyzer, test_loader, device, save_pat
                 ).unsqueeze(0)
 
                 enhanced_skill = current_skill + enhancement_factor * improvement_direction
-                enhanced_exemplar = model.decode_hierarchically(z_style, enhanced_skill)
+                enhanced_exemplar = model.decode(z_style, enhanced_skill)
                 generated_exemplars[target] = enhanced_exemplar.cpu().numpy().squeeze()
 
             except Exception as e:
@@ -837,7 +837,7 @@ def generate_axis_based_exemplars(model, analyzer, test_loader, device, save_pat
                 # フォールバック: ランダム改善
                 skill_noise = torch.randn_like(current_skill) * 0.1
                 enhanced_skill = current_skill + enhancement_factor * skill_noise
-                enhanced_exemplar = model.decode_hierarchically(z_style, enhanced_skill)
+                enhanced_exemplar = model.decode(z_style, enhanced_skill)
                 generated_exemplars[target] = enhanced_exemplar.cpu().numpy().squeeze()
 
     # 可視化

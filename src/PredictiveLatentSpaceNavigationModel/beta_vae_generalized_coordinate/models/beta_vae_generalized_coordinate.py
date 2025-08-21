@@ -74,6 +74,42 @@ class Encoder(nn.Module):
 
         return mu_style, logvar_style, mu_skill, logvar_skill
 
+
+class SimpleDecoder(nn.Module):
+    """自己回帰を避けたシンプルなDecoder"""
+
+    def __init__(self, output_dim, hidden_dim, style_latent_dim, skill_latent_dim, seq_len, n_layers=2):
+        super().__init__()
+        self.seq_len = seq_len
+        self.output_dim = output_dim
+
+        latent_dim = style_latent_dim + skill_latent_dim
+
+        # 潜在変数を全系列に展開するためのMLP
+        self.fc1 = nn.Linear(latent_dim, hidden_dim)
+        self.fc2 = nn.Linear(hidden_dim, hidden_dim * 2)
+        self.fc3 = nn.Linear(hidden_dim * 2, seq_len * output_dim)
+
+        self.activation = nn.ReLU()
+        self.dropout = nn.Dropout(0.1)
+
+    def forward(self, z_style, z_skill):
+        """直接的な系列生成"""
+        batch_size = z_style.size(0)
+        z = torch.cat([z_style, z_skill], dim=1)
+
+        # MLPで系列全体を生成
+        x = self.activation(self.fc1(z))
+        x = self.dropout(x)
+        x = self.activation(self.fc2(x))
+        x = self.dropout(x)
+        x = self.fc3(x)
+
+        # [batch, seq_len * output_dim] -> [batch, seq_len, output_dim]
+        output = x.view(batch_size, self.seq_len, self.output_dim)
+
+        return output
+
 class Decoder(nn.Module):
     """潜在変数z_styleとz_skillから軌道シーケンスを生成する"""
 
@@ -134,7 +170,7 @@ class BetaVAEGeneralizedCoordinate(nn.Module):
         self.contrastive_weight = contrastive_weight
 
         self.encoder = Encoder(input_dim, hidden_dim, style_latent_dim, skill_latent_dim, n_layers)
-        self.decoder = Decoder(input_dim, hidden_dim, style_latent_dim, skill_latent_dim, seq_len, n_layers)
+        self.decoder = SimpleDecoder(input_dim, hidden_dim, style_latent_dim, skill_latent_dim, seq_len, n_layers)
 
         # 対照学習
         self.contrastive_loss = ContrastiveLoss(temperature=0.07)

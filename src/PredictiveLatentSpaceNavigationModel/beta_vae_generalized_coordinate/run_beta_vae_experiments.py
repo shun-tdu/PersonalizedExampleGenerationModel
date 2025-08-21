@@ -550,7 +550,7 @@ def validate_config(config: Dict[str, Any], config_path: str) -> bool:
     model_required = ['input_dim',
                       'seq_len',
                       'hidden_dim',
-                      'style_latent_dim'
+                      'style_latent_dim',
                       'skill_latent_dim',
                       'beta',
                       'n_layers',

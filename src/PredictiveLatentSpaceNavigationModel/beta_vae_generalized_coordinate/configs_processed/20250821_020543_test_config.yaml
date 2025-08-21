@@ -1,0 +1,41 @@
+config_path: PredictiveLatentSpaceNavigationModel/beta_vae_generalized_coordinate/configs
+data:
+  data_path: PredictiveLatentSpaceNavigationModel/DataPreprocess/ForGeneralizedCoordinate
+model:
+  input_dim: 6
+  seq_len: 100
+  hidden_dim: 64  # さらに小さく
+  style_latent_dim: 16  # 半分に
+  skill_latent_dim: 8   # 半分に
+  beta: 0.0
+  n_layers: 1  # レイヤー数を削減
+  contrastive_weight: 0.0
+  use_triplet: false
+training:
+  batch_size: 8  # 小さなバッチサイズ
+  num_epochs: 50  # 短い実験
+  lr: 1.0e-03  # 高めの学習率
+  weight_decay: 0.0  # 重み減衰なし
+  clip_grad_norm: 10.0  # 緩い勾配クリッピング
+  warmup_epochs: 0  # ウォームアップなし
+  scheduler_T_0: 50
+  scheduler_T_mult: 2
+  scheduler_eta_min: 1.0e-04
+  patience: 20
+logging:
+  output_dir: PredictiveLatentSpaceNavigationModel/beta_vae_generalized_coordinate/outputs
+evaluation:
+  disentanglement_metrics:
+  - style_subject_separation
+  - skill_performance_correlation
+  visualization:
+    pca_components: 2
+    save_individual_trajectories: true
+    save_exemplar_comparisons: true
+experiment:
+  description: 'Ablation: No hierarchy (standard VAE)'
+  tags:
+  - beta_vae_generalized_coordinate
+  - validation
+  - hyperparameter_search
+  - ablation_no_hierarchy
