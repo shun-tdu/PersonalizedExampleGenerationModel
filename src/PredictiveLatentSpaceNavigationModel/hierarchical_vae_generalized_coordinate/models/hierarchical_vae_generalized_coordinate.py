@@ -582,8 +582,8 @@ class HierarchicalVAEGeneralizedCoordinate(nn.Module):
         self.beta_skill = beta_skill
         self.beta_style = beta_style
         self.precision_lr = precision_lr
-        self.contrastive_weight = 0.1
-        use_triple_loss = False
+        self.contrastive_weight = 2.0
+        use_triple_loss = True
         contrastive_temperature = 0.1
 
         # エンコーダ(ボトムアップ)
@@ -901,13 +901,14 @@ class HierarchicalVAEGeneralizedCoordinate(nn.Module):
         # 運動プリミティブは早めに学習
         self.beta_primitive = self.initial_betas['primitive']
 
-        # スキルは中期で学習
-        if progress > 0.1:
+        # 全階層を早期から学習
+        if progress > 0.05:
             self.beta_skill = self.initial_betas['skill']
-
-        # スタイルは後期で学習（個人差は最後に）
-        if progress > 0.15:
             self.beta_style = self.initial_betas['style']
+            self.contrastive_weight = 2.0
+        else:
+            self.contrastive_weight = 0.0
+
 
     def save_model(self, filepath: str):
         """モデル保存"""
