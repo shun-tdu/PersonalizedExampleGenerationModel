@@ -20,6 +20,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import adjusted_rand_score
 from sklearn.cluster import KMeans
+from sklearn.metrics import adjusted_rand_score, silhouette_score
+from scipy.spatial.distance import pdist, squareform
 from scipy.stats import pearsonr
 import seaborn as sns
 import json
@@ -253,6 +255,455 @@ class GeneralizedCoordinateDataset(Dataset):
             torch.tensor(is_expert, dtype=torch.long)
         )
 
+def comprehensive_latent_space_evaluation(model, all_datasets, device, output_dir, experiment_id):
+    """全被験者データでの包括的潜在空間評価"""
+
+    print("=" * 60)
+    print("🎯 全被験者潜在空間分析開始")
+    print("=" * 60)
+
+    model.eval()
+
+    # 全データセットから潜在変数を抽出
+    all_results = {}
+
+    for dataset_name, dataset in all_datasets.items():
+        print(f"\n📊 {dataset_name}データセット処理中...")
+
+        if dataset is None:
+            continue
+
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=32, shuffle=False)
+
+        z_style_list = []
+        z_skill_list = []
+        subject_ids = []
+        is_expert_list = []
+
+        with torch.no_grad():
+            for trajectories, subj_ids, is_expert in dataloader:
+                trajectories = trajectories.to(device)
+
+                encoded = model.encode(trajectories)
+                z_style_list.append(encoded['z_style'].cpu().numpy())
+                z_skill_list.append(encoded['z_skill'].cpu().numpy())
+                subject_ids.extend(subj_ids)
+                is_expert_list.extend(is_expert.cpu().numpy())
+
+        if z_style_list:
+            all_results[dataset_name] = {
+                'z_style': np.vstack(z_style_list),
+                'z_skill': np.vstack(z_skill_list),
+                'subject_ids': subject_ids,
+                'is_expert': np.array(is_expert_list)
+            }
+
+            print(f"  ✅ {len(subject_ids)}サンプル, {len(set(subject_ids))}被験者")
+
+    # 全データを統合
+    combined_data = combine_all_datasets(all_results)
+
+    # 詳細分析実行
+    analysis_results = perform_detailed_analysis(combined_data, output_dir, experiment_id)
+
+    return analysis_results
+
+
+def combine_all_datasets(all_results):
+    """全データセットを統合"""
+
+    combined = {
+        'z_style': [],
+        'z_skill': [],
+        'subject_ids': [],
+        'is_expert': [],
+        'dataset_source': []
+    }
+
+    for dataset_name, data in all_results.items():
+        combined['z_style'].append(data['z_style'])
+        combined['z_skill'].append(data['z_skill'])
+        combined['subject_ids'].extend(data['subject_ids'])
+        combined['is_expert'].extend(data['is_expert'])
+        combined['dataset_source'].extend([dataset_name] * len(data['subject_ids']))
+
+    return {
+        'z_style': np.vstack(combined['z_style']),
+        'z_skill': np.vstack(combined['z_skill']),
+        'subject_ids': combined['subject_ids'],
+        'is_expert': np.array(combined['is_expert']),
+        'dataset_source': combined['dataset_source']
+    }
+
+
+def perform_detailed_analysis(data, output_dir, experiment_id):
+    """詳細な潜在空間分析を実行"""
+
+    z_style = data['z_style']
+    z_skill = data['z_skill']
+    subject_ids = data['subject_ids']
+    is_expert = data['is_expert']
+
+    # 被験者情報
+    unique_subjects = list(set(subject_ids))
+    n_subjects = len(unique_subjects)
+    subject_to_idx = {subj: i for i, subj in enumerate(unique_subjects)}
+    subject_labels = [subject_to_idx[subj] for subj in subject_ids]
+
+    print(f"\n📈 潜在空間統計:")
+    print(f"  総サンプル数: {len(z_style)}")
+    print(f"  被験者数: {n_subjects}")
+    print(f"  被験者: {unique_subjects}")
+    print(f"  スタイル次元: {z_style.shape[1]}")
+    print(f"  スキル次元: {z_skill.shape[1]}")
+
+    # === 1. スタイル分離分析 ===
+    style_analysis = analyze_style_separation(z_style, subject_ids, unique_subjects)
+
+    # === 2. スキル分析 ===
+    skill_analysis = analyze_skill_distribution(z_skill, is_expert)
+
+    # === 3. クラスタリング評価 ===
+    clustering_analysis = evaluate_clustering_performance(z_style, subject_labels, n_subjects)
+
+    # === 4. 可視化生成 ===
+    visualization_paths = create_comprehensive_visualizations(
+        z_style, z_skill, subject_ids, is_expert, unique_subjects,
+        output_dir, experiment_id
+    )
+
+    # === 5. 結果統合 ===
+    results = {
+        'total_samples': len(z_style),
+        'n_subjects': n_subjects,
+        'unique_subjects': unique_subjects,
+        'style_analysis': style_analysis,
+        'skill_analysis': skill_analysis,
+        'clustering_analysis': clustering_analysis,
+        'visualization_paths': visualization_paths
+    }
+
+    # === 6. 結果サマリー出力 ===
+    print_comprehensive_summary(results)
+
+    return results
+
+
+def analyze_style_separation(z_style, subject_ids, unique_subjects):
+    """スタイル分離の詳細分析"""
+
+    print(f"\n🎨 スタイル分離分析:")
+
+    # 被験者ごとの統計
+    subject_stats = {}
+    for subject in unique_subjects:
+        mask = np.array(subject_ids) == subject
+        subject_data = z_style[mask]
+
+        if len(subject_data) > 0:
+            stats = {
+                'mean': np.mean(subject_data, axis=0),
+                'std': np.std(subject_data, axis=0),
+                'n_samples': len(subject_data),
+                'centroid': np.mean(subject_data, axis=0)
+            }
+            subject_stats[subject] = stats
+            print(f"  {subject}: {len(subject_data)}サンプル")
+
+    # 被験者間距離計算
+    centroids = np.array([stats['centroid'] for stats in subject_stats.values()])
+
+    if len(centroids) > 1:
+        # 被験者間距離行列
+        inter_distances = pdist(centroids, metric='euclidean')
+        distance_matrix = squareform(inter_distances)
+
+        # 被験者内分散の平均
+        within_variances = []
+        for stats in subject_stats.values():
+            if stats['n_samples'] > 1:
+                within_variances.append(np.mean(stats['std'] ** 2))
+
+        avg_within_var = np.mean(within_variances) if within_variances else 0.001
+        avg_between_dist = np.mean(inter_distances)
+
+        # 分離指標
+        separation_ratio = avg_between_dist / (np.sqrt(avg_within_var) + 1e-8)
+
+        print(f"  平均被験者間距離: {avg_between_dist:.4f}")
+        print(f"  平均被験者内分散: {avg_within_var:.4f}")
+        print(f"  分離指標: {separation_ratio:.4f}")
+
+        # 判定
+        if separation_ratio > 3.0:
+            status = "🟢 優秀な分離"
+        elif separation_ratio > 1.5:
+            status = "🟡 中程度の分離"
+        elif separation_ratio > 0.5:
+            status = "🟠 弱い分離"
+        else:
+            status = "🔴 分離不十分"
+
+        print(f"  判定: {status}")
+
+        return {
+            'separation_ratio': separation_ratio,
+            'avg_between_distance': avg_between_dist,
+            'avg_within_variance': avg_within_var,
+            'distance_matrix': distance_matrix,
+            'subject_stats': subject_stats,
+            'status': status
+        }
+
+    return {'status': '⚠️ 分析不可（被験者数不足）'}
+
+
+def analyze_skill_distribution(z_skill, is_expert):
+    """スキル分布の分析"""
+
+    print(f"\n🏆 スキル分布分析:")
+
+    if len(set(is_expert)) < 2:
+        print("  ⚠️ 熟練度ラベルの多様性不足")
+        return {'status': 'insufficient_labels'}
+
+    expert_mask = is_expert == 1
+    novice_mask = is_expert == 0
+
+    expert_data = z_skill[expert_mask]
+    novice_data = z_skill[novice_mask]
+
+    print(f"  熟練者: {len(expert_data)}サンプル")
+    print(f"  初心者: {len(novice_data)}サンプル")
+
+    if len(expert_data) > 0 and len(novice_data) > 0:
+        expert_centroid = np.mean(expert_data, axis=0)
+        novice_centroid = np.mean(novice_data, axis=0)
+
+        skill_separation = np.linalg.norm(expert_centroid - novice_centroid)
+
+        expert_variance = np.mean(np.var(expert_data, axis=0))
+        novice_variance = np.mean(np.var(novice_data, axis=0))
+        avg_variance = (expert_variance + novice_variance) / 2
+
+        skill_ratio = skill_separation / (np.sqrt(avg_variance) + 1e-8)
+
+        print(f"  熟練度分離距離: {skill_separation:.4f}")
+        print(f"  スキル分離比: {skill_ratio:.4f}")
+
+        return {
+            'skill_separation': skill_separation,
+            'skill_ratio': skill_ratio,
+            'expert_centroid': expert_centroid,
+            'novice_centroid': novice_centroid
+        }
+
+    return {'status': 'insufficient_data'}
+
+
+def evaluate_clustering_performance(z_style, subject_labels, n_subjects):
+    """クラスタリング性能評価"""
+
+    print(f"\n🎯 クラスタリング性能評価:")
+
+    if n_subjects < 2:
+        print("  ⚠️ クラスタリング評価不可（被験者数不足）")
+        return {'status': 'insufficient_subjects'}
+
+    # K-meansクラスタリング
+    kmeans = KMeans(n_clusters=n_subjects, random_state=42, n_init=10)
+    predicted_labels = kmeans.fit_predict(z_style)
+
+    # 評価指標
+    ari = adjusted_rand_score(subject_labels, predicted_labels)
+    silhouette = silhouette_score(z_style, predicted_labels)
+
+    print(f"  Adjusted Rand Index: {ari:.4f}")
+    print(f"  Silhouette Score: {silhouette:.4f}")
+
+    # 判定
+    if ari > 0.7:
+        ari_status = "🟢 優秀"
+    elif ari > 0.3:
+        ari_status = "🟡 良好"
+    elif ari > 0.1:
+        ari_status = "🟠 普通"
+    else:
+        ari_status = "🔴 不良"
+
+    print(f"  ARI判定: {ari_status}")
+
+    return {
+        'ari': ari,
+        'silhouette': silhouette,
+        'predicted_labels': predicted_labels,
+        'ari_status': ari_status
+    }
+
+
+def create_comprehensive_visualizations(z_style, z_skill, subject_ids, is_expert,
+                                        unique_subjects, output_dir, experiment_id):
+    """包括的可視化生成"""
+
+    print(f"\n🎨 可視化生成中...")
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    fig, axes = plt.subplots(2, 3, figsize=(20, 14))
+
+    # カラーマップ準備
+    subject_to_idx = {subj: i for i, subj in enumerate(unique_subjects)}
+    subject_colors = [subject_to_idx[subj] for subj in subject_ids]
+
+    # 1. スタイル空間PCA
+    if z_style.shape[1] >= 2:
+        pca_style = PCA(n_components=2)
+        z_style_pca = pca_style.fit_transform(z_style)
+
+        scatter = axes[0, 0].scatter(z_style_pca[:, 0], z_style_pca[:, 1],
+                                     c=subject_colors, cmap='tab10', alpha=0.7, s=30)
+        axes[0, 0].set_title(f'Style Space PCA\n(Explained: {pca_style.explained_variance_ratio_.sum():.3f})')
+        axes[0, 0].set_xlabel('PC1')
+        axes[0, 0].set_ylabel('PC2')
+
+        # 重心プロット
+        for i, subject in enumerate(unique_subjects):
+            mask = np.array(subject_ids) == subject
+            if np.any(mask):
+                center = np.mean(z_style_pca[mask], axis=0)
+                axes[0, 0].scatter(center[0], center[1], c='red', s=200, marker='x', linewidth=3)
+                axes[0, 0].annotate(subject, center, xytext=(5, 5), textcoords='offset points')
+
+    # 2. スタイル空間t-SNE
+    if len(z_style) >= 30:
+        try:
+            tsne = TSNE(n_components=2, perplexity=min(30, len(z_style) // 4), random_state=42)
+            z_style_tsne = tsne.fit_transform(z_style)
+
+            axes[0, 1].scatter(z_style_tsne[:, 0], z_style_tsne[:, 1],
+                               c=subject_colors, cmap='tab10', alpha=0.7, s=30)
+            axes[0, 1].set_title('Style Space t-SNE')
+        except:
+            axes[0, 1].text(0.5, 0.5, 't-SNE Failed', transform=axes[0, 1].transAxes, ha='center')
+
+    # 3. スキル空間PCA
+    if z_skill.shape[1] >= 2:
+        pca_skill = PCA(n_components=2)
+        z_skill_pca = pca_skill.fit_transform(z_skill)
+
+        axes[0, 2].scatter(z_skill_pca[:, 0], z_skill_pca[:, 1],
+                           c=is_expert, cmap='RdYlBu', alpha=0.7, s=30)
+        axes[0, 2].set_title(f'Skill Space PCA\n(Expert=Blue, Novice=Red)')
+
+    # 4. 被験者間距離行列
+    unique_subjects_arr = np.array(unique_subjects)
+    n_subjects = len(unique_subjects)
+    distance_matrix = np.zeros((n_subjects, n_subjects))
+
+    for i, subj_i in enumerate(unique_subjects):
+        for j, subj_j in enumerate(unique_subjects):
+            mask_i = np.array(subject_ids) == subj_i
+            mask_j = np.array(subject_ids) == subj_j
+
+            if np.any(mask_i) and np.any(mask_j):
+                center_i = np.mean(z_style[mask_i], axis=0)
+                center_j = np.mean(z_style[mask_j], axis=0)
+                distance_matrix[i, j] = np.linalg.norm(center_i - center_j)
+
+    im = axes[1, 0].imshow(distance_matrix, cmap='viridis')
+    axes[1, 0].set_title('Inter-Subject Distance Matrix')
+    axes[1, 0].set_xticks(range(n_subjects))
+    axes[1, 0].set_yticks(range(n_subjects))
+    axes[1, 0].set_xticklabels(unique_subjects, rotation=45)
+    axes[1, 0].set_yticklabels(unique_subjects)
+    plt.colorbar(im, ax=axes[1, 0])
+
+    # 5. 被験者別分布
+    for i, subject in enumerate(unique_subjects):
+        mask = np.array(subject_ids) == subject
+        if np.any(mask) and z_style.shape[1] >= 2:
+            subject_data = z_style[mask]
+            axes[1, 1].scatter(subject_data[:, 0], subject_data[:, 1],
+                               label=subject, alpha=0.6, s=20)
+
+    axes[1, 1].set_title('Style Space Distribution by Subject')
+    axes[1, 1].legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+
+    # 6. 潜在次元の分散
+    style_vars = np.var(z_style, axis=0)
+    axes[1, 2].bar(range(len(style_vars)), style_vars)
+    axes[1, 2].set_title('Style Dimension Variances')
+    axes[1, 2].set_xlabel('Dimension')
+    axes[1, 2].set_ylabel('Variance')
+
+    plt.tight_layout()
+
+    # 保存
+    save_path = os.path.join(output_dir, f'comprehensive_latent_analysis_exp{experiment_id}.png')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"  ✅ 可視化保存: {save_path}")
+
+    return {'comprehensive_plot': save_path}
+
+
+def print_comprehensive_summary(results):
+    """包括的結果サマリー出力"""
+
+    print(f"\n" + "=" * 60)
+    print("🎯 全被験者潜在空間分析結果サマリー")
+    print("=" * 60)
+
+    print(f"📊 基本情報:")
+    print(f"  総サンプル数: {results['total_samples']}")
+    print(f"  被験者数: {results['n_subjects']}")
+    print(f"  被験者: {results['unique_subjects']}")
+
+    if 'style_analysis' in results and 'separation_ratio' in results['style_analysis']:
+        style = results['style_analysis']
+        print(f"\n🎨 スタイル分離:")
+        print(f"  分離指標: {style['separation_ratio']:.4f}")
+        print(f"  平均被験者間距離: {style['avg_between_distance']:.4f}")
+        print(f"  判定: {style['status']}")
+
+    if 'clustering_analysis' in results and 'ari' in results['clustering_analysis']:
+        cluster = results['clustering_analysis']
+        print(f"\n🎯 クラスタリング性能:")
+        print(f"  ARI: {cluster['ari']:.4f}")
+        print(f"  Silhouette: {cluster['silhouette']:.4f}")
+        print(f"  判定: {cluster['ari_status']}")
+
+    print(f"\n💡 推奨アクション:")
+
+    if 'style_analysis' in results and 'separation_ratio' in results['style_analysis']:
+        sep_ratio = results['style_analysis']['separation_ratio']
+        if sep_ratio < 1.0:
+            print(f"  🔴 分離不十分 → contrastive_weightを2.0+に増加")
+            print(f"  🔴 betaをさらに削減 (1e-7程度)")
+            print(f"  🔴 style_latent_dimを64+に増加")
+        elif sep_ratio < 2.0:
+            print(f"  🟡 中程度の分離 → 微調整で改善可能")
+        else:
+            print(f"  🟢 良好な分離 → 現在の設定を維持")
+
+    print("=" * 60)
+
+
+def run_comprehensive_evaluation(model, train_dataset, val_dataset, test_dataset, device, output_dir, experiment_id):
+    """包括的評価の実行例"""
+
+    all_datasets = {
+        'train': train_dataset,
+        'validation': val_dataset,
+        'test': test_dataset
+    }
+
+    results = comprehensive_latent_space_evaluation(
+        model, all_datasets, device, output_dir, experiment_id
+    )
+
+    return results
 
 def create_dataloaders(processed_data_dir: str, seq_len: int, batch_size: int, random_seed: int = 42) -> tuple:
     """データローダーを作成"""
@@ -307,7 +758,7 @@ def create_dataloaders(processed_data_dir: str, seq_len: int, batch_size: int, r
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False) if val_dataset else None
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-    return train_loader, val_loader, test_loader, test_df
+    return train_loader, val_loader, test_loader, test_df, train_dataset, val_dataset, test_dataset
 
 def apply_physics_based_scaling(data: np.ndarray, scalers: dict, feature_cols: list = None) -> np.ndarray:
     """物理量別スケーリングを適用"""
@@ -956,7 +1407,7 @@ def quantitative_evaluation_hierarchical(latent_data: dict, test_df: pd.DataFram
     return eval_results, analysis_df
 
 
-def run_beta_vae_evaluation(model, test_loader, test_df, output_dir, device, experiment_id):
+def run_beta_vae_evaluation(model, train_dataset, val_dataset, test_dataset, test_loader, test_df, output_dir, device, experiment_id):
     """改良版BetaVAE評価（スキル軸分析統合）"""
     print("\n" + "=" * 50)
     print("改良版BetaVAE評価開始（スキル軸分析付き）")
@@ -976,8 +1427,14 @@ def run_beta_vae_evaluation(model, test_loader, test_df, output_dir, device, exp
     generate_axis_based_exemplars(model, analyzer, test_loader, device, exemplar_v2_path)
 
     # 5. 潜在空間の可視化
+    all_dataset = {
+        'train':train_dataset,
+        'validation':val_dataset,
+        'test':test_dataset
+    }
     latent_space_result_path = os.path.join(output_dir, 'latent_space')
-    latent_space_result = simple_vae_diagnosis(model, test_loader, device, latent_space_result_path, experiment_id)
+    comprehensive_results = run_comprehensive_evaluation(model, train_dataset, val_dataset, test_dataset, device, output_dir, experiment_id)
+    # latent_space_result = simple_vae_diagnosis(model, test_loader, device, latent_space_result_path, experiment_id)
 
     # 6. 結果統合
     eval_results.update({
@@ -985,7 +1442,7 @@ def run_beta_vae_evaluation(model, test_loader, test_df, output_dir, device, exp
         'axis_based_exemplars_path': exemplar_v2_path,
         'skill_improvement_directions_available': list(analyzer.skill_improvement_directions.keys()),
         'best_skill_correlations': {k: v['correlation'] for k, v in analyzer.performance_correlations.items()},
-        'latent_space_analysis': latent_space_result
+        # 'latent_space_analysis': latent_space_result
     })
 
     # 7. 結果保存
@@ -1129,7 +1586,7 @@ def train_beta_vae_generalized_coordinate_model(config_path: str, experiment_id:
 
         # 3. データ準備
         try:
-            train_loader, val_loader, test_loader, test_df = create_dataloaders(
+            train_loader, val_loader, test_loader, test_df, train_dataset, val_dataset, test_dataset = create_dataloaders(
                 config['data']['data_path'],
                 config['model']['seq_len'],
                 config['training']['batch_size']
@@ -1272,7 +1729,7 @@ def train_beta_vae_generalized_coordinate_model(config_path: str, experiment_id:
 
         # 7. 改良版評価実行
         try:
-            eval_results = run_beta_vae_evaluation(model, test_loader, test_df, output_dir, device,
+            eval_results = run_beta_vae_evaluation(model, train_dataset, val_dataset, test_dataset, test_loader, test_df, output_dir, device,
                                                           experiment_id)
 
             # 最高相関値を計算
