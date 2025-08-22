@@ -978,9 +978,9 @@ def main():
 
     # 8. スケーラの用意
     feature_cols = [
-        'HandlePosDiffX', 'HandlePosDiffY',
-        'HandleVelDiffX', 'HandleVelDiffY',
-        # 'HandleAccDiffX', 'HandleAccDiffY',
+        'HandlePosX', 'HandlePosY',
+        'HandleVelX', 'HandleVelY',
+        'HandleAccX', 'HandleAccY',
     ]
 
     scalers = prepare_scaler(train_df[feature_cols])

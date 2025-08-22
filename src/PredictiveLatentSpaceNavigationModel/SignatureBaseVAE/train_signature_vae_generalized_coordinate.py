@@ -25,9 +25,6 @@ import seaborn as sns
 import json
 import joblib
 
-from src.PredictiveLatentSpaceNavigationModel.beta_vae_generalized_coordinate.models.beta_vae_generalized_coordinate import \
-    BetaVAEGeneralizedCoordinate
-
 # scikit-learnの特定のUserWarningを無視する
 warnings.filterwarnings("ignore", category=UserWarning, module='sklearn')
 
@@ -42,7 +39,8 @@ sqlite3.register_adapter(np.bool_, bool)
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.dirname(current_dir)
 sys.path.insert(0, project_root)
-from models.signature_vae_generalized_coordinate import SignatureGuidedVAE
+# from models.signature_vae_generalized_coordinate import SignatureGuidedVAE
+from models.signature_transformer_vae import MotionTransformerVAE
 
 class SkillAxisAnalyzer:
     """スキル潜在空間での上手さの軸を分析・抽出するクラス"""
@@ -492,13 +490,14 @@ def extract_latent_variables_hierarchical(model, test_loader, device):
             z_style = encoded['z_style']
             z_skill = encoded['z_skill']
 
-            reconstructed = model.decode(z_style, z_skill)
+            decoded_output = model.decode(z_style, z_skill)
+            reconstructed_trajectory = decoded_output['trajectory']
 
             all_z_style.append(z_style.cpu().numpy())
             all_z_skill.append(z_skill.cpu().numpy())
             all_subject_ids.append(subject_ids)
             all_is_expert.append(is_expert.cpu().numpy())
-            all_reconstructions.append(reconstructed.cpu().numpy())
+            all_reconstructions.append(reconstructed_trajectory.cpu().numpy())
             all_originals.append(trajectories.cpu().numpy())
 
     return {
@@ -818,8 +817,8 @@ def generate_axis_based_exemplars(model, analyzer, test_loader, device, save_pat
 
     with torch.no_grad():
         # 現在レベル
-        current_exemplar = model.decode(z_style, current_skill)
-        generated_exemplars['current'] = current_exemplar.cpu().numpy().squeeze()
+        decoded_output = model.decode(z_style, current_skill)
+        generated_exemplars['current'] = decoded_output['trajectory'].cpu().numpy().squeeze()
 
         # 各指標での改善
         for target in target_metrics:
@@ -832,16 +831,16 @@ def generate_axis_based_exemplars(model, analyzer, test_loader, device, save_pat
                 ).unsqueeze(0)
 
                 enhanced_skill = current_skill + enhancement_factor * improvement_direction
-                enhanced_exemplar = model.decode(z_style, enhanced_skill)
-                generated_exemplars[target] = enhanced_exemplar.cpu().numpy().squeeze()
+                decoded_output = model.decode(z_style, enhanced_skill)
+                generated_exemplars[target] = decoded_output['trajectory'].cpu().numpy().squeeze()
 
             except Exception as e:
                 print(f"{target}での改善生成エラー: {e}")
                 # フォールバック: ランダム改善
                 skill_noise = torch.randn_like(current_skill) * 0.1
                 enhanced_skill = current_skill + enhancement_factor * skill_noise
-                enhanced_exemplar = model.decode(z_style, enhanced_skill)
-                generated_exemplars[target] = enhanced_exemplar.cpu().numpy().squeeze()
+                decoded_output = model.decode(z_style, enhanced_skill)
+                generated_exemplars[target] = decoded_output['trajectory'].cpu().numpy().squeeze()
 
     # 可視化
     n_exemplars = len(generated_exemplars)
@@ -1048,7 +1047,7 @@ def plot_hierarchical_training_curves(history, save_path):
     axes[0, 0].set_yscale('log')
 
     # 再構成損失
-    axes[0, 1].plot(history['recon_loss'], label='Reconstruction Loss', color='green')
+    axes[0, 1].plot(history['trajectory_recon_loss'], label='Reconstruction Loss', color='green')
     axes[0, 1].set_xlabel('Epoch')
     axes[0, 1].set_ylabel('Reconstruction Loss')
     axes[0, 1].set_title('Reconstruction Loss')
@@ -1146,7 +1145,7 @@ def train_beta_vae_generalized_coordinate_model(config_path: str, experiment_id:
             raise e
 
         # 4. BetaVAEモデルの初期化
-        model = BetaVAEGeneralizedCoordinate(**config['model']).to(device)
+        model = MotionTransformerVAE(**config['model']).to(device)
 
         # オプティマイザとスケジューラ
         optimizer = optim.AdamW(
@@ -1182,7 +1181,6 @@ def train_beta_vae_generalized_coordinate_model(config_path: str, experiment_id:
 
         for epoch in range(config['training']['num_epochs']):
             model.train()
-            model.update_epoch(epoch, config['training']['num_epochs'])
 
             epoch_losses = {
                 'total': [], 'traj_recon': [], 'encoder_sig': [],'decoder_sig': [], 'contrastive_loss': [], 'kl_skill': [], 'kl_style': []
@@ -1239,7 +1237,7 @@ def train_beta_vae_generalized_coordinate_model(config_path: str, experiment_id:
 
             print(f"Epoch {epoch + 1}: Train Loss: {history['train_loss'][-1]:.4f}, "
                   f"Val Loss: {current_val_loss:.4f}")
-            print(f"  Recon: {history['recon_loss'][-1]:.4f}, "
+            print(f"  Recon: {history['trajectory_recon_loss'][-1]:.4f}, "
                   f"KL(Skill): {history['kl_skill_loss'][-1]:.4f}, "
                   f"KL(Style): {history['kl_style_loss'][-1]:.4f}, "
                   f"Contrastive: {history['contrastive_loss'][-1]:.4f}, "

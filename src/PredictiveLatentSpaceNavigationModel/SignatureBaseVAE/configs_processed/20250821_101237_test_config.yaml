@@ -1,0 +1,41 @@
+config_path: PredictiveLatentSpaceNavigationModel/SignatureBaseVAE/configs
+data:
+  data_path: PredictiveLatentSpaceNavigationModel/DataPreprocess/ForGeneralizedCoordinate
+model:
+  input_dim: 6
+  seq_len: 100
+  hidden_dim: 256
+  style_latent_dim: 32
+  skill_latent_dim: 32
+  beta: 0.0001
+  n_layers: 2
+  contrastive_weight: 0.0
+  use_triplet: false
+training:
+  batch_size: 32
+  num_epochs: 200
+  lr: 2.0e-04
+  weight_decay: 0.0
+  clip_grad_norm: 10.0
+  warmup_epochs: 0
+  scheduler_T_0: 50
+  scheduler_T_mult: 2
+  scheduler_eta_min: 1.0e-04
+  patience: 20
+logging:
+  output_dir: PredictiveLatentSpaceNavigationModel/SignatureBaseVAE/outputs
+evaluation:
+  disentanglement_metrics:
+  - style_subject_separation
+  - skill_performance_correlation
+  visualization:
+    pca_components: 2
+    save_individual_trajectories: true
+    save_exemplar_comparisons: true
+experiment:
+  description: 'Ablation: No hierarchy (standard VAE)'
+  tags:
+  - signature_base_vae
+  - validation
+  - hyperparameter_search
+  - ablation_no_hierarchy

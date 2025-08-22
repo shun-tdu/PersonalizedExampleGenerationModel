@@ -13,71 +13,116 @@ import numpy as np
 # ==========================================
 # 1. 統合シグネチャー計算モジュール
 # ==========================================
-class SignatureCalculator(nn.Module):
-    """軌道から統合シグネチャーを計算"""
+class BatchSignatureCalculator(nn.Module):
+    """バッチ処理対応の高効率シグネチャー計算"""
 
     def forward(self, trajectories):
         """
         Args:
             trajectories: [batch_size, seq_len, 6]
-                         (HandlePosDiffX, HandlePosDiffY, HandleVelDiffX, HandleVelDiffY, HandleAccDiffX, HandleAccDiffY)
         Returns:
             signatures: [batch_size, 5]
-                       (path_curvature, velocity_smoothness, acceleration_jerk, movement_rhythm, force_modulation)
         """
-        batch_size = trajectories.shape[0]
-        signatures = torch.zeros(batch_size, 5, device=trajectories.device)
+        batch_size, seq_len, _ = trajectories.shape
+        device = trajectories.device
 
-        for i in range(batch_size):
-            traj = trajectories[i].cpu().numpy()
+        # バッチ全体で並列計算
+        signatures = torch.zeros(batch_size, 5, device=device, dtype=torch.float32)
 
-            signatures[i, 0] = self._calculate_path_curvature(traj)  # 軌道曲率
-            signatures[i, 1] = self._calculate_velocity_smoothness(traj)  # 速度滑らかさ
-            signatures[i, 2] = self._calculate_acceleration_jerk(traj)  # 加速度ジャーク
-            signatures[i, 3] = self._calculate_movement_rhythm(traj)  # 運動リズム
-            signatures[i, 4] = self._calculate_force_modulation(traj)  # 力調節
+        # 1. 軌道曲率（バッチ処理）
+        signatures[:, 0] = self._batch_path_curvature(trajectories[:, :, :2])
+
+        # 2. 速度滑らかさ（バッチ処理）
+        signatures[:, 1] = self._batch_velocity_smoothness(trajectories[:, :, 2:4])
+
+        # 3. 加速度ジャーク（バッチ処理）
+        signatures[:, 2] = self._batch_acceleration_jerk(trajectories[:, :, 4:6])
+
+        # 4. 運動リズム（バッチ処理）
+        signatures[:, 3] = self._batch_movement_rhythm(trajectories[:, :, 2:4])
+
+        # 5. 力調節（バッチ処理）
+        signatures[:, 4] = self._batch_force_modulation(trajectories[:, :, 4:6])
 
         return signatures
 
-    def _calculate_path_curvature(self, traj):
-        # 差分から位置を復元
-        positions = np.cumsum(traj[:, :2], axis=0)
-        if len(positions) < 3:
-            return 0.0
+    def _batch_path_curvature(self, pos_diffs):
+        """バッチ処理版軌道曲率"""
+        # pos_diffs: [batch_size, seq_len, 2]
+        batch_size, seq_len, _ = pos_diffs.shape
 
-        curvatures = []
-        for i in range(1, len(positions) - 1):
-            p1, p2, p3 = positions[i - 1], positions[i], positions[i + 1]
-            v1 = p2 - p1
-            v2 = p3 - p2
-            cross = np.cross(v1, v2)
-            norms = np.linalg.norm(v1) * np.linalg.norm(v2)
-            if norms > 1e-6:
-                curvature = abs(cross) / norms
-                curvatures.append(curvature)
+        if seq_len < 3:
+            return torch.zeros(batch_size, device=pos_diffs.device)
 
-        return np.mean(curvatures) if curvatures else 0.0
+        # 位置復元
+        positions = torch.cumsum(pos_diffs, dim=1)  # [batch_size, seq_len, 2]
 
-    def _calculate_velocity_smoothness(self, traj):
-        vel = traj[:, 2:4]
-        vel_changes = np.abs(np.diff(vel, axis=0))
-        return 1.0 / (1.0 + np.mean(vel_changes))
+        # 3点での曲率計算
+        p1 = positions[:, :-2, :]  # [batch_size, seq_len-2, 2]
+        p2 = positions[:, 1:-1, :]  # [batch_size, seq_len-2, 2]
+        p3 = positions[:, 2:, :]  # [batch_size, seq_len-2, 2]
 
-    def _calculate_acceleration_jerk(self, traj):
-        acc = traj[:, 4:6]
-        jerk = np.abs(np.diff(acc, axis=0))
-        return np.mean(jerk)
+        v1 = p2 - p1  # [batch_size, seq_len-2, 2]
+        v2 = p3 - p2  # [batch_size, seq_len-2, 2]
 
-    def _calculate_movement_rhythm(self, traj):
-        vel = traj[:, 2:4]
-        speed = np.linalg.norm(vel, axis=1)
-        return np.std(speed) / (np.mean(speed) + 1e-6)
+        # 外積
+        cross = v1[:, :, 0] * v2[:, :, 1] - v1[:, :, 1] * v2[:, :, 0]  # [batch_size, seq_len-2]
 
-    def _calculate_force_modulation(self, traj):
-        acc = traj[:, 4:6]
-        force = np.linalg.norm(acc, axis=1)
-        return np.std(force) / (np.mean(force) + 1e-6)
+        # ノルム
+        norms1 = torch.norm(v1, dim=2)  # [batch_size, seq_len-2]
+        norms2 = torch.norm(v2, dim=2)  # [batch_size, seq_len-2]
+        norms_product = norms1 * norms2  # [batch_size, seq_len-2]
 
+        # ゼロ除算回避
+        valid_mask = norms_product > 1e-6
+        curvatures = torch.abs(cross) / (norms_product + 1e-6)
+
+        # マスクを適用して平均
+        curvatures = curvatures * valid_mask.float()
+        valid_counts = valid_mask.float().sum(dim=1)
+        valid_counts = torch.clamp(valid_counts, min=1.0)
+
+        return curvatures.sum(dim=1) / valid_counts
+
+    def _batch_velocity_smoothness(self, velocities):
+        """バッチ処理版速度滑らかさ"""
+        # velocities: [batch_size, seq_len, 2]
+        if velocities.shape[1] < 2:
+            return torch.ones(velocities.shape[0], device=velocities.device)
+
+        vel_changes = torch.abs(torch.diff(velocities, dim=1))  # [batch_size, seq_len-1, 2]
+        mean_changes = torch.mean(vel_changes, dim=(1, 2))  # [batch_size]
+
+        return 1.0 / (1.0 + mean_changes)
+
+    def _batch_acceleration_jerk(self, accelerations):
+        """バッチ処理版加速度ジャーク"""
+        # accelerations: [batch_size, seq_len, 2]
+        if accelerations.shape[1] < 2:
+            return torch.zeros(accelerations.shape[0], device=accelerations.device)
+
+        jerk = torch.abs(torch.diff(accelerations, dim=1))  # [batch_size, seq_len-1, 2]
+        return torch.mean(jerk, dim=(1, 2))  # [batch_size]
+
+    def _batch_movement_rhythm(self, velocities):
+        """バッチ処理版運動リズム"""
+        # velocities: [batch_size, seq_len, 2]
+        speeds = torch.norm(velocities, dim=2)  # [batch_size, seq_len]
+
+        mean_speeds = torch.mean(speeds, dim=1)  # [batch_size]
+        std_speeds = torch.std(speeds, dim=1)  # [batch_size]
+
+        return std_speeds / (mean_speeds + 1e-6)
+
+    def _batch_force_modulation(self, accelerations):
+        """バッチ処理版力調節"""
+        # accelerations: [batch_size, seq_len, 2]
+        forces = torch.norm(accelerations, dim=2)  # [batch_size, seq_len]
+
+        mean_forces = torch.mean(forces, dim=1)  # [batch_size]
+        std_forces = torch.std(forces, dim=1)  # [batch_size]
+
+        return std_forces / (mean_forces + 1e-6)
 
 # ==========================================
 # 2. 統合シグネチャー学習エンコーダー
@@ -219,7 +264,7 @@ class SignatureGuidedVAE(nn.Module):
         self.encoder = SignatureGuidedEncoder(input_dim, hidden_dim, style_latent_dim, skill_latent_dim, n_layers)
         self.decoder = SimpleDecoderWithSignature(input_dim, hidden_dim, style_latent_dim, skill_latent_dim, seq_len,
                                                   n_layers)
-        self.signature_calculator = SignatureCalculator()
+        self.signature_calculator = BatchSignatureCalculator()
 
         # 対照学習（従来通り）
         self.contrastive_loss = ContrastiveLoss(temperature=0.07)
@@ -290,11 +335,11 @@ class SignatureGuidedVAE(nn.Module):
         return {
             'total_loss': total_loss,
             'trajectory_recon_loss': trajectory_recon_loss,
+            'kl_style': kl_style,
+            'kl_skill': kl_skill,
             'encoder_signature_loss': encoder_signature_loss,
             'decoder_signature_loss': decoder_signature_loss,
             'contrastive_loss': contrastive_loss_val,
-            'kl_style': kl_style,
-            'kl_skill': kl_skill,
             'reconstructed_trajectory': reconstructed_trajectory,
             'reconstructed_signatures': reconstructed_signatures,
             'predicted_signatures': encoder_output['predicted_signatures'],
@@ -319,6 +364,19 @@ class SignatureGuidedVAE(nn.Module):
     def decode(self, z_style, z_skill):
         """評価用デコード関数"""
         return self.decoder(z_style, z_skill)
+
+    def save_model(self, filepath: str):
+        """モデル保存"""
+        torch.save(self.state_dict(), filepath)
+
+    def load_model(self, filepath: str, device=None):
+        """モデル読み込み"""
+        if device is None:
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+        state_dict = torch.load(filepath, map_location=device)
+        self.load_state_dict(state_dict)
+        self.to(device)
 
 
 # ==========================================

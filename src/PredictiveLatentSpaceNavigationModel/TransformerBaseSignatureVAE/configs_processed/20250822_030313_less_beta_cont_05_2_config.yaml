@@ -1,0 +1,35 @@
+
+experiment:
+  description: "Transformer Base Signature VAE テスト実験"
+  tags: ["test", "transformer", "signature_vae"]
+
+data:
+  data_path: PredictiveLatentSpaceNavigationModel/DataPreprocess/ForGeneralizedCoordinate
+
+model:
+  input_dim: 6
+  seq_len: 100
+  hidden_dim: 256
+  style_latent_dim: 32
+  skill_latent_dim: 8
+  beta: 0.000002
+  n_layers: 6
+  contrastive_weight: 0.2
+  use_triplet: false
+
+training:
+  batch_size: 16
+  num_epochs: 200
+  lr: 0.0002
+  weight_decay: 0.00001
+  clip_grad_norm: 5.0
+  warmup_epochs: 25
+  scheduler_T_0: 30
+  scheduler_T_mult: 2
+  scheduler_eta_min: 0.00001
+  patience: 30
+
+logging:
+  output_dir: "PredictiveLatentSpaceNavigationModel/TransformerBaseSignatureVAE/outputs"
+  save_every: 10
+  log_every: 5
