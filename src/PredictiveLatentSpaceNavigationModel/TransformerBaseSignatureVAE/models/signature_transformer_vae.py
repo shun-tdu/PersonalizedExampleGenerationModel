@@ -475,7 +475,7 @@ class MotionTransformerVAE(nn.Module):
                  beta=0.001,
                  contrastive_weight=0.1,
                  signature_weight=0.8,
-                 n_heads=8,
+                 n_heads=12,
                  max_len=100,
                  use_triplet=False):
         super().__init__()
