@@ -183,7 +183,7 @@ class MultiHeadTemporalAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.scale = math.sqrt(self.d_k)
 
-        # 運動特化：時間的近接性バイアス
+        # 時間的近接性バイアス
         self.temporal_bias = nn.Parameter(torch.zeros(1, n_heads, 200, 200))
         self.register_temporal_bias()
 
@@ -242,7 +242,7 @@ class MotionTransformerBlock(nn.Module):
         # フィードフォワード（運動特徴に特化）
         self.ff = nn.Sequential(
             nn.Linear(d_model, d_ff),
-            nn.GELU(),  # ReLUよりもスムーズ
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_ff, d_model),
             nn.Dropout(dropout)
