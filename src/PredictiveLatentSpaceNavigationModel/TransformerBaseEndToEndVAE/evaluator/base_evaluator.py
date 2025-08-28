@@ -43,7 +43,11 @@ class EvaluationPipeline:
         evaluation_config = self.config.get('evaluation', {})
 
         # デフォルト評価器
-        if evaluation_config.get('latent_space_analysis', True):
+        if evaluation_config.get('comprehensive_latent_analysis', True):
+            from .comprehensive_evaluator import ComprehensiveLatentSpaceEvaluator
+            self.evaluators.append(ComprehensiveLatentSpaceEvaluator(self.config))
+
+        elif evaluation_config.get('latent_space_analysis', True):
             self.evaluators.append(LatentSpaceEvaluator(self.config))
 
 

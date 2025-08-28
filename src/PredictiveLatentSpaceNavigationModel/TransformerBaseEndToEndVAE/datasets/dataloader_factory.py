@@ -4,7 +4,7 @@ import os
 import pandas as pd
 import joblib
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from sklearn.model_selection import  train_test_split
 from typing import Dict, Any, Tuple, Optional, Type, List
 
@@ -38,12 +38,12 @@ class DatasetRegistry:
 
 class DataLoaderFactory:
     @staticmethod
-    def create_dataloaders(config: Dict[str, Any]) -> Tuple[DataLoader, Optional[DataLoader], DataLoader, None]:
+    def create_dataloaders(config: Dict[str, Any]) -> Tuple[DataLoader, Optional[DataLoader], DataLoader, None, Dataset, Optional[Dataset], Dataset]:
         """
         データローダーを作成
 
         :param data_config: コンフィグのdataセクション
-        :return: tuple(train_loader, val_loader, test_loader, test_df)
+        :return: tuple(train_loader, val_loader, test_loader, test_df, train_dataset, val_dataset, test_dataset)
         """
 
         data_config = config.get('data', {})
@@ -57,7 +57,7 @@ class DataLoaderFactory:
             return DataLoaderFactory._create_custom_dataloaders(data_config, training_config)
 
     @staticmethod
-    def _create_generalized_coordinate_dataloaders(data_config: Dict[str, Any], training_config: Dict[str, Any]) -> Tuple[DataLoader, Optional[DataLoader], DataLoader, pd.DataFrame]:
+    def _create_generalized_coordinate_dataloaders(data_config: Dict[str, Any], training_config: Dict[str, Any]) -> Tuple[DataLoader, Optional[DataLoader], DataLoader, pd.DataFrame, Dataset, Optional[Dataset], Dataset]:
         """一般化座標データローダーを作成"""
         print("一般化座標データローダーを作成中...")
 
@@ -121,7 +121,7 @@ class DataLoaderFactory:
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False) if val_dataset else None
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-        return train_loader, val_loader, test_loader, test_df
+        return train_loader, val_loader, test_loader, test_df, train_dataset, val_dataset, test_dataset
 
     @staticmethod
     def _create_custom_dataloaders(data_config: Dict[str, Any], training_config: Dict[str, Any]) -> Tuple[

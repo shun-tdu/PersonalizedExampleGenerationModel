@@ -70,8 +70,9 @@ data:
 # 評価設定
 evaluation:
   # 基本評価
-  latent_space_analysis: true
   reconstruction_quality: true
+  latent_space_analysis: false
+  comprehensive_latent_analysis: true
   
   # 高度な評価
   skill_axis_analysis: false

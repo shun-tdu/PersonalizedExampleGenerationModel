@@ -124,7 +124,7 @@ class IntegratedExperimentRunner:
             model_path = self._save_model(trained_model)
             
             # 5. 評価実行
-            evaluation_results = self._run_evaluation(trained_model, test_loader, test_data)
+            evaluation_results = self._run_evaluation(trained_model, test_data)
             
             # 6. 結果保存
             final_results = self._finalize_results(model_path, evaluation_results)
@@ -163,10 +163,13 @@ class IntegratedExperimentRunner:
         print(f"データセット情報: {dataset_info}")
 
         try:
-            train_loader, val_loader, test_loader, test_df = DataLoaderFactory.create_dataloaders(self.config)
+            train_loader, val_loader, test_loader, test_df, train_dataset, val_dataset, test_dataset = DataLoaderFactory.create_dataloaders(self.config)
 
             # テストデータ準備(評価用)
             test_data = {
+                'train_dataset': train_dataset,
+                'val_dataset': val_dataset,
+                'test_dataset': test_dataset,
                 'test_loader': test_loader,
                 'test_df': test_df,
                 'output_dir': self.output_dir,
@@ -240,7 +243,7 @@ class IntegratedExperimentRunner:
         print(f"モデル保存: {model_path}")
         return model_path
         
-    def _run_evaluation(self, model, test_loader, test_data):
+    def _run_evaluation(self, model, test_data):
         """評価実行"""
         print("評価開始...")
         
