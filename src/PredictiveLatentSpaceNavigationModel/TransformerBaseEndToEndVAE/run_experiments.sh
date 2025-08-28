@@ -1,0 +1,4 @@
+#!/bin/bash
+
+echo "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAEの逐次実験を開始します。"
+docker-compose exec app python PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/run_transformer_base_ete_vae.py --config_dir  PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/configs

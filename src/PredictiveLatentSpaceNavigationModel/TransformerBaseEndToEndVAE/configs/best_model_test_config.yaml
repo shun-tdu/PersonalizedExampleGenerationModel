@@ -1,11 +1,9 @@
-# CLAUDE_ADDED: サンプル設定ファイル
-# Transformer Base End-to-End VAE実験設定
-
+# CLAUDE_ADDED: ベストモデル保存機能テスト用設定ファイル
 experiment:
-  name: "transformer_base_e2e_vae_example"
-  description: "Transformer Base End-to-End VAEの基本実験"
+  name: "best_model_save_test"
+  description: "ベストモデル.pthファイル保存機能のテスト"
   priority: 1
-  tags: ["baseline", "transformer", "e2e"]
+  tags: ["test", "best_model", "early_stopping"]
   dependencies: []
 
 # モデル設定
@@ -13,46 +11,43 @@ model:
   class_name: "MotionTransformerVAE"
   file_path: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/models/signature_transformer_vae.py"
   
-  # モデルパラメータ
   input_dim: 6
   seq_len: 100
-  hidden_dim: 256
-  style_latent_dim: 32
-  skill_latent_dim: 8
+  hidden_dim: 128
+  style_latent_dim: 16
+  skill_latent_dim: 4
   beta: 0.00001
-  n_layers: 6
-  n_heads: 16
+  n_layers: 4
+  n_heads: 8
   max_len: 100
   contrastive_weight: 0.1
   signature_weight: 0.8
   use_triplet: false
 
-# 学習設定
+# 学習設定（ベストモデル保存テスト用）
 training:
-  num_epochs: 500
+  num_epochs: 20
   batch_size: 16
-  learning_rate: 0.0002
+  learning_rate: 0.001
   weight_decay: 0.00001
   
   optimizer: "AdamW"
   scheduler: "CosineAnnealingWarmRestarts"
-  scheduler_T_0: 30
+  scheduler_T_0: 5
   scheduler_T_mult: 2
-  scheduler_eta_min: 0.00001
+  scheduler_eta_min: 0.0001
+  
+  # CLAUDE_ADDED: ベストモデル保存機能のテスト設定
   early_stopping: true
-  patience: 30
-  min_delta: 0.0001
+  patience: 5
+  min_delta: 0.001
   monitor: "val_total_loss"
   mode: "min"
   restore_best_weights: true
   verbose: true
-  save_best_model: true
+  save_best_model: true  # ベストモデル保存を有効化
   
-  # 段階的学習設定
-  staged_training: true
-  stage1_epochs: 50  # 基本表現学習
-  stage2_epochs: 30  # スタイル分離
-  stage3_epochs: 20  # 統合最適化
+  staged_training: false
 
 # データ設定
 data:
@@ -62,58 +57,49 @@ data:
   val_size: 0.1
   random_seed: 42
   
-  # データ前処理
   normalize: true
   augmentation: false
   
-  # DataLoader設定
-  num_workers: 4
+  num_workers: 2
   pin_memory: true
   shuffle: true
 
-# 評価設定
+# 評価設定（最小限）
 evaluation:
-  # 基本評価
-  reconstruction_quality: true
+  reconstruction_quality: false
   latent_space_analysis: false
-  comprehensive_latent_analysis: true
+  comprehensive_latent_analysis: false
   
-  # 高度な評価
   skill_axis_analysis: false
-  style_separation_analysis: true
+  style_separation_analysis: false
   
-  # 可視化設定
-  create_plots: true
-  save_trajectories: true
-  generate_examples: true
+  create_plots: false
+  save_trajectories: false
+  generate_examples: false
   
-  # カスタム評価器
   custom_evaluators: []
 
 # 出力設定
 output:
   base_dir: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/outputs"
-  save_model: true
-  save_checkpoints: true
+  save_model: false
+  save_checkpoints: false
   checkpoint_interval: 10
   
-  # ログ設定
   log_level: "INFO"
   tensorboard: false
   wandb: false
   
-  # 結果保存
-  save_predictions: true
-  save_embeddings: true
-  create_report: true
+  save_predictions: false
+  save_embeddings: false
+  create_report: false
 
 # システム設定
 system:
-  device: "auto"  # "cuda", "cpu", "auto"
+  device: "auto"
   mixed_precision: false
   deterministic: true
   benchmark: false
   
-  # 並列処理
   dataloader_workers: 2
   pin_memory: true
