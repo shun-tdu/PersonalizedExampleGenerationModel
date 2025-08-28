@@ -30,6 +30,8 @@ from experiment_manager import (
 )
 from evaluator.base_evaluator import EvaluationPipeline
 
+from datasets import DataLoaderFactory, DatasetRegistry
+
 
 @dataclass
 class ExperimentConfig:
@@ -151,40 +153,38 @@ class IntegratedExperimentRunner:
     def _prepare_data(self):
         """データ準備"""
         print("データ準備中...")
-        
-        data_config = self.config['data']
-        
-        # ダミーデータローダー（実際のデータ処理はここで実装）
-        # TODO: 実際のデータセット実装
-        dummy_data = torch.randn(100, 100, 4)  # バッチサイズ、シーケンス長、特徴数
-        dummy_subjects = [f"subject_{i%5}" for i in range(100)]
-        
-        dataset = list(zip(dummy_data, dummy_subjects))
-        
-        # データ分割
-        train_size = int(0.7 * len(dataset))
-        val_size = int(0.15 * len(dataset))
-        test_size = len(dataset) - train_size - val_size
-        
-        train_dataset = dataset[:train_size]
-        val_dataset = dataset[train_size:train_size+val_size]
-        test_dataset = dataset[train_size+val_size:]
-        
-        # DataLoader作成
-        batch_size = data_config.get('batch_size', 32)
-        
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-        
-        # テストデータ準備（評価用）
-        test_data = {
-            'test_loader': test_loader,
-            'output_dir': self.output_dir,
-            'experiment_id': self.experiment_id or 0
-        }
-        
-        return train_loader, val_loader, test_loader, test_data
+
+        # データ設定の検証
+        if not DataLoaderFactory.validate_data_config(self.config):
+            raise ValueError("データ設定が無効です")
+
+        # データセット情報を表示
+        dataset_info = DataLoaderFactory.get_dataset_info(self.config)
+        print(f"データセット情報: {dataset_info}")
+
+        try:
+            train_loader, val_loader, test_loader, test_df = DataLoaderFactory.create_dataloaders(self.config)
+
+            # テストデータ準備(評価用)
+            test_data = {
+                'test_loader': test_loader,
+                'test_df': test_df,
+                'output_dir': self.output_dir,
+                'experiment_id': self.experiment_id or 0,
+                'dataset_info': dataset_info
+            }
+
+            print(f"データローダー作成完了:")
+            print(f"  - 学習データ: {len(train_loader)} batches")
+            print(f"  - 検証データ: {len(val_loader) if val_loader else 0} batches")
+            print(f"  - テストデータ: {len(test_loader)} batches")
+
+            return train_loader, val_loader, test_loader, test_data
+
+        except Exception as e:
+            print(f"データ読み込みエラー: {e}")
+            # フォールバックとして例外を再発生（エラーハンドリングは呼び出し元で）
+            raise
         
     def _setup_model(self):
         """モデル設定"""

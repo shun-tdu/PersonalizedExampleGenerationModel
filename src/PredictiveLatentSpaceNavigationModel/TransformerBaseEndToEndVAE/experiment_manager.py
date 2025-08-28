@@ -170,30 +170,29 @@ class ExperimentRunner:
         self.config = config
         self.history = {}
 
-    def setup_model(self) -> ModelWrapper:
-        """設定に基づいてモデルを初期化"""
-        model_config = self.config.get('model', {})
-
-        # 動的にモデルクラスをロード
-        # todo ここは後で設定場所をまとめる
-        model_class_name = model_config.get('class_name', 'MotionTransformerVAE')
-        model_module_path = model_config.get('module_path', 'models.ExampleModel')
-
-        # モジュールを動的インポート
-        spec = importlib.util.spec_from_file_location(
-            "model_module",
-            model_config.get('file_path', 'models/ExampleModel.py')
-        )
-        model_module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(model_module)
-
-        # モデルクラスを取得
-        model_class = getattr(model_module, model_class_name)
-
-        # モデルを初期化
-        model = model_class(**{k: v for k, v in model_config.items() if k not in ['class_name', 'module_path', 'file_path']})
-
-        return ModelWrapper(model, self.config)
+    # def setup_model(self) -> ModelWrapper:
+    #     """設定に基づいてモデルを初期化"""
+    #     model_config = self.config.get('model', {})
+    #
+    #     # 動的にモデルクラスをロード
+    #     model_class_name = model_config.get('class_name', 'MotionTransformerVAE')
+    #     # model_module_path = model_config.get('module_path', 'models.ExampleModel')
+    #
+    #     # モジュールを動的インポート
+    #     spec = importlib.util.spec_from_file_location(
+    #         "model_module",
+    #         model_config.get('file_path', 'models/ExampleModel.py')
+    #     )
+    #     model_module = importlib.util.module_from_spec(spec)
+    #     spec.loader.exec_module(model_module)
+    #
+    #     # モデルクラスを取得
+    #     model_class = getattr(model_module, model_class_name)
+    #
+    #     # モデルを初期化
+    #     model = model_class(**{k: v for k, v in model_config.items() if k not in ['class_name', 'module_path', 'file_path']})
+    #
+    #     return ModelWrapper(model, self.config)
 
     def run_training(self, model_wrapper: ModelWrapper, train_loader, val_loader):
         """訓練ループを実行"""
