@@ -180,7 +180,7 @@ class LatentSpaceEvaluator(BaseEvaluator):
     """潜在空間分析評価器"""
 
     def get_required_data(self) -> List[str]:
-        return ['test_loader', 'test_datasets', 'output_dir']
+        return ['test_loader', 'output_dir']
 
     def evaluate(self, model, test_data, device) -> EnhancedEvaluationResult:
         """潜在空間の包括評価"""

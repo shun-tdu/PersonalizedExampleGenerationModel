@@ -779,7 +779,7 @@ def main():
                         help='実験設定ファイルパス（単一実験用）')
     parser.add_argument('--config_dir', type=str, default='configs',
                         help='設定ファイルディレクトリ（バッチ実行用）')
-    parser.add_argument('--db_path', type=str, default='experiments.db',
+    parser.add_argument('--db_path', type=str, default='PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/experiments.db',
                         help='データベースファイルパス')
     parser.add_argument('--experiment_id', type=int,
                         help='実験ID（DBトラッキング用）')

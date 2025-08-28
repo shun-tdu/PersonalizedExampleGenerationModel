@@ -11,37 +11,34 @@ experiment:
 # モデル設定
 model:
   class_name: "MotionTransformerVAE"
-  file_path: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/models/signature_transformer_vae.py"
+  file_path: "models/ExampleModel.py"
   
   # モデルパラメータ
-  input_dim: 6
+  input_dim: 4
   seq_len: 100
   hidden_dim: 256
   style_latent_dim: 32
-  skill_latent_dim: 8
-  beta: 0.00001
-  n_layers: 6
-  n_heads: 16
-  max_len: 100
+  skill_latent_dim: 32
+  beta: 0.001
+  n_layers: 4
   contrastive_weight: 0.1
-  signature_weight: 0.8
   use_triplet: false
 
 # 学習設定
 training:
-  num_epochs: 200
-  batch_size: 16
-  learning_rate: 0.0002
+  num_epochs: 100
+  batch_size: 32
+  learning_rate: 0.001
   weight_decay: 0.00001
   
   optimizer: "AdamW"
   scheduler: "CosineAnnealingWarmRestarts"
-  scheduler_T_0: 30
+  scheduler_T_0: 15
   scheduler_T_mult: 2
-  scheduler_eta_min: 0.00001
+  scheduler_eta_min: 0.000001
   
   early_stopping: true
-  patience: 30
+  patience: 10
   save_best_model: true
   
   # 段階的学習設定
@@ -87,7 +84,7 @@ evaluation:
 
 # 出力設定
 output:
-  base_dir: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/outputs"
+  base_dir: "outputs"
   save_model: true
   save_checkpoints: true
   checkpoint_interval: 10

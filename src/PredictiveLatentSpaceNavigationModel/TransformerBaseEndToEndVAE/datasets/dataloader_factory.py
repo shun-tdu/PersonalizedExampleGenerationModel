@@ -62,18 +62,18 @@ class DataLoaderFactory:
         print("一般化座標データローダーを作成中...")
 
         # 設定からパラメータを取得
-        if 'processed_data_dir' not in data_config:
-            raise KeyError("data_configに 'processed_data_dir'のキーが見つかりません ")
+        if 'data_path' not in data_config:
+            raise KeyError("data_configに 'data_path'のキーが見つかりません ")
 
-        processed_data_dir = data_config['data_path']
+        data_path = data_config['data_path']
         batch_size = training_config.get('batch_size', 32)
         random_seed = data_config.get('random_seed', 42)
 
         # データのパス
-        train_data_path = os.path.join(processed_data_dir, 'train_data.parquet')
-        test_data_path = os.path.join(processed_data_dir, 'test_data.parquet')
-        scalers_path = os.path.join(processed_data_dir, 'scalers.joblib')
-        feature_config_path = os.path.join(processed_data_dir, 'feature_config.joblib')
+        train_data_path = os.path.join(data_path, 'train_data.parquet')
+        test_data_path = os.path.join(data_path, 'test_data.parquet')
+        scalers_path = os.path.join(data_path, 'scalers.joblib')
+        feature_config_path = os.path.join(data_path, 'feature_config.joblib')
 
         try:
             # データとスケーラーを読み込み
@@ -135,8 +135,9 @@ class DataLoaderFactory:
         raise NotImplementedError(f"Custom dataset type '{dataset_type}' requires specific implementation")
 
     @staticmethod
-    def validate_data_config(data_config: Dict[str, Any]) -> bool:
+    def validate_data_config(config: Dict[str, Any]) -> bool:
         """データ設定の妥当性を検証"""
+        data_config = config.get('data', {})
         dataset_type = data_config.get('type')
 
         if not dataset_type:
@@ -175,10 +176,10 @@ class DataLoaderFactory:
         }
 
         if dataset_type == 'generalized_coordinate':
-            processed_data_dir = data_config.get('processed_data_dir')
-            if processed_data_dir and os.path.exists(processed_data_dir):
+            data_path = data_config.get('data_path')
+            if data_path and os.path.exists(data_path):
                 try:
-                    feature_config_path = os.path.join(processed_data_dir, 'feature_config.joblib')
+                    feature_config_path = os.path.join(data_path, 'feature_config.joblib')
                     if os.path.exists(feature_config_path):
                         feature_config = joblib.load(feature_config_path)
                         info['feature_columns'] = feature_config.get('feature_cols', [])

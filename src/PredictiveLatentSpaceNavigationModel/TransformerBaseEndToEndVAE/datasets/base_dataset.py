@@ -28,7 +28,7 @@ class BaseExperimentDataset(ABC, Dataset):
         pass
 
     @abstractmethod
-    def __getitem__(self, idx: int) -> Tuple[torch.T, ...]:
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, ...]:
         """インデックスに対応するデータを返す"""
         pass
 

@@ -1,0 +1,164 @@
+
+        <!DOCTYPE html>
+        <html lang="ja">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>実験 2 評価レポート</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+                .container { max-width: 1200px; margin: 0 auto; background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+                h1 { color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px; }
+                h2 { color: #444; margin-top: 30px; }
+                .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }
+                .metric-card { background-color: #f9f9f9; padding: 15px; border-radius: 5px; border-left: 4px solid #4CAF50; }
+                .metric-name { font-weight: bold; color: #333; }
+                .metric-value { font-size: 1.2em; color: #4CAF50; margin: 5px 0; }
+                .metric-description { font-size: 0.9em; color: #666; }
+                .viz-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }
+                .viz-card { background-color: #f9f9f9; padding: 15px; border-radius: 5px; text-align: center; }
+                .viz-thumbnail { max-width: 100%; height: auto; border-radius: 3px; cursor: pointer; }
+                .viz-title { font-weight: bold; margin: 10px 0 5px 0; }
+                .viz-description { font-size: 0.9em; color: #666; }
+                .category { margin: 30px 0; }
+                .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.9); }
+                .modal-content { margin: auto; display: block; width: 90%; max-width: 1000px; }
+                .close { position: absolute; top: 15px; right: 35px; color: #f1f1f1; font-size: 40px; font-weight: bold; cursor: pointer; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>実験 2 評価レポート</h1>
+                <p>生成日時: 2025-08-28 05:18:40</p>
+
+                <!-- メトリクス セクション -->
+                <h2>📊 評価メトリクス</h2>
+                <div class="category"><h3>Reconstruction</h3>
+<div class="metric-grid">
+
+                <div class="metric-card">
+                    <div class="metric-name">reconstruction_mse</div>
+                    <div class="metric-value">0.3575</div>
+                    <div class="metric-description">RMSEによる再構築精度</div>
+                </div>
+                
+</div></div>
+<div class="category"><h3>Latent_Space</h3>
+<div class="metric-grid">
+
+                <div class="metric-card">
+                    <div class="metric-name">style_separation_ari</div>
+                    <div class="metric-value">-0.0012</div>
+                    <div class="metric-description">スタイル分離評価</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_separation_ratio</div>
+                    <div class="metric-value">0.4599</div>
+                    <div class="metric-description">スタイル分離評価</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_trial_time_correlation</div>
+                    <div class="metric-value">0.4371</div>
+                    <div class="metric-description">スキル表現評価</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_trial_error_correlation</div>
+                    <div class="metric-value">0.2168</div>
+                    <div class="metric-description">スキル表現評価</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_jerk_correlation</div>
+                    <div class="metric-value">0.5195</div>
+                    <div class="metric-description">スキル表現評価</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_path_efficiency_correlation</div>
+                    <div class="metric-value">-0.2065</div>
+                    <div class="metric-description">スキル表現評価</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_approach_angle_correlation</div>
+                    <div class="metric-value">-0.1781</div>
+                    <div class="metric-description">スキル表現評価</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_sparc_correlation</div>
+                    <div class="metric-value">-0.5176</div>
+                    <div class="metric-description">スキル表現評価</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_trial_variability_correlation</div>
+                    <div class="metric-value">0.4501</div>
+                    <div class="metric-description">スキル表現評価</div>
+                </div>
+                
+</div></div>
+
+                <!-- 可視化 セクション -->
+                <h2>📈 可視化結果</h2>
+                <div class="category"><h3>Latent_Space</h3>
+<div class="viz-grid">
+
+                <div class="viz-card">
+                    <div class="viz-title">latent_pca</div>
+                    <img src="../thumbnails/thumb_latent_pca_exp2.png" alt="latent_pca" 
+                         class="viz-thumbnail" data-fullsize="../plots/latent_pca_exp2.png">
+                    <div class="viz-description">潜在空間のPCA可視化</div>
+                </div>
+                
+</div></div>
+
+            </div>
+
+            <!-- 画像拡大表示用のモーダル -->
+            <div id="imageModal" class="modal">
+                <span class="close">&times;</span>
+                <img class="modal-content" id="modalImage">
+            </div>
+
+            <script>
+                // モーダル表示のJavaScript
+                document.addEventListener('DOMContentLoaded', function() {
+                    const modal = document.getElementById('imageModal');
+                    const modalImg = document.getElementById('modalImage');
+                    const closeBtn = document.getElementsByClassName('close')[0];
+
+                    // サムネイルクリック時の処理
+                    document.querySelectorAll('.viz-thumbnail').forEach(function(thumb) {
+                        thumb.addEventListener('click', function() {
+                            modal.style.display = 'block';
+                            modalImg.src = this.getAttribute('data-fullsize');
+                        });
+                    });
+
+                    // モーダルを閉じる
+                    closeBtn.addEventListener('click', function() {
+                        modal.style.display = 'none';
+                    });
+
+                    modal.addEventListener('click', function(e) {
+                        if (e.target === modal) {
+                            modal.style.display = 'none';
+                        }
+                    });
+                });
+            </script>
+        </body>
+        </html>
+        
