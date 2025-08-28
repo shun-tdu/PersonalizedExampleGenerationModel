@@ -4,7 +4,7 @@
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>実験 1 評価レポート</title>
+            <title>実験 2 評価レポート</title>
             <style>
                 body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
                 .container { max-width: 1200px; margin: 0 auto; background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
@@ -28,98 +28,97 @@
         </head>
         <body>
             <div class="container">
-                <h1>実験 1 評価レポート</h1>
-                <p>生成日時: 2025-08-28 05:12:37</p>
+                <h1>実験 2 評価レポート</h1>
+                <p>生成日時: 2025-08-28 09:44:53</p>
 
                 <!-- メトリクス セクション -->
                 <h2>📊 評価メトリクス</h2>
-                <div class="category"><h3>Reconstruction</h3>
+                <div class="category"><h3>Basic</h3>
 <div class="metric-grid">
 
                 <div class="metric-card">
-                    <div class="metric-name">reconstruction_mse</div>
-                    <div class="metric-value">0.4875</div>
-                    <div class="metric-description">RMSEによる再構築精度</div>
+                    <div class="metric-name">total_samples</div>
+                    <div class="metric-value">210.0000</div>
+                    <div class="metric-description">総サンプル数</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">n_subjects</div>
+                    <div class="metric-value">6.0000</div>
+                    <div class="metric-description">被験者数</div>
                 </div>
                 
 </div></div>
-<div class="category"><h3>Latent_Space</h3>
+<div class="category"><h3>Style_Separation</h3>
 <div class="metric-grid">
 
                 <div class="metric-card">
-                    <div class="metric-name">style_separation_ari</div>
-                    <div class="metric-value">-0.0146</div>
-                    <div class="metric-description">スタイル分離評価</div>
-                </div>
-                
-
-                <div class="metric-card">
                     <div class="metric-name">style_separation_ratio</div>
-                    <div class="metric-value">0.6189</div>
-                    <div class="metric-description">スタイル分離評価</div>
+                    <div class="metric-value">1.0117</div>
+                    <div class="metric-description">スタイル分離指標</div>
                 </div>
                 
 
                 <div class="metric-card">
-                    <div class="metric-name">skill_trial_time_correlation</div>
-                    <div class="metric-value">0.2893</div>
-                    <div class="metric-description">スキル表現評価</div>
+                    <div class="metric-name">style_avg_between_distance</div>
+                    <div class="metric-value">0.4667</div>
+                    <div class="metric-description">被験者間平均距離</div>
                 </div>
                 
 
                 <div class="metric-card">
-                    <div class="metric-name">skill_trial_error_correlation</div>
-                    <div class="metric-value">0.3599</div>
-                    <div class="metric-description">スキル表現評価</div>
+                    <div class="metric-name">style_avg_within_variance</div>
+                    <div class="metric-value">0.2128</div>
+                    <div class="metric-description">被験者内平均分散</div>
+                </div>
+                
+</div></div>
+<div class="category"><h3>Skill_Analysis</h3>
+<div class="metric-grid">
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_separation_ratio</div>
+                    <div class="metric-value">0.8287</div>
+                    <div class="metric-description">スキル分離比</div>
                 </div>
                 
 
                 <div class="metric-card">
-                    <div class="metric-name">skill_jerk_correlation</div>
-                    <div class="metric-value">0.2994</div>
-                    <div class="metric-description">スキル表現評価</div>
+                    <div class="metric-name">skill_separation_distance</div>
+                    <div class="metric-value">0.2119</div>
+                    <div class="metric-description">熟練度分離距離</div>
+                </div>
+                
+</div></div>
+<div class="category"><h3>Clustering</h3>
+<div class="metric-grid">
+
+                <div class="metric-card">
+                    <div class="metric-name">clustering_ari</div>
+                    <div class="metric-value">-0.0006</div>
+                    <div class="metric-description">Adjusted Rand Index</div>
                 </div>
                 
 
                 <div class="metric-card">
-                    <div class="metric-name">skill_path_efficiency_correlation</div>
-                    <div class="metric-value">-0.2136</div>
-                    <div class="metric-description">スキル表現評価</div>
-                </div>
-                
-
-                <div class="metric-card">
-                    <div class="metric-name">skill_approach_angle_correlation</div>
-                    <div class="metric-value">-0.3011</div>
-                    <div class="metric-description">スキル表現評価</div>
-                </div>
-                
-
-                <div class="metric-card">
-                    <div class="metric-name">skill_sparc_correlation</div>
-                    <div class="metric-value">0.2848</div>
-                    <div class="metric-description">スキル表現評価</div>
-                </div>
-                
-
-                <div class="metric-card">
-                    <div class="metric-name">skill_trial_variability_correlation</div>
-                    <div class="metric-value">0.2828</div>
-                    <div class="metric-description">スキル表現評価</div>
+                    <div class="metric-name">clustering_silhouette</div>
+                    <div class="metric-value">0.0798</div>
+                    <div class="metric-description">Silhouette Score</div>
                 </div>
                 
 </div></div>
 
                 <!-- 可視化 セクション -->
                 <h2>📈 可視化結果</h2>
-                <div class="category"><h3>Latent_Space</h3>
+                <div class="category"><h3>Comprehensive</h3>
 <div class="viz-grid">
 
                 <div class="viz-card">
-                    <div class="viz-title">latent_pca</div>
-                    <img src="../thumbnails/thumb_latent_pca_exp1.png" alt="latent_pca" 
-                         class="viz-thumbnail" data-fullsize="../plots/latent_pca_exp1.png">
-                    <div class="viz-description">潜在空間のPCA可視化</div>
+                    <div class="viz-title">comprehensive_latent_analysis</div>
+                    <img src="../thumbnails/thumb_comprehensive_latent_analysis_exp2.png" alt="comprehensive_latent_analysis" 
+                         class="viz-thumbnail" data-fullsize="../plots/comprehensive_latent_analysis_exp2.png">
+                    <div class="viz-description">包括的潜在空間分析（スタイル・スキル分離、クラスタリング性能を含む6つのプロット）</div>
                 </div>
                 
 </div></div>

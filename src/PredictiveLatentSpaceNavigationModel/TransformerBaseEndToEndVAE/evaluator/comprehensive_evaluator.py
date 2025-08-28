@@ -56,6 +56,9 @@ class ComprehensiveLatentSpaceEvaluator(BaseEvaluator):
         #結果をEnhancedEvaluationResultに格納
         self._populate_evaluation_result(result, analysis_results)
 
+        # HTMLレポート生成
+        report_path = result.create_comprehensive_report()
+
         return result
 
 
@@ -120,7 +123,7 @@ class ComprehensiveLatentSpaceEvaluator(BaseEvaluator):
         clustering_analysis = self._evaluate_clustering_performance(z_style, subject_labels, n_subjects)
 
         # 可視化生成
-        visualization_paths = self._create_comprehensive_visualizations(
+        visualization_fig = self._create_comprehensive_visualizations(
             z_style, z_skill, subject_ids, is_expert, unique_subjects,
             output_dir, experiment_id
         )
@@ -133,7 +136,7 @@ class ComprehensiveLatentSpaceEvaluator(BaseEvaluator):
             'style_analysis': style_analysis,
             'skill_analysis': skill_analysis,
             'clustering_analysis': clustering_analysis,
-            'visualization_paths': visualization_paths
+            'visualization_fig': visualization_fig
         }
 
         self._print_comprehensive_summary(results)
@@ -291,7 +294,7 @@ class ComprehensiveLatentSpaceEvaluator(BaseEvaluator):
             return {'status': f'clustering_error: {str(e)}'}
 
     def _create_comprehensive_visualizations(self, z_style, z_skill, subject_ids, is_expert,
-                                             unique_subjects, experiment_id) -> Dict[str, str]:
+                                             unique_subjects, output_dir, experiment_id):
         """包括的可視化生成 - Figureオブジェクトを返す"""
         print(f"\n🎨 可視化生成中...")
 
@@ -385,7 +388,15 @@ class ComprehensiveLatentSpaceEvaluator(BaseEvaluator):
         axes[1, 2].set_ylabel('Variance')
 
         plt.tight_layout()
-
+        
+        # ファイルに保存
+        plots_dir = os.path.join(output_dir, 'plots')
+        os.makedirs(plots_dir, exist_ok=True)
+        
+        save_path = os.path.join(plots_dir, f'comprehensive_latent_analysis_exp{experiment_id}.png')
+        fig.savefig(save_path, dpi=300, bbox_inches='tight', facecolor='white')
+        
+        print(f"  ✅ 可視化保存: {save_path}")
         print(f"  ✅ 可視化Figure生成完了")
 
         return fig
@@ -456,7 +467,8 @@ class ComprehensiveLatentSpaceEvaluator(BaseEvaluator):
         if 'visualization_fig' in analysis_results:
             result.add_visualization('comprehensive_latent_analysis',
                                      analysis_results['visualization_fig'],
-                                     '包括的潜在空間分析', 'comprehensive')
+                                     '包括的潜在空間分析（スタイル・スキル分離、クラスタリング性能を含む6つのプロット）', 
+                                     'comprehensive')
 
 
 
