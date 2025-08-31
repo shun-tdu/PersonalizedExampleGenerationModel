@@ -29,6 +29,7 @@ from experiment_manager import (
     ExperimentRunner, DatabaseTracker, ConfigHandler, ModelWrapper
 )
 from evaluator.base_evaluator import EvaluationPipeline
+from utils.training_visualizer import TrainingVisualizer
 
 from datasets import DataLoaderFactory, DatasetRegistry
 
@@ -74,6 +75,10 @@ class IntegratedExperimentRunner:
         
         # 出力ディレクトリ
         self.output_dir = self._setup_output_directory()
+
+        # 学習曲線可視化クラスの初期化
+        train_curve_path = os.path.join(self.output_dir, 'train_curve')
+        self.train_visualizer = TrainingVisualizer(train_curve_path, self.experiment_id)
         
     def _setup_device(self):
         """デバイス設定"""
@@ -96,7 +101,7 @@ class IntegratedExperimentRunner:
         os.makedirs(output_dir, exist_ok=True)
         
         # サブディレクトリ作成
-        for subdir in ['models', 'plots', 'reports', 'logs']:
+        for subdir in ['models', 'plots', 'reports', 'logs', 'train_curve']:
             os.makedirs(os.path.join(output_dir, subdir), exist_ok=True)
             
         return output_dir
@@ -219,7 +224,7 @@ class IntegratedExperimentRunner:
         
         # experiment_managerのExperimentRunnerを使用
         from experiment_manager import ExperimentRunner
-        runner = ExperimentRunner(self.tracker, self.config)
+        runner = ExperimentRunner(self.tracker, self.config, self.train_visualizer)
         
         # 学習実行
         runner.run_training(model_wrapper, train_loader, val_loader)

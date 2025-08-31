@@ -10,6 +10,7 @@ import torch.nn as nn
 import yaml
 import numpy as np
 
+from utils.training_visualizer import TrainingVisualizer
 
 class ModelMetrics(Protocol):
     """モデルの損失・評価指標のインターフェース"""
@@ -127,15 +128,14 @@ class ModelWrapper:
     def __init__(self, model, config: Dict[str, Any]):
         self.model = model
         self.config = config
-        # CLAUDE_ADDED: 現在のエポック情報を保持
         self.current_epoch = 0
 
     def compute_losses(self, batch_data) -> Dict[str, Any]:
         """損失を計算して辞書で返す"""
-        # CLAUDE_ADDED: データ形式に対応した処理
+
         if len(batch_data) == 2:
             trajectories, subject_ids = batch_data
-            # CLAUDE_ADDED: エポック情報をモデルに渡す (モデルがサポートしている場合)
+            # エポック情報をモデルに渡す
             if hasattr(self.model, 'set_training_context'):
                 self.model.set_training_context(current_epoch=self.current_epoch)
             outputs = self.model(trajectories, subject_ids)
@@ -144,12 +144,12 @@ class ModelWrapper:
             # モデルは trajectory と subject_id のみ使用
             trajectories, subject_ids = batch_data[0], batch_data[1]
             # is_expert (batch_data[2]) は現在のモデルでは使用しない
-            # CLAUDE_ADDED: エポック情報をモデルに渡す (モデルがサポートしている場合)
+            # エポック情報をモデルに渡す
             if hasattr(self.model, 'set_training_context'):
                 self.model.set_training_context(current_epoch=self.current_epoch)
             outputs = self.model(trajectories, subject_ids)
         else:
-            # CLAUDE_ADDED: エポック情報をモデルに渡す (モデルがサポートしている場合)
+            # エポック情報をモデルに渡す
             if hasattr(self.model, 'set_training_context'):
                 self.model.set_training_context(current_epoch=self.current_epoch)
             outputs = self.model(*batch_data)
@@ -305,10 +305,11 @@ class EarlyStopping:
 
 class ExperimentRunner:
     """実験実行の統合クラス"""
-    def __init__(self, tracker: ExperimentTracker, config: Dict[str, Any]):
+    def __init__(self, tracker: ExperimentTracker, config: Dict[str, Any], visualizer: TrainingVisualizer=None):
         self.tracker = tracker
         self.config = config
         self.history = {}
+        self.visualizer = visualizer
 
     def run_training(self, model_wrapper: ModelWrapper, train_loader, val_loader):
         """訓練ループを実行"""
@@ -392,7 +393,15 @@ class ExperimentRunner:
                     'best_model_path': early_stopping.get_best_model_path()
                 })
 
+            # 学習情報をトラッキング
             self.tracker.log_final_results(final_metrics)
+
+            # 学習曲線をプロット
+            if self.visualizer:
+                try:
+                    self.visualizer.save_loss_curves(self.history)
+                except Exception as e:
+                    print(f"警告: グラフ生成に失敗しました: {e}")
 
         except Exception as e:
             error_metrics = {

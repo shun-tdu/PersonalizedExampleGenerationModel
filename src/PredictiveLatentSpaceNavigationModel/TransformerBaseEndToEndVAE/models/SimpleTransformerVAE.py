@@ -148,21 +148,21 @@ class SimpleTransformerVAE(nn.Module):
         # β値を更新
         self._update_beta()
     
-    # CLAUDE_ADDED: β-アニーリング設定を更新
-    def configure_beta_annealing(self, enabled=True, schedule='linear', start_epoch=0, end_epoch=100, 
-                                min_beta=0.0, max_beta=1.0):
-        """β-アニーリングの設定を変更"""
-        self.beta_annealing_config.update({
-            'enabled': enabled,
-            'schedule': schedule,
-            'start_epoch': start_epoch,
-            'end_epoch': end_epoch,
-            'min_beta': min_beta,
-            'max_beta': max_beta
-        })
-        self._update_beta()
+    # # CLAUDE_ADDED: β-アニーリング設定を更新
+    # def configure_beta_annealing(self, enabled=True, schedule='linear', start_epoch=0, end_epoch=100,
+    #                             min_beta=0.0, max_beta=1.0):
+    #     """β-アニーリングの設定を変更"""
+    #     self.beta_annealing_config.update({
+    #         'enabled': enabled,
+    #         'schedule': schedule,
+    #         'start_epoch': start_epoch,
+    #         'end_epoch': end_epoch,
+    #         'min_beta': min_beta,
+    #         'max_beta': max_beta
+    #     })
+    #     self._update_beta()
     
-    # CLAUDE_ADDED: 現在のβ値を計算・更新
+
     def _update_beta(self):
         """現在のエポックに基づいてβ値を更新"""
         if not self.beta_annealing_config['enabled']:
