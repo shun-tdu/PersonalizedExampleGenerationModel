@@ -127,20 +127,31 @@ class ModelWrapper:
     def __init__(self, model, config: Dict[str, Any]):
         self.model = model
         self.config = config
+        # CLAUDE_ADDED: 現在のエポック情報を保持
+        self.current_epoch = 0
 
     def compute_losses(self, batch_data) -> Dict[str, Any]:
         """損失を計算して辞書で返す"""
         # CLAUDE_ADDED: データ形式に対応した処理
         if len(batch_data) == 2:
             trajectories, subject_ids = batch_data
+            # CLAUDE_ADDED: エポック情報をモデルに渡す (モデルがサポートしている場合)
+            if hasattr(self.model, 'set_training_context'):
+                self.model.set_training_context(current_epoch=self.current_epoch)
             outputs = self.model(trajectories, subject_ids)
         elif len(batch_data) >= 3:
             # 新しいデータローダー形式: [trajectory, subject_id, is_expert, ...]
             # モデルは trajectory と subject_id のみ使用
             trajectories, subject_ids = batch_data[0], batch_data[1]
             # is_expert (batch_data[2]) は現在のモデルでは使用しない
+            # CLAUDE_ADDED: エポック情報をモデルに渡す (モデルがサポートしている場合)
+            if hasattr(self.model, 'set_training_context'):
+                self.model.set_training_context(current_epoch=self.current_epoch)
             outputs = self.model(trajectories, subject_ids)
         else:
+            # CLAUDE_ADDED: エポック情報をモデルに渡す (モデルがサポートしている場合)
+            if hasattr(self.model, 'set_training_context'):
+                self.model.set_training_context(current_epoch=self.current_epoch)
             outputs = self.model(*batch_data)
 
         # モデルからの出力から損失を計算
@@ -318,6 +329,9 @@ class ExperimentRunner:
             self.tracker.update_status('running', start_time=datetime.now().isoformat())
 
             for epoch in range(num_epochs):
+                # CLAUDE_ADDED: エポック情報をModelWrapperに設定
+                model_wrapper.current_epoch = epoch
+                
                 # 訓練フェーズ
                 epoch_metrics = self._train_epoch(
                     model_wrapper, train_loader, optimizer, device
@@ -469,6 +483,12 @@ class ExperimentRunner:
                 T_0=training_config.get('scheduler_T_0', 15),
                 T_mult=training_config.get('scheduler_T_mult', 2),
                 eta_min=training_config.get('scheduler_eta_min', 1e-6)
+            )
+        elif scheduler_type == 'StepLR':
+            return torch.optim.lr_scheduler.StepLR(
+                optimizer,
+                step_size=training_config.get('scheduler_step_size', 50),
+                gamma=training_config.get('scheduler_gamma', 0.5)
             )
 
         return None
