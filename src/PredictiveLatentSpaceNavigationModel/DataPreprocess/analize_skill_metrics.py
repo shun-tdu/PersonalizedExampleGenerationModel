@@ -223,6 +223,8 @@ class TrajectoryDataLoader:
                         'HandleVelY': resampled_vel_y,
                         'HandleAccX': resampled_acc_x,
                         'HandleAccY': resampled_acc_y,
+                        'TargetEndPosX': trial_df['TargetEndPosX'].iloc[0],
+                        'TargetEndPosY': trial_df['TargetEndPosY'].iloc[0],
                         'original_length': original_length
                     })
 
@@ -261,27 +263,37 @@ class SkillMetricCalculator:
         """設定を受け取り初期化"""
         self.config = config
         self.target_seq_len = config['pre_process']['target_seq_len']
+
     
     def calculate_skill_metrics(self, preprocessed_data: pd.DataFrame) -> pd.DataFrame:
-        """前処理済みデータから各種スキル指標を計算"""
+        """前処理済みデータから各種スキル指標を計算して標準化"""
         skill_metrics = []
         
         for (subject_id, trial_num), trial_group in preprocessed_data.groupby(['subject_id', 'trial_num']):
             try:
-                # TODO(human) - スキル指標の計算実装
-                # 各トライアルから動作時間、終点誤差、ジャークを計算
+                # 各トライアルから軌道曲率、速度滑らかさ、加速度滑らかさ、ジャーク、制御安定性、時間的一貫性、動作時間、終点誤差を計算
+                curvature = self._calculate_curvature(trial_group)
+                velocity_smoothness = self._calculate_velocity_smoothness(trial_group)
+                acceleration_smoothness = self._calculate_acceleration_smoothness(trial_group)
+                jerk_score = self._calculate_jerk(trial_group)
+                control_stability = self._calculate_control_stability(trial_group)
+                temporal_consistency = self._calculate_temporal_consistency(trial_group)
                 trial_time = self._calculate_trial_time(trial_group)
                 endpoint_error = self._calculate_endpoint_error(trial_group)
-                jerk_score = self._calculate_jerk(trial_group)
-                
+
                 # 結果をまとめる
                 metrics = {
                     'subject_id': subject_id,
                     'trial_num': trial_num,
                     'block': trial_group['block'].iloc[0],
+                    'curvature': curvature,
+                    'velocity_smoothness': velocity_smoothness,
+                    'acceleration_smoothness': acceleration_smoothness,
+                    'jerk_score': jerk_score,
+                    'control_stability': control_stability,
+                    'temporal_consistency': temporal_consistency,
                     'trial_time': trial_time,
                     'endpoint_error': endpoint_error,
-                    'jerk_score': jerk_score
                 }
                 skill_metrics.append(metrics)
                 
@@ -289,23 +301,136 @@ class SkillMetricCalculator:
                 print(f"スキル指標計算エラー: 被験者{subject_id}, トライアル{trial_num}: {e}")
                 continue
         
-        return pd.DataFrame(skill_metrics)
-    
+        skill_metrics_df =  pd.DataFrame(skill_metrics)
+
+        # Z-score標準化の実行
+        if self.config.get('analysis', {}).get('standardize_metrics', True):
+            skill_metrics_df = self._standardize_metrics(skill_metrics_df)
+
+        return skill_metrics_df
+
+    def _standardize_metrics(self, metrics_df: pd.DataFrame) -> pd.DataFrame:
+        """スキル指標を標準化する"""
+        standardized_df = metrics_df.copy()
+
+        # 通知列のみを標準化対象とする
+        metric_directions = {'curvature': False,
+                              'velocity_smoothness': True,
+                              'acceleration_smoothness': True,
+                              'jerk_score': False,
+                              'control_stability': True,
+                              'temporal_consistency': True,
+                              'trial_time': False,
+                              'endpoint_error': False,
+                              }
+
+        for col in metric_directions.keys():
+            if col in standardized_df.columns:
+                values = standardized_df[col].dropna()
+                if len(values) > 1:
+                    mean_val = values.mean()
+                    std_val = values.std()
+                    if std_val > 0:
+                        z_scores = (standardized_df[col] - mean_val) / std_val
+                        # 低い値が良い指標は符号を反転
+                        if not metric_directions[col]:
+                            z_scores = -z_scores
+                        standardized_df[col] = z_scores
+
+        return standardized_df
+
+
+    def _calculate_curvature(self, trial_data: pd.DataFrame):
+        """軌道の曲率を計算"""
+        positions = trial_data[['HandlePosX','HandlePosY']].values
+
+        if len(positions) < 3:
+            return np.nan
+
+        curvatures = []
+        for i in range(1,len(positions) - 1):
+            p1, p2, p3 = positions[i - 1], positions[i], positions[i + 1]
+
+            # 3点から曲率を計算
+            a = np.linalg.norm(p2 - p1)
+            b = np.linalg.norm(p3 - p2)
+            c = np.linalg.norm(p3 - p1)
+
+            if a > 0 and b > 0 and c > 0:
+                s = (a + b + c) / 2
+                area = np.sqrt(max(0, s * (s - a) * (s - b) * (s - c)))
+                curvature = 4 * area / (a * b * c) if (a * b * c) > 0 else 0
+                curvatures.append(curvature)
+
+        return np.mean(curvatures) if curvatures else 0.0
+
+    def _calculate_velocity_smoothness(self, trial_data: pd.DataFrame):
+        """速度の滑らかさを計算"""
+        velocities = trial_data[['HandleVelX','HandleVelY']].values
+
+        if len(velocities) < 2:
+            return np.nan
+
+        vel_magnitude = np.sqrt(velocities[:, 0] ** 2 + velocities[:, 1] ** 2)
+        velocity_changes = np.abs(np.diff(vel_magnitude))
+
+        # 正規化された滑らかさ指標
+        smoothness = 1.0 / (1.0 + np.std(velocity_changes))
+        return smoothness
+
+    def _calculate_acceleration_smoothness(self, trial_data: pd.DataFrame):
+        """加速度の滑らかさ"""
+
+        if len(trial_data) < 3:
+            return np.nan
+
+        acc_x = trial_data['HandleAccX'].values
+        acc_y = trial_data['HandleAccY'].values
+        acc_magnitude = np.sqrt(acc_x ** 2 + acc_y ** 2)
+
+        acc_changes = np.abs(np.diff(acc_magnitude))
+        return 1.0 / (1.0 + np.std(acc_changes))
+
+    def _calculate_control_stability(self, trial_data: pd.DataFrame):
+        """制御安定性指標"""
+        if len(trial_data) < 5:
+            return np.nan
+
+        acc_x = trial_data['HandleAccX'].values
+        acc_y = trial_data['HandleAccY'].values
+
+        # 加速度の標準偏差（制御の安定性の逆指標）
+        acc_std = np.std(np.sqrt(acc_x ** 2 + acc_y ** 2))
+        stability = 1.0 / (1.0 + acc_std)
+
+        return stability
+
+    def _calculate_temporal_consistency(self, trial_data: pd.DataFrame):
+        """時間的一貫性"""
+        if len(trial_data) < 10:
+            return np.nan
+
+        timestamps = trial_data['Timestamp'].values
+        time_intervals = np.diff(timestamps)
+
+        # 時間間隔の一貫性
+        consistency = 1.0 / (1.0 + np.std(time_intervals) / np.mean(time_intervals))
+        return consistency
+
     def _calculate_trial_time(self, trial_data: pd.DataFrame) -> float:
         """動作時間の計算 - 軌道の長さから推定"""
-        # 実装例：正規化された時間軸を実際の時間に変換
-        # この実装では target_seq_len が実際の時間ステップ数を表すと仮定
-        return len(trial_data) / self.target_seq_len
+        time_stamps = trial_data['Timestamp'].values
+
+        return time_stamps[-1] - time_stamps[0]
     
     def _calculate_endpoint_error(self, trial_data: pd.DataFrame) -> float:
         """終点誤差の計算 - 目標位置からの距離"""
         # 最後の位置を終点として使用
         final_x = trial_data['HandlePosX'].iloc[-1]
         final_y = trial_data['HandlePosY'].iloc[-1]
-        
-        # TODO: 目標位置は設定から取得するか、データに含めるべき
-        # ここでは原点(0,0)を目標として仮定
-        target_x, target_y = 0.0, 0.0
+
+        target_x = trial_data['TargetEndPosX'].iloc[-1]
+        target_y = trial_data['TargetEndPosY'].iloc[-1]
         
         endpoint_error = np.sqrt((final_x - target_x)**2 + (final_y - target_y)**2)
         return endpoint_error
@@ -340,9 +465,16 @@ if __name__ == '__main__':
     try:
         # コンフィグの読み込み
         config_loader = DataPreprocessConfigLoader(config_dir)
+        config = config_loader.get_config()
 
         # 生データの読みこみ
-        trajectory_loader = TrajectoryDataLoader(config_loader.get_config())
+        trajectory_loader = TrajectoryDataLoader(config)
+
+        # スキル指標の計算
+        skill_metrics_calculator = SkillMetricCalculator(config)
+        skill_metrics_df = skill_metrics_calculator.calculate_skill_metrics(trajectory_loader.preprocessed_data_df)
+
+        # 因子分析
 
     except Exception as e:
         print(f"エラーが発生しました: {e}")

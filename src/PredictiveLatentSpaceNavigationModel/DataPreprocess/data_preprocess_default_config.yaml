@@ -9,6 +9,7 @@ pre_process:
 analysis:
   anova_skill_metrics: true
   factorize_skill_metrics: true
+  standardize_metrics: true
 
 data:
   raw_data_dir: "data/RawDatas/"
