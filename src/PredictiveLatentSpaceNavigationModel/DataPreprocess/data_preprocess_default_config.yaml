@@ -4,7 +4,7 @@ information:
 
 pre_process:
   target_seq_len: 100
-  interpolate_method: linear # linear, spline, polynomial
+  interpolate_method: linear # linear, spline
 
 analysis:
   anova_skill_metrics: true
