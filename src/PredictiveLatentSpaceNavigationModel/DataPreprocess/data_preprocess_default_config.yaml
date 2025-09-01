@@ -1,0 +1,16 @@
+information:
+  name: "Dat Preprocess test"
+  description: "コンフィグ駆動データセット作成システムのテスト"
+
+pre_process:
+  target_seq_len: 100
+  interpolate_method: linear # linear, spline, polynomial
+
+analysis:
+  anova_skill_metrics: true
+  factorize_skill_metrics: true
+
+data:
+  raw_data_dir: "data/RawDatas/"
+  output_dir: "PredictiveLatentSpaceNavigationModel/DataPreprocess/DataSets"
+  make_dataset: false

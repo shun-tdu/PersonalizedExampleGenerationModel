@@ -1,0 +1,122 @@
+# CLAUDE_ADDED: サンプル設定ファイル
+# Transformer Base End-to-End VAE実験設定
+
+experiment:
+  name: "Simple Reconstruction Test VAE"
+  description: "Simple Transformer VAEの再構築誤差改善実験 - βアニーリング"
+  priority: 1
+  tags: ["baseline", "transformer", "e2e"]
+  dependencies: []
+
+# モデル設定
+model:
+  class_name: "SimpleTransformerVAE"
+  file_path: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/models/SimpleTransformerVAE.py"
+  
+  # モデルパラメータ
+  input_dim: 6
+  seq_len: 100
+  d_model: 256
+  n_head: 8
+  num_layers: 2
+  latent_dim: 32
+  
+  # CLAUDE_ADDED: β-アニーリング設定
+  beta_annealing_config:
+    enabled: true
+    schedule: "linear"  # "linear", "exponential", "sigmoid"
+    start_epoch: 10
+    end_epoch: 60  # 100エポックでβが最大値に到達
+    min_beta: 0.0
+    max_beta: 0.001
+
+# 学習設定
+training:
+  num_epochs: 200
+  batch_size: 32
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+  
+  optimizer: "AdamW"
+  scheduler: "StepLR"
+  scheduler_step_size: 50
+  scheduler_gamma: 0.5
+
+  early_stopping: true
+  patience: 30
+  min_delta: 0.01
+  monitor: "val_total_loss"
+  mode: "min"
+  restore_best_weights: true
+  verbose: true
+  save_best_model: true
+  
+  # 段階的学習設定
+  staged_training: false
+  stage1_epochs: 50  # 基本表現学習
+  stage2_epochs: 30  # スタイル分離
+  stage3_epochs: 20  # 統合最適化
+
+# データ設定
+data:
+  type: "generalized_coordinate"
+  data_path: "PredictiveLatentSpaceNavigationModel/DataPreprocess/ForGeneralizedCoordinate"
+  test_size: 0.2
+  val_size: 0.1
+  random_seed: 42
+  
+  # データ前処理
+  normalize: true
+  augmentation: false
+  
+  # DataLoader設定
+  num_workers: 4
+  pin_memory: true
+  shuffle: true
+
+# 評価設定
+evaluation:
+  # 基本評価
+  reconstruction_quality: false
+  latent_space_analysis: false
+  comprehensive_latent_analysis: false
+  
+  # 高度な評価
+  skill_axis_analysis: false
+  style_separation_analysis: true
+  
+  # 可視化設定
+  create_plots: true
+  save_trajectories: true
+  generate_examples: true
+  
+  # カスタム評価器
+  custom_evaluators: []
+
+# 出力設定
+output:
+  base_dir: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/outputs"
+  save_model: true
+  save_checkpoints: true
+  checkpoint_interval: 10
+  
+  # ログ設定
+  log_level: "INFO"
+  tensorboard: false
+  wandb: false
+  
+  # 結果保存
+  save_predictions: true
+  save_embeddings: true
+  create_report: true
+
+# システム設定
+system:
+  device: "auto"  # "cuda", "cpu", "auto"
+  mixed_precision: false
+  deterministic: true
+  benchmark: false
+  
+  # 並列処理
+  dataloader_workers: 2
+  pin_memory: true
