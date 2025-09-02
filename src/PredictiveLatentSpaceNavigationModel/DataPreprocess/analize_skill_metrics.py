@@ -1,10 +1,16 @@
+import matplotlib.pyplot as plt
+import seaborn as sns
 import pandas as pd
 import numpy as np
 from typing import  Dict, List, Tuple, Optional
 from pathlib import  Path
 from scipy.interpolate import interp1d, UnivariateSpline
+from scipy import stats
+from sklearn.decomposition import FactorAnalysis
+from sklearn.preprocessing import StandardScaler
 
 import yaml
+import datetime
 
 
 class DataPreprocessConfigLoader:
@@ -109,6 +115,37 @@ class DataPreprocessConfigLoader:
         """データパスを取得"""
         return (self.config['data']['raw_data_dir'],
                 self.config['data']['output_dir'])
+
+class OutputManager:
+    """ファイルの出力を管理する"""
+    def __init__(self, validated_config: Dict):
+        self.config = validated_config
+        self.base_output_dir = self.config['data']['output_dir']
+        self.process_name = self.config['information']['name']
+
+        self._skill_analyzer_output_dir, self._dataset_builder_output_path = self._make_unique_output_paths()
+
+
+    def _make_unique_output_paths(self) -> tuple[Path, Path]:
+        """ユニークな出力ディレクトリパスを作成"""
+        base_path = Path(self.base_output_dir)
+        validated_process_name = self.process_name.replace(' ', '_')
+        time_stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+
+        dir_name = f"{validated_process_name}_{time_stamp}"
+
+        skill_analyzer_result_dir = base_path / dir_name / 'skill_analyze_result'
+        data_set_builder_output_dir = base_path / dir_name / 'dataset'
+
+        return skill_analyzer_result_dir, data_set_builder_output_dir
+
+    @property
+    def skill_analyzer_output_dir_path(self):
+        return self._skill_analyzer_output_dir
+
+    @property
+    def dataset_builder_output_dir_path(self):
+        return self._dataset_builder_output_path
 
 
 class TrajectoryDataLoader:
@@ -450,14 +487,385 @@ class SkillMetricCalculator:
         
         return jerk_score
 
+
 class SkillAnalyzer:
     """ANOVA,因子解析などの統計解析を担当"""
-    pass
+    def __init__(self, config: Dict, output_manager: OutputManager):
+        """設定を受け取り初期化"""
+        self.config = config
+        self.output_manager = output_manager
+        self.analysis_config = config.get('analysis', {})
+    
+    def analyze_skill_metrics(self, skill_metrics_df: pd.DataFrame) -> Dict:
+        """スキル指標の統計解析を実行"""
+        results = {}
+        
+        if self.analysis_config.get('anova_skill_metrics', False):
+            print("ANOVA解析を実行中...")
+            results['anova'] = self._perform_anova_analysis(skill_metrics_df)
+
+            # ANOVA解析結果の可視化
+            self._save_anova_plots(skill_metrics_df, results['anova'])
+
+        if self.analysis_config.get('factorize_skill_metrics', False):
+            print("因子分析を実行中...")
+            results['factor_analysis'] = self._perform_factor_analysis(skill_metrics_df)
+
+            # 因子分析結果の可視化
+            self._save_factor_analysis_plots(skill_metrics_df, results['factor_analysis'])
+
+        return results
+    
+    def _perform_anova_analysis(self, skill_metrics_df: pd.DataFrame) -> Dict:
+        """ANOVA解析の実行"""
+        anova_results = {}
+        
+        # 数値スキル指標列を取得
+        skill_columns = ['curvature', 'velocity_smoothness', 'acceleration_smoothness',
+                        'jerk_score', 'control_stability', 'temporal_consistency', 
+                        'trial_time', 'endpoint_error']
+        
+        for skill_metric in skill_columns:
+            if skill_metric in skill_metrics_df.columns:
+                try:
+                    # 被験者間のスキル指標差異を一元配置分散分析で検定
+                    anova_result = self._one_way_anova(skill_metrics_df, skill_metric)
+                    anova_results[skill_metric] = anova_result
+                    
+                except Exception as e:
+                    print(f"ANOVA解析エラー ({skill_metric}): {e}")
+                    anova_results[skill_metric] = {'error': str(e)}
+        
+        return anova_results
+    
+    def _one_way_anova(self, data: pd.DataFrame, metric_name: str) -> Dict:
+        """一元配置分散分析の実行"""
+        # 被験者ごとのデータをグループ化
+        groups = []
+        subject_ids = []
+        
+        for subject_id, subject_data in data.groupby('subject_id'):
+            metric_values = subject_data[metric_name].dropna()
+            if len(metric_values) > 0:
+                groups.append(metric_values.values)
+                subject_ids.append(subject_id)
+        
+        if len(groups) < 2:
+            return {'error': '分析に十分なグループ数がありません'}
+        
+        # ANOVA検定の実行
+        f_statistic, p_value = stats.f_oneway(*groups)
+        
+        # 効果量（eta squared）の計算
+        total_variance = np.var(np.concatenate(groups))
+        within_variance = np.mean([np.var(group) for group in groups])
+        eta_squared = (total_variance - within_variance) / total_variance
+        
+        return {
+            'f_statistic': f_statistic,
+            'p_value': p_value,
+            'eta_squared': eta_squared,
+            'significant': p_value < 0.05,
+            'groups_count': len(groups),
+            'subject_ids': subject_ids
+        }
+    
+    def _perform_factor_analysis(self, skill_metrics_df: pd.DataFrame) -> Dict:
+        """因子分析の実行"""
+        try:
+            # 数値スキル指標のみを抽出
+            skill_columns = ['curvature', 'velocity_smoothness', 'acceleration_smoothness',
+                            'jerk_score', 'control_stability', 'temporal_consistency', 
+                            'trial_time', 'endpoint_error']
+            
+            # 欠損値を除去してデータを準備
+            analysis_data = skill_metrics_df[skill_columns].dropna()
+            
+            if len(analysis_data) < 10:
+                return {'error': '因子分析に十分なサンプル数がありません'}
+            
+            # 標準化（念のため再度実行）
+            scaler = StandardScaler()
+            scaled_data = scaler.fit_transform(analysis_data)
+            
+            # 因子数の決定（固有値>1の基準）
+            correlation_matrix = np.corrcoef(scaled_data.T)
+            eigenvalues = np.linalg.eigvals(correlation_matrix)
+            n_factors = max(1, np.sum(eigenvalues > 1))
+            
+            # 因子分析の実行
+            fa = FactorAnalysis(n_components=n_factors, random_state=42)
+            fa.fit(scaled_data)
+            
+            # 因子負荷量の計算
+            factor_loadings = fa.components_.T
+            
+            # 因子得点の計算
+            factor_scores = fa.transform(scaled_data)
+            
+            return {
+                'n_factors': n_factors,
+                'factor_loadings': factor_loadings,
+                'factor_scores': factor_scores,
+                'explained_variance': eigenvalues[:n_factors],
+                'skill_columns': skill_columns,
+                'sample_size': len(analysis_data)
+            }
+            
+        except Exception as e:
+            return {'error': f'因子分析実行エラー: {str(e)}'}
+
+    def _save_anova_plots(self, skill_metrics_df: pd.DataFrame, anova_results: Dict):
+        output_dir = self.output_manager.skill_analyzer_output_dir_path
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 有意差のある指標と無い指標で分けて表示
+        significant_metrics = []
+        non_significant_metrics = []
+
+        metrics = []
+        eta_values = []
+        p_values = []
+
+        for metric, result  in anova_results.items():
+            if 'error' not in result:
+                if result.get('significant', False):
+                    significant_metrics.append(metric)
+                else:
+                    non_significant_metrics.append(metric)
+
+                metrics.append(metric)
+                eta_values.append(result['eta_squared'])
+                p_values.append(result['p_value'])
+
+        # 有意差ありの指標の箱ひげ図をプロット
+        if significant_metrics:
+            self._create_boxplot_grid(skill_metrics_df, significant_metrics, anova_results, output_dir / 'significant_results.png', "有意差のあるスキル指標(被験者間比較)")
+
+        # 有意差なしの指標の箱ひげ図をプロット
+        if non_significant_metrics:
+            self._create_boxplot_grid(skill_metrics_df, non_significant_metrics, anova_results, output_dir / 'non_significant_results.png',
+                                      "有意差のないスキル指標(被験者間比較)")
+
+        # 各指標の効果量、p値をプロット
+        if metrics:
+            self._create_bar_plot(metrics, eta_values, p_values, output_dir/ 'eta_result.png', "効果量の比較(全評価指標)")
+
+
+    def _create_boxplot_grid(self, data: pd.DataFrame, metrics: List[str], anova_results: Dict, save_path: Path, title: str):
+        """複数指標の箱ひげ図をグリッド表示"""
+        n_metrics = len(metrics)
+        n_cols = min(3, n_metrics)
+        n_rows = (n_metrics + n_cols - 1) // n_cols
+
+        fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols, figsize = (5 * n_cols, 4 * n_rows))
+
+        if n_metrics == 1:
+            axes = [axes]
+        elif n_rows == 1:
+            axes = axes.flatten() if n_cols > 1 else [axes]
+        else:
+            axes = axes.flatten()
+
+        for i, metric in enumerate(metrics):
+            ax = axes[i]
+
+            # 箱ひげ図の作成
+            sns.boxplot(data=data, x='subject_id', y=metric, ax=ax)
+            ax.set_title(f'{metric}\n(p={anova_results[metric]["p_value"]:.3f})',
+                         fontsize=12)
+            ax.set_xlabel('被験者ID')
+            ax.set_ylabel('スキル指標値')
+            ax.tick_params(axis='x', rotation=45)
+
+            # 余った軸を非表示
+        for j in range(i + 1, len(axes)):
+            axes[j].set_visible(False)
+
+        fig.suptitle(title, fontsize=16, y=1.02)
+        fig.tight_layout()
+
+        try:
+            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"✅ ANOVA箱ひげ図を保存: {save_path}")
+        except Exception as e:
+            print(f"❌ グラフ保存エラー: {e}")
+
+        plt.close(fig)
+
+    def _create_bar_plot(self, metrics: List, eta_values: List, p_values:List, save_path: Path, title: str):
+        """効果量とp値の棒グラフをプロット"""
+        data = {
+            'metrics': metrics,
+            'eta': eta_values,
+            'p_value': p_values
+        }
+        df = pd.DataFrame(data)
+
+        fig, axes = plt.subplots(nrows=1, ncols=2, figsize = (12, 5))
+
+        # 効果量のプロット
+        sns.barplot(data=df, x='metrics', y='eta', ax=axes[0])
+        axes[0].set_title('Effectiveness')
+
+        # p値のプロット
+        sns.barplot(data=df, x='metrics', y='p_value', ax=axes[1])
+        axes[1].set_title('p-value')
+        axes[1].axhline(y=0.05, color='red', linestyle='--', alpha=0.7, label='α=0.05')
+        axes[1].legend()
+
+        fig.suptitle(title, fontsize=16, y=1.02)
+        fig.tight_layout()
+
+        try:
+            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"✅ ANOVA結果効果量グラフを保存: {save_path}")
+        except Exception as e:
+            print(f"❌ グラフ保存エラー: {e}")
+
+        plt.close(fig)
+
+    def _save_factor_analysis_plots(self, skill_metrics_df: pd.DataFrame, factor_analysis_results: Dict):
+        """因子分析結果の可視化"""
+        output_dir = self.output_manager.skill_analyzer_output_dir_path
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. 因子負荷量ヒートマップ
+        self._create_factor_loading_heatmap(factor_analysis_results, output_dir / 'factor_loadings_heatmap.png')
+
+        # 2. 因子特典散布図(最初の2因子)
+        if factor_analysis_results['n_factors'] >= 2:
+            self._create_factor_score_scatter(skill_metrics_df, factor_analysis_results,
+                                              output_dir / 'factor_scores_scatter.png')
+        # 3. 因子寄与率棒グラフ
+        self._create_factor_variance_plot(factor_analysis_results, output_dir/ 'factor_variance_explained.png')
+
+    def _create_factor_loading_heatmap(self, factor_analysis_results: Dict, save_path: Path):
+        """因子負荷量のヒートマップ作成"""
+        loadings = factor_analysis_results['factor_loadings']
+        skill_columns = factor_analysis_results['skill_columns']
+        n_factors = factor_analysis_results['n_factors']
+
+        # DataFrameに変換
+        loading_df = pd.DataFrame(
+            loadings,
+            index=skill_columns,
+            columns=[f'Factor {i+1}' for i in range(n_factors)]
+        )
+
+        fig, axes = plt.subplots(figsize = (8, 6))
+        sns.heatmap(loading_df, annot=True, cmap='RdBu_r', center=0,
+                    fmt ='.2f', ax=axes, cbar_kws={'label': 'Factor Loading'})
+        axes.set_title('Factor Loading Matrix', fontsise=14)
+        axes.set_xlabel('Factor')
+        axes.set_ylabel('Skill Metrics')
+
+        try:
+            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"✅ 因子負荷量ヒートマップを保存: {save_path}")
+        except Exception as e:
+            print(f"❌ ヒートマップ保存エラー: {e}")
+
+        plt.close(fig)
+
+
+    def _create_factor_score_scatter(self, skill_metrics_df: pd.DataFrame, factor_analysis_results: Dict, save_path: Path):
+        """因子特典の散布図作成(第一因子 vs 第二因子)"""
+        factor_scores = factor_analysis_results['factor_scores']
+
+        # 被験者情報を追加
+        analysis_data = skill_metrics_df[factor_analysis_results['skill_columns']].dropna()
+        subject_info = skill_metrics_df.loc[analysis_data.index, ['subject_id', 'block']]
+
+        fig, axes = plt.subplots(figsize=(10, 8))
+
+        # 被験者ごとに色分けして散布図を作成
+        unique_subjects = subject_info['subject_id'].unique()
+        colors = plt.cm.tab10(np.linspace(0, 1, len(unique_subjects)))
+
+        for i, subject in enumerate(unique_subjects):
+            mask = subject_info['subject_id'] == subject
+            if np.sum(mask) > 0:
+                subject_scores = factor_scores[mask]
+                axes.scatter(subject_scores[:, 0], subject_scores[:, 1],
+                           c=[colors[i]], label=f'Subject {subject}', alpha=0.7, s=50)
+
+        axes.set_xlabel('Factor 1 score')
+        axes.set_ylabel('Factor 2 score')
+        axes.set_title('Factor Scatter Plot（Per subjects）', fontsize=14)
+        axes.grid(True, alpha=0.3)
+        axes.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+
+        # 軸の交点に線を追加
+        axes.axhline(y=0, color='k', linestyle='-', alpha=0.3)
+        axes.axvline(x=0, color='k', linestyle='-', alpha=0.3)
+
+        try:
+            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"✅ 因子得点散布図を保存: {save_path}")
+        except Exception as e:
+            print(f"❌ 散布図保存エラー: {e}")
+
+        plt.close(fig)
+
+    def _create_factor_variance_plot(self, factor_analysis_results: Dict, save_path: Path):
+        """因子の寄与率（説明分散）棒グラフ"""
+        eigenvalues = factor_analysis_results['explained_variance']
+        n_factors = factor_analysis_results['n_factors']
+
+        # 寄与率の計算
+        total_variance = np.sum(eigenvalues)
+        contribution_ratios = eigenvalues / total_variance * 100
+        cumulative_ratios = np.cumsum(contribution_ratios)
+
+        factor_names = [f'Factor {i + 1}' for i in range(n_factors)]
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+        # 寄与率棒グラフ
+        bars = ax1.bar(factor_names, contribution_ratios, alpha=0.7, color='steelblue')
+        ax1.set_title('Explained Variance', fontsize=12)
+        ax1.set_ylabel('Explained Variance (%)')
+        ax1.set_xlabel('Factor')
+
+        # 値をバーの上に表示
+        for bar, ratio in zip(bars, contribution_ratios):
+            height = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width() / 2., height,
+                     f'{ratio:.1f}%', ha='center', va='bottom')
+
+        # 累積寄与率折れ線グラフ
+        ax2.plot(factor_names, cumulative_ratios, marker='o', color='red', linewidth=2)
+        ax2.set_title(' Cumulative Explained Variance ', fontsize=12)
+        ax2.set_ylabel(' Cumulative Explained Variance  (%)')
+        ax2.set_xlabel('Factor')
+        ax2.grid(True, alpha=0.3)
+
+        # 値を点の上に表示
+        for i, ratio in enumerate(cumulative_ratios):
+            ax2.text(i, ratio + 2, f'{ratio:.1f}%', ha='center', va='bottom')
+
+        fig.suptitle('Factor Analysis：Explained Variance', fontsize=14, y=1.02)
+        fig.tight_layout()
+
+        try:
+            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"✅ 因子寄与率グラフを保存: {save_path}")
+        except Exception as e:
+            print(f"❌ 寄与率グラフ保存エラー: {e}")
+
+        plt.close(fig)
+
+
 
 class DatasetBuilder:
     """データセット生成クラス"""
     # todo コンフィグの nameごとにユニークな名前のディレクトリを作成する nameが同じ場合でも必ずユニークにする
     pass
+
+
+
+
 
 if __name__ == '__main__':
     config_dir = 'data_preprocess_default_config.yaml'
@@ -465,16 +873,21 @@ if __name__ == '__main__':
     try:
         # コンフィグの読み込み
         config_loader = DataPreprocessConfigLoader(config_dir)
-        config = config_loader.get_config()
+        validated_config = config_loader.get_config()
+
+        # 出力ディレクトリマネージャー
+        output_manager = OutputManager(validated_config)
 
         # 生データの読みこみ
-        trajectory_loader = TrajectoryDataLoader(config)
+        trajectory_loader = TrajectoryDataLoader(validated_config)
 
         # スキル指標の計算
-        skill_metrics_calculator = SkillMetricCalculator(config)
+        skill_metrics_calculator = SkillMetricCalculator(validated_config)
         skill_metrics_df = skill_metrics_calculator.calculate_skill_metrics(trajectory_loader.preprocessed_data_df)
 
-        # 因子分析
+        # ANOVA and 因子分析
+        skill_analyzer = SkillAnalyzer(validated_config, output_manager)
+        skill_analyzer.analyze_skill_metrics(skill_metrics_df)
 
     except Exception as e:
         print(f"エラーが発生しました: {e}")

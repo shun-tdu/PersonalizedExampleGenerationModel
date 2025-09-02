@@ -1,5 +1,5 @@
 information:
-  name: "Dat Preprocess test"
+  name: "Date Preprocess test"
   description: "コンフィグ駆動データセット作成システムのテスト"
 
 pre_process:
