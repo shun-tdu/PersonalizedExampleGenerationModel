@@ -70,6 +70,15 @@ class DataPreprocessConfigLoader:
             errors.append("設定ファイルに必須セクション 'pre_process' がありません")
             return errors
 
+        target_block_section =pre_process_section.get('target_block')
+        if target_block_section is None:
+            errors.append("設定ファイルに必須セクション 'target_block' がありません")
+            return errors
+        else:
+            if not 0 <= int(target_block_section) <= 4:
+                errors.append("必須セクション 'target_block' の値が不適切です。")
+                return errors
+
         target_seq_len_section = pre_process_section.get('target_seq_len')
         if target_seq_len_section is None:
             errors.append("設定ファイルに必須セクション 'target_seq_len' がありません")
@@ -116,6 +125,7 @@ class DataPreprocessConfigLoader:
         return (self.config['data']['raw_data_dir'],
                 self.config['data']['output_dir'])
 
+
 class OutputManager:
     """ファイルの出力を管理する"""
     def __init__(self, validated_config: Dict):
@@ -154,6 +164,7 @@ class TrajectoryDataLoader:
         """検証済み設定を受け取り"""
         self.config = config
         self.raw_data_dir = Path(config['data']['raw_data_dir'])
+        self.target_block = config.get('pre_process', {}).get('target_block', 0)
         self.raw_data_df = self._load_raw_data()
         self.preprocessed_data_df = self._preprocess_trajectories(self.raw_data_df)
 
@@ -175,7 +186,7 @@ class TrajectoryDataLoader:
                 df = pd.read_csv(file_path)
 
                 # カラム名を統一し、情報を付与
-                df = df.rename(columns={'SubjectId': 'subject_id', 'CurrentTrial': 'trial_num', 'Block': 'block'})
+                df = df.rename(columns={'SubjectId': 'subject_id', 'CurrentTrial': 'trial_num'})
                 df['subject_id'] = subject_id
                 df['block'] = block_num
                 df_list.append(df)
@@ -197,7 +208,7 @@ class TrajectoryDataLoader:
         processed_trajectories = [] #全トライアルを蓄積するリスト
 
         for subject_id, subject_df in data.groupby('subject_id'):
-            for trial_num, trial_df in subject_df.groupby('trial_num'):
+            for (trial_num, block_num), trial_df in subject_df.groupby(['trial_num', 'block']): # CLAUDE_ADDED: blockもグループ化に含める
                 try:
                     traj_positions = trial_df[['HandlePosX','HandlePosY']].values
                     traj_velocities = trial_df[['HandleVelX','HandleVelY']].values
@@ -248,12 +259,18 @@ class TrajectoryDataLoader:
                     resampled_acc_x = interp_acc_x(target_time)
                     resampled_acc_y = interp_acc_y(target_time)
 
+                    # 元のTimestamp情報を取得して新しい時間軸を作成
+                    original_start_time = trial_df['Timestamp'].iloc[0]
+                    original_end_time = trial_df['Timestamp'].iloc[-1]
+                    resampled_timestamps = np.linspace(original_start_time, original_end_time, target_seq_len)
+                    
                     # リサンプル後のデータをDataFrameに変換
                     trajectory_df = pd.DataFrame({
                         'subject_id': subject_id,
                         'trial_num': trial_num,
-                        'block': trial_df['block'].iloc[0],
+                        'block': block_num, # CLAUDE_ADDED: グループ化から取得した正しいblock番号を使用
                         'time_step':range(target_seq_len),
+                        'Timestamp': resampled_timestamps,
                         'HandlePosX': resampled_pos_x,
                         'HandlePosY': resampled_pos_y,
                         'HandleVelX': resampled_vel_x,
@@ -282,14 +299,19 @@ class TrajectoryDataLoader:
         return self.df['subject_id'].unique().to_list()
 
     def get_raw_data(self) -> Optional[pd.DataFrame]:
-        if self.raw_data_df:
+        if self.raw_data_df is not None:
             return self.raw_data_df
         else:
             return None
 
     def get_preprocessed_data(self) -> Optional[pd.DataFrame]:
-        if self.preprocessed_data_df:
-            return self.preprocessed_data_df
+        if self.preprocessed_data_df is not None:
+            if self.target_block == 0:
+                filtered_df = self.preprocessed_data_df
+            else:
+                filtered_df = self.preprocessed_data_df[self.preprocessed_data_df['block'] == self.target_block]
+
+            return filtered_df
         else:
             return None
 
@@ -304,9 +326,14 @@ class SkillMetricCalculator:
     
     def calculate_skill_metrics(self, preprocessed_data: pd.DataFrame) -> pd.DataFrame:
         """前処理済みデータから各種スキル指標を計算して標準化"""
+        # 入力データの検証
+        if preprocessed_data is None or len(preprocessed_data) == 0:
+            print("⚠️ スキル指標計算: 前処理データが空です")
+            return pd.DataFrame()  # 空のDataFrameを返す
+        
         skill_metrics = []
         
-        for (subject_id, trial_num), trial_group in preprocessed_data.groupby(['subject_id', 'trial_num']):
+        for (subject_id, trial_num, block), trial_group in preprocessed_data.groupby(['subject_id', 'trial_num', 'block']):
             try:
                 # 各トライアルから軌道曲率、速度滑らかさ、加速度滑らかさ、ジャーク、制御安定性、時間的一貫性、動作時間、終点誤差を計算
                 curvature = self._calculate_curvature(trial_group)
@@ -322,7 +349,7 @@ class SkillMetricCalculator:
                 metrics = {
                     'subject_id': subject_id,
                     'trial_num': trial_num,
-                    'block': trial_group['block'].iloc[0],
+                    'block': block,  #trial_group['block'].iloc[0],ここでもblockが1のみになっている
                     'curvature': curvature,
                     'velocity_smoothness': velocity_smoothness,
                     'acceleration_smoothness': acceleration_smoothness,
@@ -511,8 +538,11 @@ class SkillAnalyzer:
             print("因子分析を実行中...")
             results['factor_analysis'] = self._perform_factor_analysis(skill_metrics_df)
 
-            # 因子分析結果の可視化
-            self._save_factor_analysis_plots(skill_metrics_df, results['factor_analysis'])
+            # 因子分析結果の可視化（成功した場合のみ） # CLAUDE_ADDED
+            if 'error' not in results['factor_analysis']: # CLAUDE_ADDED
+                self._save_factor_analysis_plots(skill_metrics_df, results['factor_analysis'])
+            else: # CLAUDE_ADDED
+                print(f"⚠️ 因子分析がスキップされました: {results['factor_analysis']['error']}") # CLAUDE_ADDED
 
         return results
     
@@ -640,16 +670,16 @@ class SkillAnalyzer:
 
         # 有意差ありの指標の箱ひげ図をプロット
         if significant_metrics:
-            self._create_boxplot_grid(skill_metrics_df, significant_metrics, anova_results, output_dir / 'significant_results.png', "有意差のあるスキル指標(被験者間比較)")
+            self._create_boxplot_grid(skill_metrics_df, significant_metrics, anova_results, output_dir / 'significant_results.png', "Significant Skill Metrics")
 
         # 有意差なしの指標の箱ひげ図をプロット
         if non_significant_metrics:
             self._create_boxplot_grid(skill_metrics_df, non_significant_metrics, anova_results, output_dir / 'non_significant_results.png',
-                                      "有意差のないスキル指標(被験者間比較)")
+                                      "Non Significant Skill Metrics")
 
         # 各指標の効果量、p値をプロット
         if metrics:
-            self._create_bar_plot(metrics, eta_values, p_values, output_dir/ 'eta_result.png', "効果量の比較(全評価指標)")
+            self._create_bar_plot(metrics, eta_values, p_values, output_dir/ 'eta_result.png', "Comparison Effectiveness")
 
 
     def _create_boxplot_grid(self, data: pd.DataFrame, metrics: List[str], anova_results: Dict, save_path: Path, title: str):
@@ -674,8 +704,8 @@ class SkillAnalyzer:
             sns.boxplot(data=data, x='subject_id', y=metric, ax=ax)
             ax.set_title(f'{metric}\n(p={anova_results[metric]["p_value"]:.3f})',
                          fontsize=12)
-            ax.set_xlabel('被験者ID')
-            ax.set_ylabel('スキル指標値')
+            ax.set_xlabel('Subject ID')
+            ax.set_ylabel('Skill Metrics')
             ax.tick_params(axis='x', rotation=45)
 
             # 余った軸を非表示
@@ -707,12 +737,14 @@ class SkillAnalyzer:
         # 効果量のプロット
         sns.barplot(data=df, x='metrics', y='eta', ax=axes[0])
         axes[0].set_title('Effectiveness')
+        axes[0].tick_params(axis='x', rotation=45, labelsize=6)
 
         # p値のプロット
         sns.barplot(data=df, x='metrics', y='p_value', ax=axes[1])
         axes[1].set_title('p-value')
         axes[1].axhline(y=0.05, color='red', linestyle='--', alpha=0.7, label='α=0.05')
         axes[1].legend()
+        axes[1].tick_params(axis='x', rotation=45, labelsize=6)
 
         fig.suptitle(title, fontsize=16, y=1.02)
         fig.tight_layout()
@@ -756,7 +788,7 @@ class SkillAnalyzer:
         fig, axes = plt.subplots(figsize = (8, 6))
         sns.heatmap(loading_df, annot=True, cmap='RdBu_r', center=0,
                     fmt ='.2f', ax=axes, cbar_kws={'label': 'Factor Loading'})
-        axes.set_title('Factor Loading Matrix', fontsise=14)
+        axes.set_title('Factor Loading Matrix', fontsize=14)
         axes.set_xlabel('Factor')
         axes.set_ylabel('Skill Metrics')
 
@@ -868,7 +900,7 @@ class DatasetBuilder:
 
 
 if __name__ == '__main__':
-    config_dir = 'data_preprocess_default_config.yaml'
+    config_dir = 'PredictiveLatentSpaceNavigationModel/DataPreprocess/data_preprocess_default_config.yaml'
 
     try:
         # コンフィグの読み込み
@@ -883,7 +915,11 @@ if __name__ == '__main__':
 
         # スキル指標の計算
         skill_metrics_calculator = SkillMetricCalculator(validated_config)
-        skill_metrics_df = skill_metrics_calculator.calculate_skill_metrics(trajectory_loader.preprocessed_data_df)
+        preprocessed_data = trajectory_loader.get_preprocessed_data()
+        skill_metrics_df = skill_metrics_calculator.calculate_skill_metrics(preprocessed_data)
+
+        print(skill_metrics_df['block'].unique())
+        print(skill_metrics_df['trial_num'].unique())
 
         # ANOVA and 因子分析
         skill_analyzer = SkillAnalyzer(validated_config, output_manager)

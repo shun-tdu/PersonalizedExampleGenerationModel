@@ -1,8 +1,9 @@
 information:
-  name: "Date Preprocess test"
-  description: "コンフィグ駆動データセット作成システムのテスト"
+  name: "Calc Skill Score Test"
+  description: "スキルスコア計算のテスト"
 
 pre_process:
+  target_block : 0 # 0,1,2,3,4 0で全てブロックが対象
   target_seq_len: 100
   interpolate_method: linear # linear, spline
 
@@ -12,6 +13,6 @@ analysis:
   standardize_metrics: true
 
 data:
-  raw_data_dir: "data/RawDatas/"
-  output_dir: "PredictiveLatentSpaceNavigationModel/DataPreprocess/DataSets"
+  raw_data_dir: "../../data/RawDatas"
+  output_dir: "PredictiveLatentSpaceNavigationModel/DataPreprocess/AnalysisResults"
   make_dataset: false
