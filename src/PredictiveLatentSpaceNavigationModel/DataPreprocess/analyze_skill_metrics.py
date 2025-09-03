@@ -70,15 +70,6 @@ class DataPreprocessConfigLoader:
             errors.append("設定ファイルに必須セクション 'pre_process' がありません")
             return errors
 
-        target_block_section =pre_process_section.get('target_block')
-        if target_block_section is None:
-            errors.append("設定ファイルに必須セクション 'target_block' がありません")
-            return errors
-        else:
-            if not 0 <= int(target_block_section) <= 4:
-                errors.append("必須セクション 'target_block' の値が不適切です。")
-                return errors
-
         target_seq_len_section = pre_process_section.get('target_seq_len')
         if target_seq_len_section is None:
             errors.append("設定ファイルに必須セクション 'target_seq_len' がありません")
@@ -133,10 +124,10 @@ class OutputManager:
         self.base_output_dir = self.config['data']['output_dir']
         self.process_name = self.config['information']['name']
 
-        self._skill_analyzer_output_dir, self._dataset_builder_output_path = self._make_unique_output_paths()
+        self._skill_analyzer_output_dir, self._dataset_builder_output_path, self._skill_score_calculator_output_path = self._make_unique_output_paths()
 
 
-    def _make_unique_output_paths(self) -> tuple[Path, Path]:
+    def _make_unique_output_paths(self) -> tuple[Path, Path, Path]:
         """ユニークな出力ディレクトリパスを作成"""
         base_path = Path(self.base_output_dir)
         validated_process_name = self.process_name.replace(' ', '_')
@@ -146,8 +137,9 @@ class OutputManager:
 
         skill_analyzer_result_dir = base_path / dir_name / 'skill_analyze_result'
         data_set_builder_output_dir = base_path / dir_name / 'dataset'
+        skill_score_calculator_output_dir =base_path/ dir_name /'skill_score_result'
 
-        return skill_analyzer_result_dir, data_set_builder_output_dir
+        return skill_analyzer_result_dir, data_set_builder_output_dir, skill_score_calculator_output_dir
 
     @property
     def skill_analyzer_output_dir_path(self):
@@ -157,6 +149,10 @@ class OutputManager:
     def dataset_builder_output_dir_path(self):
         return self._dataset_builder_output_path
 
+    @property
+    def skill_score_calculator_output_dir_path(self):
+        return self._skill_score_calculator_output_path
+
 
 class TrajectoryDataLoader:
     """軌道データの読み込み・前処理を担当"""
@@ -164,7 +160,6 @@ class TrajectoryDataLoader:
         """検証済み設定を受け取り"""
         self.config = config
         self.raw_data_dir = Path(config['data']['raw_data_dir'])
-        self.target_block = config.get('pre_process', {}).get('target_block', 0)
         self.raw_data_df = self._load_raw_data()
         self.preprocessed_data_df = self._preprocess_trajectories(self.raw_data_df)
 
@@ -304,12 +299,13 @@ class TrajectoryDataLoader:
         else:
             return None
 
-    def get_preprocessed_data(self) -> Optional[pd.DataFrame]:
+    def get_preprocessed_data(self, block: int) -> Optional[pd.DataFrame]:
+        """指定したブロックの前処理済みDataFrameを返す"""
         if self.preprocessed_data_df is not None:
-            if self.target_block == 0:
+            if block== 0:
                 filtered_df = self.preprocessed_data_df
             else:
-                filtered_df = self.preprocessed_data_df[self.preprocessed_data_df['block'] == self.target_block]
+                filtered_df = self.preprocessed_data_df[self.preprocessed_data_df['block'] == block]
 
             return filtered_df
         else:
@@ -349,7 +345,7 @@ class SkillMetricCalculator:
                 metrics = {
                     'subject_id': subject_id,
                     'trial_num': trial_num,
-                    'block': block,  #trial_group['block'].iloc[0],ここでもblockが1のみになっている
+                    'block': block,
                     'curvature': curvature,
                     'velocity_smoothness': velocity_smoothness,
                     'acceleration_smoothness': acceleration_smoothness,
@@ -522,6 +518,10 @@ class SkillAnalyzer:
         self.config = config
         self.output_manager = output_manager
         self.analysis_config = config.get('analysis', {})
+
+        # スキルスコア計算用のスケーラと因子分析オブジェクト
+        self.used_standard_scaler = None
+        self.used_factor_analysis = None
     
     def analyze_skill_metrics(self, skill_metrics_df: pd.DataFrame) -> Dict:
         """スキル指標の統計解析を実行"""
@@ -538,11 +538,10 @@ class SkillAnalyzer:
             print("因子分析を実行中...")
             results['factor_analysis'] = self._perform_factor_analysis(skill_metrics_df)
 
-            # 因子分析結果の可視化（成功した場合のみ） # CLAUDE_ADDED
-            if 'error' not in results['factor_analysis']: # CLAUDE_ADDED
+            if 'error' not in results['factor_analysis']:
                 self._save_factor_analysis_plots(skill_metrics_df, results['factor_analysis'])
-            else: # CLAUDE_ADDED
-                print(f"⚠️ 因子分析がスキップされました: {results['factor_analysis']['error']}") # CLAUDE_ADDED
+            else:
+                print(f"⚠️ 因子分析がスキップされました: {results['factor_analysis']['error']}")
 
         return results
     
@@ -632,6 +631,10 @@ class SkillAnalyzer:
             
             # 因子得点の計算
             factor_scores = fa.transform(scaled_data)
+
+            # スケーラと因子分析オブジェクトの保存
+            self.used_standard_scaler = scaler
+            self.used_factor_analysis = fa
             
             return {
                 'n_factors': n_factors,
@@ -888,14 +891,111 @@ class SkillAnalyzer:
 
         plt.close(fig)
 
+    @property
+    def factorize_artifact(self):
+        if self.used_standard_scaler is not None and self.used_factor_analysis is not None:
+            return self.used_standard_scaler, self.used_factor_analysis
+        else:
+            print("学習済みStandard ScalerとFactor Analysisオブジェクトが存在しません")
+            return None
+
+
+class SkillScoreCalculator:
+    """スキルスコアを計算する"""
+    def __init__(self, config: Dict, output_manager: OutputManager):
+        self.config = config
+        self.output = output_manager
+        self.factor_weights = np.array([0.565, 0.245, 0.19])
+
+    def calc_skill_score(self, skill_metrics_df: pd.DataFrame, expert_scaler: StandardScaler, expert_fa: FactorAnalysis ) -> pd.DataFrame:
+        """スキルスコアを計算する"""
+        plot_data_list = []
+
+        skill_columns = ['curvature', 'velocity_smoothness', 'acceleration_smoothness',
+                         'jerk_score', 'control_stability', 'temporal_consistency',
+                         'trial_time', 'endpoint_error']
+
+        for subject_id, subject_df in skill_metrics_df.groupby('subject_id'):
+            sorted_trials = subject_df.sort_values(by=['block', 'trial_num']).reset_index()
+
+            for i, trial_row in sorted_trials.iterrows():
+                try:
+                    # CLAUDE_ADDED: 1トライアル分のスキル指標をDataFrameとして抽出（特徴量名を保持）
+                    trial_metrics_df = trial_row[skill_columns].to_frame().T
+                    
+                    # CLAUDE_ADDED: データ型をチェックして数値型に変換
+                    # 非数値データが含まれている場合の対処
+                    for col in skill_columns:
+                        trial_metrics_df[col] = pd.to_numeric(trial_metrics_df[col], errors='coerce')
+                    
+                    # 欠損値確認
+                    if trial_metrics_df.isna().any().any():
+                        continue
+
+                    # CLAUDE_ADDED: 学習済みスケーラで標準化（DataFrame形式で渡して特徴量名を保持）
+                    scaled_metrics = expert_scaler.transform(trial_metrics_df)
+
+                    # 学習済みFAモデルで因子得点を計算
+                    factor_scores = expert_fa.transform(scaled_metrics)
+
+                    # 因子得点を重み付けして単一のスキルスコアに合算
+                    skill_score = np.dot(factor_scores[0], self.factor_weights)
+
+                    plot_data_list.append({
+                        'subject_id': subject_id,
+                        'trial_order': i + 1,
+                        'block': trial_row['block'],
+                        'trial_num_in_block': trial_row['trial_num'],
+                        'skill_score': skill_score
+                    })
+                except Exception as e:
+                    print(f"スコア計算エラー: 被験者 {subject_id}, trial_index {i}: {e}")
+
+        # リストから最終的なDataFrameを作成
+        skill_score_df = pd.DataFrame(plot_data_list)
+
+        # スキルスコアの推移をプロット
+        if skill_score_df is not None:
+            self._save_skill_score_plots(skill_score_df)
+
+        return skill_score_df
+
+    def _save_skill_score_plots(self, skill_scores: pd.DataFrame):
+        """被験者ごとにスキルスコアの推移をプロットする"""
+        self.output.skill_score_calculator_output_dir_path.mkdir(parents=True, exist_ok=True)
+
+        save_path = self.output.skill_score_calculator_output_dir_path / 'skill_score_transition.png'
+
+        plt.figure(figsize=(12, 7))
+
+        sns.lineplot(
+            data =skill_scores,
+            x='trial_order',
+            y='skill_score',
+            hue='subject_id',
+        )
+
+        plt.title('Skill Score Improvement Over Trials per Subject')
+        plt.xlabel('Trial Order')
+        plt.ylabel('Calculated Skill Score')
+        plt.grid(True)
+        plt.legend(title='Subject ID')
+
+        plt.tight_layout()
+
+        try:
+            plt.savefig(save_path, dpi=300)
+            print(f"✅ スキルスコア推移グラフを保存: {save_path}")
+        except Exception as e:
+            print(f"❌ グラフ保存エラー: {e}")
+
+        plt.close()
 
 
 class DatasetBuilder:
     """データセット生成クラス"""
     # todo コンフィグの nameごとにユニークな名前のディレクトリを作成する nameが同じ場合でも必ずユニークにする
     pass
-
-
 
 
 
@@ -913,9 +1013,14 @@ if __name__ == '__main__':
         # 生データの読みこみ
         trajectory_loader = TrajectoryDataLoader(validated_config)
 
+        # ============ 熟達したデータで因子分析を実行 (block_num = 4) ============
+        print("============ 熟達したデータで因子分析を実行 (block_num = 4) ============")
+
+        block_num = 4
+
         # スキル指標の計算
         skill_metrics_calculator = SkillMetricCalculator(validated_config)
-        preprocessed_data = trajectory_loader.get_preprocessed_data()
+        preprocessed_data = trajectory_loader.get_preprocessed_data(block_num)
         skill_metrics_df = skill_metrics_calculator.calculate_skill_metrics(preprocessed_data)
 
         print(skill_metrics_df['block'].unique())
@@ -924,6 +1029,26 @@ if __name__ == '__main__':
         # ANOVA and 因子分析
         skill_analyzer = SkillAnalyzer(validated_config, output_manager)
         skill_analyzer.analyze_skill_metrics(skill_metrics_df)
+
+        # 学習済みスケーラと因子分析オブジェクトを取得
+        trained_scaler, trained_fa = skill_analyzer.factorize_artifact
+
+        # ============ 全データに対してスキルスコアを計算 (block_num = 0) ============
+        print("============ 全データに対してスキルスコアを計算 (block_num = 0) ============")
+        block_num = 0
+
+        # スキル指標を全データで計算
+        all_preprocess_data = trajectory_loader.get_preprocessed_data(block_num)
+        all_skill_metrics_df = skill_metrics_calculator.calculate_skill_metrics(all_preprocess_data)
+
+        print(all_skill_metrics_df['block'].unique())
+        print(all_skill_metrics_df['trial_num'].unique())
+
+        # スキルスコア計算クラス
+        skill_score_calculator = SkillScoreCalculator(validated_config, output_manager)
+
+        # スキルスコアを計算してプロット
+        skill_score_calculator.calc_skill_score(all_skill_metrics_df, trained_scaler, trained_fa)
 
     except Exception as e:
         print(f"エラーが発生しました: {e}")

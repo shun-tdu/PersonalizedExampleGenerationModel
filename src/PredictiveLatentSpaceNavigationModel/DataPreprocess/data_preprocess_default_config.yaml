@@ -3,7 +3,6 @@ information:
   description: "スキルスコア計算のテスト"
 
 pre_process:
-  target_block : 0 # 0,1,2,3,4 0で全てブロックが対象
   target_seq_len: 100
   interpolate_method: linear # linear, spline
 
