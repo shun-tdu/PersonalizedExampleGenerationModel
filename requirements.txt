@@ -30,3 +30,4 @@ plotly==5.22.0
 marimo==0.14.16
 umap-learn
 statsmodels>=0.14.0,<0.15.0
+factor-analyzer==0.5.1

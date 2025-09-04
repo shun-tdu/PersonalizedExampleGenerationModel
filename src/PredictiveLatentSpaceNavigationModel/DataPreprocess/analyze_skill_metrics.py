@@ -6,7 +6,9 @@ from typing import  Dict, List, Tuple, Optional
 from pathlib import  Path
 from scipy.interpolate import interp1d, UnivariateSpline
 from scipy import stats
-from sklearn.decomposition import FactorAnalysis
+from factor_analyzer import FactorAnalyzer
+# from sklearn.decomposition import FactorAnalysis
+
 from sklearn.preprocessing import StandardScaler
 
 import yaml
@@ -364,8 +366,8 @@ class SkillMetricCalculator:
         skill_metrics_df =  pd.DataFrame(skill_metrics)
 
         # Z-score標準化の実行
-        if self.config.get('analysis', {}).get('standardize_metrics', True):
-            skill_metrics_df = self._standardize_metrics(skill_metrics_df)
+        # if self.config.get('analysis', {}).get('standardize_metrics', True):
+        #     skill_metrics_df = self._standardize_metrics(skill_metrics_df)
 
         return skill_metrics_df
 
@@ -523,7 +525,7 @@ class SkillAnalyzer:
         self.used_standard_scaler = None
         self.used_factor_analysis = None
     
-    def analyze_skill_metrics(self, skill_metrics_df: pd.DataFrame) -> Dict:
+    def analyze_skill_metrics(self, skill_metrics_df: pd.DataFrame, rotation: str = 'promax') -> Dict:
         """スキル指標の統計解析を実行"""
         results = {}
         
@@ -536,7 +538,7 @@ class SkillAnalyzer:
 
         if self.analysis_config.get('factorize_skill_metrics', False):
             print("因子分析を実行中...")
-            results['factor_analysis'] = self._perform_factor_analysis(skill_metrics_df)
+            results['factor_analysis'] = self._perform_factor_analysis(skill_metrics_df, rotation)
 
             if 'error' not in results['factor_analysis']:
                 self._save_factor_analysis_plots(skill_metrics_df, results['factor_analysis'])
@@ -599,7 +601,7 @@ class SkillAnalyzer:
             'subject_ids': subject_ids
         }
     
-    def _perform_factor_analysis(self, skill_metrics_df: pd.DataFrame) -> Dict:
+    def _perform_factor_analysis(self, skill_metrics_df: pd.DataFrame, rotation: str) -> Dict:
         """因子分析の実行"""
         try:
             # 数値スキル指標のみを抽出
@@ -623,11 +625,13 @@ class SkillAnalyzer:
             n_factors = max(1, np.sum(eigenvalues > 1))
             
             # 因子分析の実行
-            fa = FactorAnalysis(n_components=n_factors, random_state=42)
+            # fa = FactorAnalysis(n_components=n_factors, random_state=42)
+            fa = FactorAnalyzer(n_factors=n_factors, rotation=rotation)
             fa.fit(scaled_data)
             
             # 因子負荷量の計算
-            factor_loadings = fa.components_.T
+            # factor_loadings = fa.components_.T
+            factor_loadings = fa.loadings_
             
             # 因子得点の計算
             factor_scores = fa.transform(scaled_data)
@@ -635,8 +639,8 @@ class SkillAnalyzer:
             # スケーラと因子分析オブジェクトの保存
             self.used_standard_scaler = scaler
             self.used_factor_analysis = fa
-            
-            return {
+
+            result = {
                 'n_factors': n_factors,
                 'factor_loadings': factor_loadings,
                 'factor_scores': factor_scores,
@@ -644,6 +648,12 @@ class SkillAnalyzer:
                 'skill_columns': skill_columns,
                 'sample_size': len(analysis_data)
             }
+
+            if rotation == 'promax':
+                factor_correlation = fa.phi_
+                result['factor_correlations'] = factor_correlation
+
+            return result
             
         except Exception as e:
             return {'error': f'因子分析実行エラー: {str(e)}'}
@@ -775,6 +785,9 @@ class SkillAnalyzer:
         # 3. 因子寄与率棒グラフ
         self._create_factor_variance_plot(factor_analysis_results, output_dir/ 'factor_variance_explained.png')
 
+        # 4. promax 回転の場合は因子相関行列をプロット
+        self._create_factor_correlation_heatmap(factor_analysis_results, output_dir / 'factor_correlation_heatmap.png')
+
     def _create_factor_loading_heatmap(self, factor_analysis_results: Dict, save_path: Path):
         """因子負荷量のヒートマップ作成"""
         loadings = factor_analysis_results['factor_loadings']
@@ -891,6 +904,35 @@ class SkillAnalyzer:
 
         plt.close(fig)
 
+    def _create_factor_correlation_heatmap(self, factor_analysis_results: Dict, save_path: Path):
+        """因子相関行列のヒートマップ作成"""
+
+        # 因子相関行列の存在確認
+        fa_correlation = factor_analysis_results.get('factor_correlations')
+        if fa_correlation is None:
+            print("💡 因子間相関行列は斜交回転（promaxなど）の場合のみプロットされます。")
+            return
+
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(fa_correlation,
+                    annot=True,
+                    fmt='.2f',
+                    cmap='RdBu_r',
+                    vmin=-1,
+                    vmax=1)
+        plt.title('Factor Correlation Matrix')
+        plt.xlabel('Factor')
+        plt.ylabel('Factor')
+
+        try:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            print(f"✅ 因子間相関行列ヒートマップを保存: {save_path}")
+        except Exception as e:
+            print(f"❌ ヒートマップ保存エラー: {e}")
+
+        plt.close()
+
+
     @property
     def factorize_artifact(self):
         if self.used_standard_scaler is not None and self.used_factor_analysis is not None:
@@ -905,9 +947,9 @@ class SkillScoreCalculator:
     def __init__(self, config: Dict, output_manager: OutputManager):
         self.config = config
         self.output = output_manager
-        self.factor_weights = np.array([0.565, 0.245, 0.19])
+        self.factor_weights = np.array([-0.565, 0.245, -0.19])
 
-    def calc_skill_score(self, skill_metrics_df: pd.DataFrame, expert_scaler: StandardScaler, expert_fa: FactorAnalysis ) -> pd.DataFrame:
+    def calc_skill_score(self, skill_metrics_df: pd.DataFrame, expert_scaler: StandardScaler, expert_fa: FactorAnalyzer ) -> pd.DataFrame:
         """スキルスコアを計算する"""
         plot_data_list = []
 
@@ -960,18 +1002,73 @@ class SkillScoreCalculator:
 
         return skill_score_df
 
+    def calculate_stable_skill_score(self, skill_metrics_df: pd.DataFrame,expert_scaler: StandardScaler, expert_fa: FactorAnalyzer, window_size=10):
+        """安定したスキルスコア計算"""
+        stable_scores = []
+
+        skill_columns = ['curvature', 'velocity_smoothness', 'acceleration_smoothness',
+                         'jerk_score', 'control_stability', 'temporal_consistency',
+                         'trial_time', 'endpoint_error']
+
+        for subject_id, subject_df in skill_metrics_df.groupby('subject_id'):
+            sorted_trials = subject_df.sort_values(by=['block', 'trial_num']).reset_index()
+
+            for i, trial_row in sorted_trials.iterrows():
+                try:
+                    trial_metrics_df = trial_row[skill_columns].to_frame().T
+
+                    # 非数値データが含まれている場合の対処
+                    for col in skill_columns:
+                        trial_metrics_df[col] = pd.to_numeric(trial_metrics_df[col], errors='coerce')
+
+                    # 欠損値確認
+                    if trial_metrics_df.isna().any().any():
+                        continue
+
+                    # CLAUDE_ADDED: 学習済みスケーラで標準化（DataFrame形式で渡して特徴量名を保持）
+                    scaled_metrics = expert_scaler.transform(trial_metrics_df)
+
+                    # 学習済みFAモデルで因子得点を計算
+                    factor_scores = expert_fa.transform(scaled_metrics)
+
+                    # 因子得点を重み付けして単一のスキルスコアに合算
+                    skill_score = np.dot(factor_scores[0], self.factor_weights)
+
+                    stable_scores.append({
+                        'subject_id': subject_id,
+                        'trial_order': i + 1,
+                        'block': trial_row['block'],
+                        'trial_num_in_block': trial_row['trial_num'],
+                        'skill_score': skill_score
+                    })
+
+                except Exception as e:
+                    print(f"スコア計算エラー: 被験者 {subject_id}, trial_index {i}: {e}")
+
+        skill_score_df = pd.DataFrame(stable_scores)
+
+        skill_score_df['smoothed_skill_score'] = skill_score_df.groupby('subject_id')['skill_score'].transform(lambda x: x.rolling(window_size, min_periods=1).mean())
+
+        # スキルスコアの推移をプロット
+        if skill_score_df is not None:
+            self._save_skill_score_plots(skill_score_df)
+
+        return pd.DataFrame(stable_scores)
+
+
+
     def _save_skill_score_plots(self, skill_scores: pd.DataFrame):
         """被験者ごとにスキルスコアの推移をプロットする"""
         self.output.skill_score_calculator_output_dir_path.mkdir(parents=True, exist_ok=True)
 
-        save_path = self.output.skill_score_calculator_output_dir_path / 'skill_score_transition.png'
+        save_path = self.output.skill_score_calculator_output_dir_path / 'stable_skill_score_transition.png'
 
         plt.figure(figsize=(12, 7))
 
         sns.lineplot(
             data =skill_scores,
             x='trial_order',
-            y='skill_score',
+            y='smoothed_skill_score',
             hue='subject_id',
         )
 
@@ -1028,27 +1125,27 @@ if __name__ == '__main__':
 
         # ANOVA and 因子分析
         skill_analyzer = SkillAnalyzer(validated_config, output_manager)
-        skill_analyzer.analyze_skill_metrics(skill_metrics_df)
+        skill_analyzer.analyze_skill_metrics(skill_metrics_df, 'promax')
 
         # 学習済みスケーラと因子分析オブジェクトを取得
         trained_scaler, trained_fa = skill_analyzer.factorize_artifact
 
-        # ============ 全データに対してスキルスコアを計算 (block_num = 0) ============
-        print("============ 全データに対してスキルスコアを計算 (block_num = 0) ============")
-        block_num = 0
-
-        # スキル指標を全データで計算
-        all_preprocess_data = trajectory_loader.get_preprocessed_data(block_num)
-        all_skill_metrics_df = skill_metrics_calculator.calculate_skill_metrics(all_preprocess_data)
-
-        print(all_skill_metrics_df['block'].unique())
-        print(all_skill_metrics_df['trial_num'].unique())
-
-        # スキルスコア計算クラス
-        skill_score_calculator = SkillScoreCalculator(validated_config, output_manager)
-
-        # スキルスコアを計算してプロット
-        skill_score_calculator.calc_skill_score(all_skill_metrics_df, trained_scaler, trained_fa)
+        # # ============ 全データに対してスキルスコアを計算 (block_num = 0) ============
+        # print("============ 全データに対してスキルスコアを計算 (block_num = 0) ============")
+        # block_num = 0
+        #
+        # # スキル指標を全データで計算
+        # all_preprocess_data = trajectory_loader.get_preprocessed_data(block_num)
+        # all_skill_metrics_df = skill_metrics_calculator.calculate_skill_metrics(all_preprocess_data)
+        #
+        # print(all_skill_metrics_df['block'].unique())
+        # print(all_skill_metrics_df['trial_num'].unique())
+        #
+        # # スキルスコア計算クラス
+        # skill_score_calculator = SkillScoreCalculator(validated_config, output_manager)
+        #
+        # # スキルスコアを計算してプロット
+        # skill_score_calculator.calculate_stable_skill_score(all_skill_metrics_df, trained_scaler, trained_fa, 20)
 
     except Exception as e:
         print(f"エラーが発生しました: {e}")

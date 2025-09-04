@@ -1,6 +1,6 @@
 information:
-  name: "Calc Skill Score Test"
-  description: "スキルスコア計算のテスト"
+  name: "Factor Analyse 4 promax"
+  description: "安定したスキルスコアの算出"
 
 pre_process:
   target_seq_len: 100
