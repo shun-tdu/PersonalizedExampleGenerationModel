@@ -695,7 +695,6 @@ class SkillAnalyzer:
         if metrics:
             self._create_bar_plot(metrics, eta_values, p_values, output_dir/ 'eta_result.png', "Comparison Effectiveness")
 
-
     def _create_boxplot_grid(self, data: pd.DataFrame, metrics: List[str], anova_results: Dict, save_path: Path, title: str):
         """複数指標の箱ひげ図をグリッド表示"""
         n_metrics = len(metrics)
@@ -816,7 +815,6 @@ class SkillAnalyzer:
             print(f"❌ ヒートマップ保存エラー: {e}")
 
         plt.close(fig)
-
 
     def _create_factor_score_scatter(self, skill_metrics_df: pd.DataFrame, factor_analysis_results: Dict, save_path: Path):
         """因子特典の散布図作成(第一因子 vs 第二因子)"""

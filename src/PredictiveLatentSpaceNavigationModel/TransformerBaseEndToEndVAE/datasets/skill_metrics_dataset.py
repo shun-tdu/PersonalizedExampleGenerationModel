@@ -36,20 +36,26 @@ class SkillMetricsDataset(BaseExperimentDataset):
         """指定されたインデックスのデータを取得"""
 
         # 1. インデックスに対応する試行データを取得
-        (subject_id, _), trial_df = self.trials[idx]
+        (subject_id, trial_num), trial_df = self.trials[idx]
 
-        # DataPreprocess analyze_skill_metrics.pyで前処理を行う
-        # 以下のようなカラム構造、Pos, Vel, Accは事前にカラム毎にスケーリング、固定長化
-        # subject_id, skill_score, HandlePosX, HandlePosY, HandleVelX, HandleVelY, HandleAccX, HandleAAccY
-        # 2. 特徴量データをNumpy配列に変換
-        trajectories = trial_df['HandlePosX', 'HandlePosY', 'HandleVelX', 'HandleVelY', 'HandleAccX', 'HandleAccY'].values
-        skill_score = trial_df['SkillScore']
+        # CLAUDE_ADDED: 軌道特徴量（6次元：位置、速度、加速度のx,y）
+        trajectory_features = ['HandlePosX', 'HandlePosY', 'HandleVelX', 
+                             'HandleVelY', 'HandleAccX', 'HandleAccY']
+        
+        # 2. 軌道データを時系列として取得 (seq_len, num_features)
+        trajectory_data = trial_df[trajectory_features].values
+        
+        # 3. スキルスコアを取得（全タイムステップで同じ値）
+        skill_score = trial_df['skill_score'].iloc[0] if len(trial_df) > 0 else 0.0
 
-        # 3. テンソルに変換して返す
+        # 4. テンソルに変換して返す
+        # trajectory: [seq_len, 6] -> モデルが期待する形状
+        # subject_id: 文字列
+        # skill_score: スカラー値
         return (
-            torch.tensor(trajectories, dtype=torch.float32),
-            subject_id,
-            torch.tensor(skill_score, dtype=torch.float32)
+            torch.tensor(trajectory_data, dtype=torch.float32),  # [seq_len, 6]
+            subject_id,                                           # string
+            torch.tensor(skill_score, dtype=torch.float32)       # scalar
         )
 
     def get_info(self) -> Dict[str, Any]:

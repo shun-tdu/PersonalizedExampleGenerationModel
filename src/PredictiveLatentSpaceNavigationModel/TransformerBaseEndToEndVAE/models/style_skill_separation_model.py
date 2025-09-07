@@ -261,14 +261,17 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                                                       style_latent_dim,
                                                       skill_latent_dim)
 
-        # 補助タスク用ネット (被験者分類)
+        # CLAUDE_ADDED: プロトタイプベースのスタイル識別 (被験者数に依存しない)
         if self.calc_style_subtask:
-            self.subject_classifier =nn.Sequential(
-                nn.Linear(style_latent_dim, skill_latent_dim//2),
+            self.style_prototype_network = nn.Sequential(
+                nn.Linear(style_latent_dim, style_latent_dim),
                 nn.ReLU(),
                 nn.Dropout(0.1),
-                nn.Linear(style_latent_dim//2, n_subjects)
+                nn.Linear(style_latent_dim, style_latent_dim)  # プロトタイプ空間への写像
             )
+            # プロトタイプを保存するバッファ（学習中に更新）
+            self.register_buffer('style_prototypes', torch.zeros(n_subjects, style_latent_dim))
+            self.register_buffer('prototype_counts', torch.zeros(n_subjects))
 
         # 補助タスク用ネット (スキルスコア回帰)
         if self.calc_skill_subtask:
@@ -307,9 +310,8 @@ class StyleSkillSeparationNet(BaseExperimentModel):
         # 補助タスク
         subject_pred = None
         skill_score_pred = None
-
         if self.calc_style_subtask:
-            subject_pred = self.subject_classifier(z_style)
+            subject_pred = self._prototype_based_classification(z_style, subject_ids)
         if self.calc_skill_subtask:
             skill_score_pred = self.skill_score_regressor(z_skill)
 
@@ -392,6 +394,85 @@ class StyleSkillSeparationNet(BaseExperimentModel):
     def decode(self, z_style, z_skill):
         """デコードのみ"""
         return self.decoder(z_style, z_skill)
+    
+    def _prototype_based_classification(self, z_style: torch.Tensor, subject_ids: list = None):
+        """プロトタイプベースのスタイル識別"""
+        # CLAUDE_ADDED: プロトタイプ空間への写像
+        style_features = self.style_prototype_network(z_style)
+        style_features = F.normalize(style_features, p=2, dim=1)  # L2正規化
+        
+        batch_size = z_style.size(0)
+        
+        if self.training and subject_ids is not None:
+            # 学習時：プロトタイプを更新しながら分類
+            return self._update_prototypes_and_classify(style_features, subject_ids)
+        else:
+            # テスト時：既存プロトタイプとの距離ベース分類
+            return self._distance_based_classification(style_features)
+    
+    def _update_prototypes_and_classify(self, style_features: torch.Tensor, subject_ids: list):
+        """学習時：プロトタイプ更新と分類を同時実行"""
+        batch_size = style_features.size(0)
+        device = style_features.device
+        
+        # 被験者IDを数値インデックスに変換
+        unique_subjects = list(set(subject_ids))
+        subject_to_idx = {subj: i for i, subj in enumerate(unique_subjects)}
+        subject_indices = [subject_to_idx[subj] for subj in subject_ids]
+        
+        # 予測用の類似度行列を計算
+        similarities = torch.zeros(batch_size, self.style_prototypes.size(0), device=device)
+        
+        # バッチ内の各サンプルについてプロトタイプを更新
+        for i, (feature, subj_idx, subj_id) in enumerate(zip(style_features, subject_indices, subject_ids)):
+            if subj_idx < self.style_prototypes.size(0):
+                # プロトタイプの移動平均更新 (momentum=0.9)
+                momentum = 0.9
+                current_count = self.prototype_counts[subj_idx].item()
+                
+                if current_count == 0:
+                    # 初回: プロトタイプを直接設定
+                    self.style_prototypes[subj_idx] = feature.detach()
+                    self.prototype_counts[subj_idx] = 1.0
+                else:
+                    # 移動平均で更新
+                    self.style_prototypes[subj_idx] = (
+                        momentum * self.style_prototypes[subj_idx] + 
+                        (1 - momentum) * feature.detach()
+                    )
+                    self.prototype_counts[subj_idx] += 1.0
+        
+        # 正規化されたプロトタイプとの類似度計算
+        normalized_prototypes = F.normalize(self.style_prototypes, p=2, dim=1)
+        similarities = torch.mm(style_features, normalized_prototypes.T)
+        
+        # 温度スケーリングで確率分布に変換
+        temperature = 0.5
+        logits = similarities / temperature
+        
+        return logits
+    
+    def _distance_based_classification(self, style_features: torch.Tensor):
+        """テスト時：距離ベース分類"""
+        device = style_features.device
+        
+        # 正規化されたプロトタイプとの類似度計算
+        normalized_prototypes = F.normalize(self.style_prototypes, p=2, dim=1)
+        similarities = torch.mm(style_features, normalized_prototypes.T)
+        
+        # 温度スケーリング
+        temperature = 0.5
+        logits = similarities / temperature
+        
+        return logits
+        
+    def get_prototype_info(self):
+        """プロトタイプの情報を取得（デバッグ用）"""
+        return {
+            'prototypes': self.style_prototypes.cpu().numpy(),
+            'counts': self.prototype_counts.cpu().numpy(),
+            'active_prototypes': (self.prototype_counts > 0).sum().item()
+        }
 
 
 
