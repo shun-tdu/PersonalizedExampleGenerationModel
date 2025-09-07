@@ -10,12 +10,14 @@ from typing import Dict, Any, Tuple, Optional, Type, List
 
 from .base_dataset import BaseExperimentDataset
 from .generalized_coordinate_dataset import  GeneralizedCoordinateDataset
+from .skill_metrics_dataset import SkillMetricsDataset  # CLAUDE_ADDED
 
 class DatasetRegistry:
     """データセットタイプの登録システム"""
 
     _datasets = {
         'generalized_coordinate': GeneralizedCoordinateDataset,
+        'skill_metrics': SkillMetricsDataset,  # CLAUDE_ADDED: 新しいスキル指標データセット
     }
 
     @classmethod

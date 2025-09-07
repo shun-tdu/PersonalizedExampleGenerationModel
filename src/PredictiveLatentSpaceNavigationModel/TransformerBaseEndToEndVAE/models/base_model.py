@@ -9,10 +9,21 @@ class BaseExperimentModel(nn.Module, ABC):
     def __init__(self, **kwargs):
         super().__init__()
         self.model_config = kwargs
+        self.loss_scheduler = None
 
+    @abstractmethod
     def forward(self, *args, **kwargs) -> Dict[str, torch.Tensor]:
         """順伝播で損失も含めた結果を返す"""
         pass
+
+    def on_epoch_start(self, epoch: int):
+        """
+        エポック開始時に呼び出されるコールバック
+        スケジューラが存在すれば、その状態を更新する
+        """
+        if self.loss_scheduler is not None:
+            self.loss_scheduler.step(epoch)
+
 
     def get_loss_dict(self, outputs: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """損失辞書を標準形式で返す"""

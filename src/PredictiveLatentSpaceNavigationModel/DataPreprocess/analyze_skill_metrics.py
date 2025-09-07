@@ -13,6 +13,7 @@ from sklearn.preprocessing import StandardScaler
 
 import yaml
 import datetime
+import joblib
 
 
 class DataPreprocessConfigLoader:
@@ -1090,9 +1091,184 @@ class SkillScoreCalculator:
 
 
 class DatasetBuilder:
-    """データセット生成クラス"""
-    # todo コンフィグの nameごとにユニークな名前のディレクトリを作成する nameが同じ場合でも必ずユニークにする
-    pass
+    """データセット生成クラス - 前処理とファイル保存を担当"""
+    
+    def __init__(self, config: Dict, output_manager: OutputManager):
+        self.config = config
+        self.output_manager = output_manager
+        self.target_seq_len = config['pre_process']['target_seq_len']
+        
+    def build_skill_trajectory_dataset(self, 
+                                     skill_metrics_df: pd.DataFrame, 
+                                     preprocessed_trajectory_df: pd.DataFrame,
+                                     trained_scaler: StandardScaler,
+                                     trained_fa) -> str:
+        """スキルスコア付き軌道データセットを構築し、保存する"""
+        
+        print("スキルスコア付き軌道データセットを構築中...")
+        
+        # CLAUDE_ADDED: 出力ディレクトリの作成
+        dataset_output_dir = self.output_manager.dataset_builder_output_dir_path
+        dataset_output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 1. スキルスコアを計算
+        skill_score_calculator = SkillScoreCalculator(self.config, self.output_manager)
+        skill_score_df = skill_score_calculator.calc_skill_score(
+            skill_metrics_df, trained_scaler, trained_fa
+        )
+        
+        # 2. 軌道データとスキルスコアを結合
+        merged_df = self._merge_trajectory_and_skill_data(
+            preprocessed_trajectory_df, skill_score_df
+        )
+        
+        # 3. トレーニング/テストデータに分割
+        train_df, test_df = self._split_train_test(merged_df)
+        
+        # 4. 特徴量のスケーリング
+        scaled_train_df, scaled_test_df, scalers, feature_config = self._scale_features(
+            train_df, test_df
+        )
+        
+        # 5. データとメタデータを保存
+        self._save_dataset_files(
+            scaled_train_df, scaled_test_df, scalers, feature_config, dataset_output_dir
+        )
+        
+        print(f"✅ データセットが保存されました: {dataset_output_dir}")
+        return str(dataset_output_dir)
+    
+    def _merge_trajectory_and_skill_data(self, trajectory_df: pd.DataFrame, 
+                                       skill_score_df: pd.DataFrame) -> pd.DataFrame:
+        """軌道データとスキルスコアデータを結合"""
+        
+        # CLAUDE_ADDED: スキルスコアデータをトライアル単位で結合
+        merged_data = []
+        
+        for _, skill_row in skill_score_df.iterrows():
+            subject_id = skill_row['subject_id'] 
+            block = skill_row['block']
+            trial_num = skill_row['trial_num_in_block']
+            skill_score = skill_row['skill_score']
+            
+            # 該当する軌道データを取得
+            trajectory_subset = trajectory_df[
+                (trajectory_df['subject_id'] == subject_id) & 
+                (trajectory_df['block'] == block) & 
+                (trajectory_df['trial_num'] == trial_num)
+            ].copy()
+            
+            if not trajectory_subset.empty:
+                # スキルスコアを全タイムステップに追加
+                trajectory_subset['skill_score'] = skill_score
+                merged_data.append(trajectory_subset)
+        
+        if merged_data:
+            return pd.concat(merged_data, ignore_index=True)
+        else:
+            return pd.DataFrame()
+    
+    def _split_train_test(self, merged_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """被験者レベルでトレーニング/テストに分割"""
+        
+        subjects = merged_df['subject_id'].unique()
+        test_size = self.config.get('data', {}).get('test_split', 0.2)
+        random_seed = self.config.get('data', {}).get('random_seed', 42)
+        
+        from sklearn.model_selection import train_test_split
+        train_subjects, test_subjects = train_test_split(
+            subjects, test_size=test_size, random_state=random_seed
+        )
+        
+        train_df = merged_df[merged_df['subject_id'].isin(train_subjects)]
+        test_df = merged_df[merged_df['subject_id'].isin(test_subjects)]
+        
+        print(f"データ分割: 学習用被験者={len(train_subjects)}人, テスト用被験者={len(test_subjects)}人")
+        
+        return train_df, test_df
+    
+    def _scale_features(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> Tuple[
+        pd.DataFrame, pd.DataFrame, Dict, Dict]:
+        """特徴量のスケーリング"""
+        
+        # CLAUDE_ADDED: スケーリング対象の特徴量を定義
+        trajectory_features = ['HandlePosX', 'HandlePosY', 'HandleVelX', 
+                             'HandleVelY', 'HandleAccX', 'HandleAccY']
+        
+        scalers = {}
+        scaled_train_df = train_df.copy()
+        scaled_test_df = test_df.copy()
+        
+        # 特徴量ごとにスケーリング
+        for feature in trajectory_features:
+            if feature in train_df.columns:
+                scaler = StandardScaler()
+                
+                # 学習データでフィット
+                train_values = train_df[feature].values.reshape(-1, 1)
+                scaled_train_values = scaler.fit_transform(train_values)
+                scaled_train_df[feature] = scaled_train_values.flatten()
+                
+                # テストデータに適用
+                test_values = test_df[feature].values.reshape(-1, 1)
+                scaled_test_values = scaler.transform(test_values)
+                scaled_test_df[feature] = scaled_test_values.flatten()
+                
+                scalers[feature] = scaler
+        
+        # スキルスコアも正規化
+        if 'skill_score' in train_df.columns:
+            skill_scaler = StandardScaler()
+            train_skill = train_df['skill_score'].values.reshape(-1, 1)
+            scaled_train_df['skill_score'] = skill_scaler.fit_transform(train_skill).flatten()
+            
+            test_skill = test_df['skill_score'].values.reshape(-1, 1) 
+            scaled_test_df['skill_score'] = skill_scaler.transform(test_skill).flatten()
+            
+            scalers['skill_score'] = skill_scaler
+        
+        # 特徴量設定
+        feature_config = {
+            'feature_cols': trajectory_features + ['skill_score'],
+            'trajectory_features': trajectory_features,
+            'target_seq_len': self.target_seq_len
+        }
+        
+        return scaled_train_df, scaled_test_df, scalers, feature_config
+    
+    def _save_dataset_files(self, train_df: pd.DataFrame, test_df: pd.DataFrame, 
+                          scalers: Dict, feature_config: Dict, output_dir: Path):
+        """データセットファイルを保存"""
+        
+        # CLAUDE_ADDED: データフレームを保存
+        train_df.to_parquet(output_dir / 'train_data.parquet', index=False)
+        test_df.to_parquet(output_dir / 'test_data.parquet', index=False)
+        
+        # スケーラーと設定を保存
+        joblib.dump(scalers, output_dir / 'scalers.joblib')
+        joblib.dump(feature_config, output_dir / 'feature_config.joblib')
+        
+        # データセット情報を保存
+        dataset_info = {
+            'train_samples': len(train_df),
+            'test_samples': len(test_df),
+            'train_subjects': train_df['subject_id'].nunique(),
+            'test_subjects': test_df['subject_id'].nunique(),
+            'feature_columns': feature_config['feature_cols'],
+            'target_seq_len': self.target_seq_len,
+            'created_at': datetime.datetime.now().isoformat()
+        }
+        
+        import json
+        with open(output_dir / 'dataset_info.json', 'w') as f:
+            json.dump(dataset_info, f, indent=2)
+            
+        print(f"保存されたファイル:")
+        print(f"  - train_data.parquet: {len(train_df):,} サンプル") 
+        print(f"  - test_data.parquet: {len(test_df):,} サンプル")
+        print(f"  - scalers.joblib: {len(scalers)} スケーラー")
+        print(f"  - feature_config.joblib: 設定情報")
+        print(f"  - dataset_info.json: メタデータ")
 
 
 
@@ -1141,10 +1317,21 @@ if __name__ == '__main__':
         print(all_skill_metrics_df['block'].unique())
         print(all_skill_metrics_df['trial_num'].unique())
 
-        # スキルスコア計算クラス
+        # ============ データセットを構築して保存 ============
+        print("============ データセットを構築して保存 ============")
+        
+        dataset_builder = DatasetBuilder(validated_config, output_manager)
+        dataset_path = dataset_builder.build_skill_trajectory_dataset(
+            all_skill_metrics_df, 
+            all_preprocess_data,
+            trained_scaler, 
+            trained_fa
+        )
+        
+        print(f"🎉 データセット作成完了: {dataset_path}")
+        
+        # オプション: スキルスコア推移も別途計算・保存
         skill_score_calculator = SkillScoreCalculator(validated_config, output_manager)
-
-        # スキルスコアを計算してプロット
         skill_score_calculator.calculate_stable_skill_score(all_skill_metrics_df, trained_scaler, trained_fa, 5)
 
     except Exception as e:

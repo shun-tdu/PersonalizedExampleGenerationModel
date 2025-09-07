@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Any
 
 import torch
 import torch.nn as nn
@@ -6,6 +6,7 @@ import torch.nn.functional as F
 import math
 import numpy as np
 from base_model import BaseExperimentModel
+from components.loss_weight_scheduler import LossWeightScheduler
 
 
 
@@ -204,34 +205,42 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                  style_latent_dim = 8,
                  skill_latent_dim = 8,
                  n_subjects = 6,
-                 calc_orthogonal_loss: bool = False,
-                 calc_contrastive_loss: bool = False,
-                 calc_style_subtask: bool = False,
-                 calc_skill_subtask: bool = False
+                 loss_schedule_config: Dict[str, Any] = None,
+                 **kwargs
                  ):
         super().__init__(input_dim=input_dim,
                          seq_len=seq_len,
                          d_model=d_model,
                          n_heads=n_heads,
-                        n_layers = n_layers,
-                        style_latent_dim = style_latent_dim,
-                         skill_latent_dim = skill_latent_dim
+                         n_layers = n_layers,
+                         style_latent_dim = style_latent_dim,
+                         skill_latent_dim = skill_latent_dim,
+                         n_subjects = n_subjects,
+                         loss_schedule_config = loss_schedule_config,
+                         **kwargs
                          )
         self.seq_len = seq_len
         self.d_model = d_model
         self.style_latent_dim = style_latent_dim
         self.skill_latent_dim = skill_latent_dim
-        self.calc_orthogonal_loss = calc_orthogonal_loss
-        self.calc_contrastive_loss = calc_contrastive_loss
-        self.calc_style_subtask = calc_style_subtask
-        self.calc_skill_subtask = calc_skill_subtask
 
-        # 損失関数の重み
-        self.beta = 0.005
-        self.orthogonal_loss_weight = 0.1
-        self.contrastive_loss_weight = 0.1
-        self.style_subtask_weight = 0.1
-        self.skill_subtask_weight = 0.1
+        # 損失関数の重みスケジューラの初期化
+        if loss_schedule_config is None:
+            loss_schedule_config = {
+                'beta':{'schedule': 'linear', 'start_epoch': 0, 'end_epoch': 100, 'start_val': 0.0, 'end_val': 0.01},
+                'orthogonal_loss' : {'schedule': 'constant', 'val': 0.1},
+                'contrastive_loss': {'schedule': 'constant', 'val': 0.1},
+                'style_classification_loss': {'schedule': 'constant', 'val': 0.1},
+                'skill_regression_loss': {'schedule': 'constant', 'val': 0.1},
+            }
+        self.loss_scheduler = LossWeightScheduler(loss_schedule_config)
+
+        # スケジューラ設定からlossの計算フラグを受け取り
+        self.calc_orthogonal_loss = 'orthogonal_loss' in loss_schedule_config
+        self.calc_contrastive_loss = 'contrastive_loss' in loss_schedule_config
+        self.calc_style_subtask = 'style_classification_loss' in loss_schedule_config
+        self.calc_skill_subtask = 'skill_regression_loss' in loss_schedule_config
+
 
 
         # エンコーダ定義
@@ -273,12 +282,16 @@ class StyleSkillSeparationNet(BaseExperimentModel):
         # 対照学習の損失
         self.contrastive_loss = ContrastiveLoss()
 
+    def on_epoch_start(self, epoch: int):
+        """学習ループからエポックの開始時呼び出されるメソッド"""
+        self.loss_scheduler.step(epoch)
+
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def forward(self, x: torch.Tensor, subject_ids: str = None, skil_scores: float=None) -> Dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor, subject_ids: str = None, skill_scores: float=None) -> Dict[str, torch.Tensor]:
         batch_size, _, _ = x.shape
 
         # エンコード
@@ -302,9 +315,9 @@ class StyleSkillSeparationNet(BaseExperimentModel):
 
         # 損失計算
         losses = self.compute_losses(
-            x, reconstructed, z_style, z_skill,
+            x, reconstructed, encoded, z_style, z_skill,
             subject_pred, skill_score_pred,
-            subject_ids, skil_scores
+            subject_ids, skill_scores
         )
 
         result  = {
@@ -317,6 +330,9 @@ class StyleSkillSeparationNet(BaseExperimentModel):
 
 
     def compute_losses(self, x, reconstructed, encoded, z_style, z_skill, subject_pred, skill_score_pred, subject_ids, skill_scores):
+        # スケジューラから現在の重みを取得
+        weights = self.loss_scheduler.get_weights()
+
         # 再構成損失
         losses = {'reconstruction_loss': F.mse_loss(reconstructed, x)}
 
@@ -354,12 +370,13 @@ class StyleSkillSeparationNet(BaseExperimentModel):
             # スキルスコア回帰サブタスク
             losses['skill_regression_loss'] = F.mse_loss(skill_score_pred, skill_scores)
 
+        # 総合損失の計算
         total_loss = (losses['reconstruction_loss']
-                      + self.beta * (losses['kl_style_loss'] + losses['kl_skill_loss'])
-                      + self.orthogonal_loss_weight * losses['orthogonal_loss']
-                      + self.contrastive_loss_weight * losses['contrastive_loss']
-                      + self.style_subtask_weight * losses['style_classification_loss']
-                      + self.skill_subtask_weight * losses['skill_regression_loss'])
+                      + weights.get('beta', 0.0) * (losses['kl_style_loss'] + losses['kl_skill_loss'])
+                      + weights.get('orthogonal_loss', 0.0) * losses['orthogonal_loss']
+                      + weights.get('contrastive_loss', 0.0) * losses['contrastive_loss']
+                      + weights.get('style_classification_loss', 0.0) * losses['style_classification_loss']
+                      + weights.get('skill_regression_loss', 0.0) * losses['skill_regression_loss'])
 
         losses['total_loss'] = total_loss
 

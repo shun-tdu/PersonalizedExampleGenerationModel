@@ -67,7 +67,7 @@ class TrainingVisualizer:
     def _detect_loss_types(self, history: Dict) -> Dict[str, list]:
         """プロットする要素を検出"""
         loss_types = {}
-        detection_filters = ['total', 'reconstruction', 'kl', 'contrastive', 'adversarial']
+        detection_filters = ['total', 'reconstruction', 'kl', 'orthogonal', 'contrastive', 'adversarial', 'style_classification', 'skill_regression']
 
         # lossの開始
         for key in history.keys():
