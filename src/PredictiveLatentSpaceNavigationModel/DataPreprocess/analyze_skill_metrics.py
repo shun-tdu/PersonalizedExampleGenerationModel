@@ -1130,22 +1130,22 @@ if __name__ == '__main__':
         # 学習済みスケーラと因子分析オブジェクトを取得
         trained_scaler, trained_fa = skill_analyzer.factorize_artifact
 
-        # # ============ 全データに対してスキルスコアを計算 (block_num = 0) ============
-        # print("============ 全データに対してスキルスコアを計算 (block_num = 0) ============")
-        # block_num = 0
-        #
-        # # スキル指標を全データで計算
-        # all_preprocess_data = trajectory_loader.get_preprocessed_data(block_num)
-        # all_skill_metrics_df = skill_metrics_calculator.calculate_skill_metrics(all_preprocess_data)
-        #
-        # print(all_skill_metrics_df['block'].unique())
-        # print(all_skill_metrics_df['trial_num'].unique())
-        #
-        # # スキルスコア計算クラス
-        # skill_score_calculator = SkillScoreCalculator(validated_config, output_manager)
-        #
-        # # スキルスコアを計算してプロット
-        # skill_score_calculator.calculate_stable_skill_score(all_skill_metrics_df, trained_scaler, trained_fa, 20)
+        # ============ 全データに対してスキルスコアを計算 (block_num = 0) ============
+        print("============ 全データに対してスキルスコアを計算 (block_num = 0) ============")
+        block_num = 0
+
+        # スキル指標を全データで計算
+        all_preprocess_data = trajectory_loader.get_preprocessed_data(block_num)
+        all_skill_metrics_df = skill_metrics_calculator.calculate_skill_metrics(all_preprocess_data)
+
+        print(all_skill_metrics_df['block'].unique())
+        print(all_skill_metrics_df['trial_num'].unique())
+
+        # スキルスコア計算クラス
+        skill_score_calculator = SkillScoreCalculator(validated_config, output_manager)
+
+        # スキルスコアを計算してプロット
+        skill_score_calculator.calculate_stable_skill_score(all_skill_metrics_df, trained_scaler, trained_fa, 5)
 
     except Exception as e:
         print(f"エラーが発生しました: {e}")
