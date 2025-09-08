@@ -322,7 +322,7 @@ class ExperimentRunner:
             for epoch in range(num_epochs):
                 # モデルにエポックの開始を通知
                 if hasattr(model_wrapper.model, 'on_epoch_start'):
-                    model_wrapper.model.op_epoch_start(epoch)
+                    model_wrapper.model.on_epoch_start(epoch)
                 
                 # 訓練フェーズ
                 epoch_metrics = self._train_epoch(

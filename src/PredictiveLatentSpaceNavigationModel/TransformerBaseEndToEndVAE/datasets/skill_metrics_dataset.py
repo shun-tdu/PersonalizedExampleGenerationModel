@@ -18,10 +18,10 @@ class SkillMetricsDataset(BaseExperimentDataset):
         self.feature_cols = feature_cols
         self.load_data()
         self.preprocess()
-    
-    # TODO(human) - ここにload_data, preprocess, __len__, __getitem__メソッドを実装してください
+
     def load_data(self):
-        self.trials = list(self.df.groupby(['subject_id','trial_num']))
+        # CLAUDE_ADDED: ブロック情報も含めてグループ化（各ブロックの各試行を別々に扱う）
+        self.trials = list(self.df.groupby(['subject_id','trial_num', 'block']))
         print(f"Dataset initialized with {len(self.trials)} trials")
         print(f"Feature columns: {self.feature_cols}")
         print(f"Available scalers: {list(self.scalers.keys())}")
@@ -36,7 +36,8 @@ class SkillMetricsDataset(BaseExperimentDataset):
         """指定されたインデックスのデータを取得"""
 
         # 1. インデックスに対応する試行データを取得
-        (subject_id, trial_num), trial_df = self.trials[idx]
+        # CLAUDE_ADDED: ブロック情報も含む3つの要素を展開
+        (subject_id, trial_num, block), trial_df = self.trials[idx]
 
         # CLAUDE_ADDED: 軌道特徴量（6次元：位置、速度、加速度のx,y）
         trajectory_features = ['HandlePosX', 'HandlePosY', 'HandleVelX', 

@@ -1,6 +1,6 @@
 information:
-  name: "Calculate Skill Score promax Win 5"
-  description: "安定したスキルスコアの算出"
+  name: "Dataset Generation Test"
+  description: "データセット作成のテスト"
 
 pre_process:
   target_seq_len: 100
@@ -14,4 +14,4 @@ analysis:
 data:
   raw_data_dir: "../../data/RawDatas"
   output_dir: "PredictiveLatentSpaceNavigationModel/DataPreprocess/AnalysisResults"
-  make_dataset: false
+  make_dataset: true

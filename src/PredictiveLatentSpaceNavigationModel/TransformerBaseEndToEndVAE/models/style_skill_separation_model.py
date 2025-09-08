@@ -5,8 +5,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import numpy as np
-from base_model import BaseExperimentModel
-from components.loss_weight_scheduler import LossWeightScheduler
+from models.base_model import BaseExperimentModel
+from models.components.loss_weight_scheduler import LossWeightScheduler
 
 
 

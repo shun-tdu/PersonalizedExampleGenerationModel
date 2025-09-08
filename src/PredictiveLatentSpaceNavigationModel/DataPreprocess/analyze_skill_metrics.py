@@ -183,10 +183,29 @@ class TrajectoryDataLoader:
 
                 df = pd.read_csv(file_path)
 
-                # カラム名を統一し、情報を付与
-                df = df.rename(columns={'SubjectId': 'subject_id', 'CurrentTrial': 'trial_num'})
+                # CLAUDE_ADDED: カラム名を統一し、情報を付与 (デバッグログ追加)
+                print(f"Processing file: {file_path.name}, original columns: {df.columns.tolist()}")
+                
+                # CurrentTrialが存在する場合のみリネーム
+                rename_dict = {}
+                if 'SubjectId' in df.columns:
+                    rename_dict['SubjectId'] = 'subject_id'
+                if 'CurrentTrial' in df.columns:
+                    rename_dict['CurrentTrial'] = 'trial_num'
+                
+                if rename_dict:
+                    df = df.rename(columns=rename_dict)
+                    print(f"Renamed columns: {rename_dict}")
+                
                 df['subject_id'] = subject_id
                 df['block'] = block_num
+                
+                # CLAUDE_ADDED: データ処理後のカラムと基本統計を確認
+                print(f"Final columns: {df.columns.tolist()}")
+                if 'trial_num' in df.columns:
+                    print(f"trial_num unique values: {df['trial_num'].unique()}")
+                print(f"Data shape for {subject_id} Block{block_num}: {df.shape}")
+                
                 df_list.append(df)
             except Exception as e:
                 print(f"ファイル {file_path} の読み込み中にエラー: {e}")
@@ -195,17 +214,30 @@ class TrajectoryDataLoader:
             return None
 
         concatenated_df = pd.concat(df_list, ignore_index=True)
-
-        return concatenated_df[concatenated_df['TrialState'] == 'TRIAL_RUNNING'].copy()
+        
+        # CLAUDE_ADDED: 結合後の確認
+        print(f"Concatenated data shape: {concatenated_df.shape}")
+        trial_running_df = concatenated_df[concatenated_df['TrialState'] == 'TRIAL_RUNNING'].copy()
+        print(f"TRIAL_RUNNING data shape: {trial_running_df.shape}")
+        
+        return trial_running_df
 
     def _preprocess_trajectories(self, data: pd.DataFrame) -> pd.DataFrame:
         """軌道の前処理(補完、長さ調整)"""
         target_seq_len = self.config['pre_process']['target_seq_len']
         method = self.config['pre_process']['interpolate_method']
 
+        print(f"CLAUDE_DEBUG: Starting preprocessing with target_seq_len={target_seq_len}")
+        
         processed_trajectories = [] #全トライアルを蓄積するリスト
-
+        
+        # CLAUDE_ADDED: 前処理前の統計確認
+        print(f"CLAUDE_DEBUG: Input data shape: {data.shape}")
+        print(f"CLAUDE_DEBUG: Available columns: {data.columns.tolist()}")
+        
         for subject_id, subject_df in data.groupby('subject_id'):
+            print(f"CLAUDE_DEBUG: Processing subject {subject_id}, trials: {len(subject_df.groupby(['trial_num', 'block']))}")
+            
             for (trial_num, block_num), trial_df in subject_df.groupby(['trial_num', 'block']): # CLAUDE_ADDED: blockもグループ化に含める
                 try:
                     traj_positions = trial_df[['HandlePosX','HandlePosY']].values
@@ -216,6 +248,9 @@ class TrajectoryDataLoader:
                     original_length = len(traj_positions)
                     original_time = np.linspace(0, 1, original_length)
                     target_time = np.linspace(0,1, target_seq_len)
+                    
+                    # CLAUDE_ADDED: 詳細ログ
+                    print(f"CLAUDE_DEBUG: Subject {subject_id}, Trial {trial_num}, Block {block_num}: {original_length} -> {target_seq_len}")
 
                     # 最小データポイント検証
                     if original_length < 2:
@@ -1060,18 +1095,22 @@ class SkillScoreCalculator:
         """被験者ごとにスキルスコアの推移をプロットする"""
         self.output.skill_score_calculator_output_dir_path.mkdir(parents=True, exist_ok=True)
 
-        save_path = self.output.skill_score_calculator_output_dir_path / 'stable_skill_score_transition.png'
+        save_path = self.output.skill_score_calculator_output_dir_path / 'skill_score_transition.png'
 
         plt.figure(figsize=(12, 7))
+
+        # CLAUDE_ADDED: smoothed_skill_scoreが存在するかチェックして適切なカラムを選択
+        y_column = 'smoothed_skill_score' if 'smoothed_skill_score' in skill_scores.columns else 'skill_score'
+        plot_title = 'Smoothed Skill Score Improvement' if y_column == 'smoothed_skill_score' else 'Skill Score Improvement'
 
         sns.lineplot(
             data =skill_scores,
             x='trial_order',
-            y='smoothed_skill_score',
+            y=y_column,
             hue='subject_id',
         )
 
-        plt.title('Skill Score Improvement Over Trials per Subject')
+        plt.title(plot_title + ' Over Trials per Subject')
         plt.xlabel('Trial Order')
         plt.ylabel('Calculated Skill Score')
         plt.grid(True)
@@ -1140,8 +1179,20 @@ class DatasetBuilder:
                                        skill_score_df: pd.DataFrame) -> pd.DataFrame:
         """軌道データとスキルスコアデータを結合"""
         
+        # CLAUDE_ADDED: デバッグ情報を追加
+        print(f"CLAUDE_DEBUG: Trajectory data shape: {trajectory_df.shape}")
+        print(f"CLAUDE_DEBUG: Skill score data shape: {skill_score_df.shape}")
+        
+        # CLAUDE_ADDED: 各試行のデータ長を確認
+        if 'time_step' in trajectory_df.columns:
+            trial_lengths = trajectory_df.groupby(['subject_id', 'trial_num', 'block']).size()
+            print(f"CLAUDE_DEBUG: Sample trajectory lengths: {trial_lengths.head(5)}")
+            print(f"CLAUDE_DEBUG: Min length: {trial_lengths.min()}, Max length: {trial_lengths.max()}")
+        
         # CLAUDE_ADDED: スキルスコアデータをトライアル単位で結合
         merged_data = []
+        successful_merges = 0
+        failed_merges = 0
         
         for _, skill_row in skill_score_df.iterrows():
             subject_id = skill_row['subject_id'] 
@@ -1157,12 +1208,22 @@ class DatasetBuilder:
             ].copy()
             
             if not trajectory_subset.empty:
+                # CLAUDE_ADDED: 結合前に軌道データの長さをチェック
+                print(f"CLAUDE_DEBUG: Merging {subject_id} trial {trial_num} block {block}: length = {len(trajectory_subset)}")
+                
                 # スキルスコアを全タイムステップに追加
                 trajectory_subset['skill_score'] = skill_score
                 merged_data.append(trajectory_subset)
+                successful_merges += 1
+            else:
+                failed_merges += 1
+        
+        print(f"CLAUDE_DEBUG: Successful merges: {successful_merges}, Failed merges: {failed_merges}")
         
         if merged_data:
-            return pd.concat(merged_data, ignore_index=True)
+            merged_df = pd.concat(merged_data, ignore_index=True)
+            print(f"CLAUDE_DEBUG: Final merged data shape: {merged_df.shape}")
+            return merged_df
         else:
             return pd.DataFrame()
     
@@ -1284,7 +1345,6 @@ if __name__ == '__main__':
         # 生データの読みこみ
         trajectory_loader = TrajectoryDataLoader(validated_config)
 
-        # ============ 熟達したデータで因子分析を実行 (block_num = 4) ============
         print("============ 熟達したデータで因子分析を実行 (block_num = 4) ============")
 
         block_num = 4
@@ -1304,7 +1364,6 @@ if __name__ == '__main__':
         # 学習済みスケーラと因子分析オブジェクトを取得
         trained_scaler, trained_fa = skill_analyzer.factorize_artifact
 
-        # ============ 全データに対してスキルスコアを計算 (block_num = 0) ============
         print("============ 全データに対してスキルスコアを計算 (block_num = 0) ============")
         block_num = 0
 
@@ -1315,19 +1374,18 @@ if __name__ == '__main__':
         print(all_skill_metrics_df['block'].unique())
         print(all_skill_metrics_df['trial_num'].unique())
 
-        # ============ データセットを構築して保存 ============
-        print("============ データセットを構築して保存 ============")
-        
-        dataset_builder = DatasetBuilder(validated_config, output_manager)
-        dataset_path = dataset_builder.build_skill_trajectory_dataset(
-            all_skill_metrics_df, 
-            all_preprocess_data,
-            trained_scaler, 
-            trained_fa
-        )
-        
-        print(f"🎉 データセット作成完了: {dataset_path}")
-        
+        if validated_config.get('data').get('make_dataset'):
+            print("============ データセットを構築して保存 ============")
+
+            dataset_builder = DatasetBuilder(validated_config, output_manager)
+            dataset_path = dataset_builder.build_skill_trajectory_dataset(
+                all_skill_metrics_df,
+                all_preprocess_data,
+                trained_scaler,
+                trained_fa
+            )
+            print(f"🎉 データセット作成完了: {dataset_path}")
+
         # オプション: スキルスコア推移も別途計算・保存
         skill_score_calculator = SkillScoreCalculator(validated_config, output_manager)
         skill_score_calculator.calculate_stable_skill_score(all_skill_metrics_df, trained_scaler, trained_fa, 5)

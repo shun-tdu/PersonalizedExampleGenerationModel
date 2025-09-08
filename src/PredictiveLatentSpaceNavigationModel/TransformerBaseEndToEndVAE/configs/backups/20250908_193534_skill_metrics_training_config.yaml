@@ -1,0 +1,152 @@
+# Skill-Style Separation VAE Training Configuration
+
+experiment:
+  name: "skill_style_separation_with_skill_metrics"
+  description: "スキル指標を用いたスタイル・スキル分離VAE学習実験"
+  priority: 1
+  tags: ["skill_metrics", "style_separation", "prototype_classification", "transformer_vae"]
+  dependencies: []
+
+# モデル設定
+model:
+  class_name: "StyleSkillSeparationNet"
+  file_path: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/models/style_skill_separation_model.py"
+  
+  # 基本パラメータ
+  input_dim: 6  # HandlePos, Vel, Acc (x,y)
+  seq_len: 100  # target_seq_len from preprocessing
+  d_model: 256
+  n_heads: 8
+  n_encoder_layers: 6
+  n_decoder_layers: 4
+  
+  # 潜在空間次元
+  style_latent_dim: 16
+  skill_latent_dim: 16
+  
+  # 被験者数 (学習データの被験者数)
+  n_subjects: 6  # 要確認: 実際のデータに合わせて調整
+  
+  # 損失重み
+  beta: 0.001  # KL divergence weight
+  contrastive_weight: 0.1  # 対比学習重み
+  style_classification_weight: 1.0  # プロトタイプ分類重み
+  skill_regression_weight: 1.0  # スキルスコア回帰重み
+  
+  # サブタスク有効化
+  calc_style_subtask: true
+  calc_skill_subtask: true
+  
+  # プロトタイプ学習設定
+  prototype_momentum: 0.9
+  prototype_temperature: 0.5
+  
+  # 正則化
+  dropout_rate: 0.1
+
+# 学習設定
+training:
+  num_epochs: 200
+  batch_size: 16
+  learning_rate: 0.0001
+  weight_decay: 0.00005
+  
+  optimizer: "AdamW"
+  scheduler: "CosineAnnealingWarmRestarts"
+  scheduler_T_0: 25
+  scheduler_T_mult: 2
+  scheduler_eta_min: 0.000005
+  
+  # 早期停止
+  early_stopping: true
+  patience: 30
+  min_delta: 0.0005
+  monitor: "val_total_loss"
+  mode: "min"
+  restore_best_weights: true
+  
+  # モデル保存
+  save_best_model: true
+  save_checkpoints: true
+  checkpoint_interval: 20
+  verbose: true
+
+# データ設定
+data:
+  type: "skill_metrics"  # 新しいスキル指標データセット
+  data_path: "PredictiveLatentSpaceNavigationModel/DataPreprocess/AnalysisResults/Dataset_Generation_Test_20250908_193217/dataset"  # analyze_skill_metrics.pyで生成されたデータセットパスを指定（修正済み）
+  val_split: 0.2  # 学習データを更に分割して検証用に使用
+  random_seed: 42
+  
+  # DataLoader設定
+  num_workers: 2
+  pin_memory: true
+  shuffle: true
+
+# 評価設定
+evaluation:
+  # 基本評価
+  reconstruction_quality: true
+  comprehensive_latent_analysis: true
+  
+  # スタイル・スキル分離評価
+  style_separation_analysis: true
+#  skill_regression_analysis: true
+#  prototype_analysis: true
+#
+#  # 被験者識別評価 (未知被験者への適応能力)
+#  subject_identification_analysis: true
+  
+  # 可視化
+  create_plots: true
+  save_trajectories: true
+  generate_examples: true
+
+#  generate_style_interpolation: true
+#  generate_skill_interpolation: true
+  
+#  # 評価指標
+#  metrics:
+#    - "reconstruction_mse"
+#    - "style_classification_accuracy"
+#    - "skill_regression_mse"
+#    - "style_kl_divergence"
+#    - "skill_kl_divergence"
+#    - "prototype_cluster_quality"
+
+# 出力設定
+output:
+  base_dir: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/outputs"
+  experiment_subdir: true  # 実験名でサブディレクトリ作成
+  
+  save_model: true
+  save_embeddings: true
+  save_predictions: true
+  create_report: true
+  
+  # ログ設定
+  log_level: "INFO"
+  tensorboard: false
+  wandb: false
+
+# システム設定
+system:
+  device: "auto"  # "cuda", "cpu", "auto"
+  mixed_precision: false  # 初期は無効化（安定性優先）
+  deterministic: true
+  benchmark: false
+  
+  # メモリ最適化
+  dataloader_workers: 2
+  pin_memory: true
+  
+  # デバッグ設定
+  debug_mode: false
+  profile_training: false
+
+# 注意事項とメモ
+# 1. data_pathは analyze_skill_metrics.py の実行結果パスに更新済み
+# 2. n_subjects は実際の学習データの被験者数に合わせて調整してください  
+# 3. seq_len は data_preprocess_default_config.yaml の target_seq_len と一致させてください
+# 4. プロトタイプベース分類により、テスト時の未知被験者にも対応できます
+# 5. 重要な設定は全て適切なセクション(model, training, system)に配置済み
