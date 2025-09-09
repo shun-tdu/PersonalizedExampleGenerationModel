@@ -17,7 +17,7 @@ class DatasetRegistry:
 
     _datasets = {
         'generalized_coordinate': GeneralizedCoordinateDataset,
-        'skill_metrics': SkillMetricsDataset,  # CLAUDE_ADDED: 新しいスキル指標データセット
+        'skill_metrics': SkillMetricsDataset,  # スキルスコア入りデータセット[batch, trajectory, subject_id, skill_score]
     }
 
     @classmethod

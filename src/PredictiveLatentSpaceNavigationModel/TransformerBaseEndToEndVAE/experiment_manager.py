@@ -136,11 +136,10 @@ class ModelWrapper:
             trajectories, subject_ids = batch_data
             outputs = self.model(trajectories, subject_ids)
         elif len(batch_data) >= 3:
-            # 新しいデータローダー形式: [trajectory, subject_id, is_expert, ...]
-            # モデルは trajectory と subject_id のみ使用
-            trajectories, subject_ids = batch_data[0], batch_data[1]
-            # is_expert (batch_data[2]) は現在のモデルでは使用しない
-            outputs = self.model(trajectories, subject_ids)
+            # CLAUDE_ADDED: skill_metricsデータセット用の処理
+            # 新しいデータローダー形式: [trajectory, subject_id, skill_score, ...]
+            trajectories, subject_ids, skill_scores = batch_data[0], batch_data[1], batch_data[2]
+            outputs = self.model(trajectories, subject_ids, skill_scores)
         else:
             outputs = self.model(*batch_data)
 
@@ -172,7 +171,6 @@ class ModelWrapper:
             return {}
 
 
-# EarlyStoppingクラス
 class EarlyStopping:
     """アーリーストッピング機能"""
     

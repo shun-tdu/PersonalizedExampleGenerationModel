@@ -357,8 +357,9 @@ class StyleSkillSeparationNet(BaseExperimentModel):
             losses['orthogonal_loss'] = torch.mean(cos_sim ** 2)
 
         if subject_ids is not None:
-            # 文字列ラベルを数値に変換
-            subject_to_idx = {subj: i for i, subj in enumerate(subject_ids)}
+            # CLAUDE_ADDED: 全被験者を固定的なインデックスにマッピング（一貫性を保つ）
+            all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa']
+            subject_to_idx = {subj: i for i, subj in enumerate(all_subjects)}
             subject_indices = torch.tensor([subject_to_idx[subj] for subj in subject_ids],
                                             device=z_style.device)
             # 対照学習
@@ -369,15 +370,20 @@ class StyleSkillSeparationNet(BaseExperimentModel):
             losses['style_classification_loss'] = F.cross_entropy(subject_pred, subject_indices)
 
         if skill_scores is not None:
-            # スキルスコア回帰サブタスク
-            losses['skill_regression_loss'] = F.mse_loss(skill_score_pred, skill_scores)
+            # CLAUDE_ADDED: スキルスコア回帰サブタスク（次元を合わせる）
+            # skill_score_pred: [batch, 1] -> [batch] に変換
+            skill_score_pred_flat = skill_score_pred.squeeze(-1)
+            losses['skill_regression_loss'] = F.mse_loss(skill_score_pred_flat, skill_scores)
+        else:
+            # CLAUDE_ADDED: skill_scoresがNoneの場合は0の損失を設定
+            losses['skill_regression_loss'] = torch.tensor(0.0, device=x.device)
 
         # 総合損失の計算
         total_loss = (losses['reconstruction_loss']
                       + weights.get('beta', 0.0) * (losses['kl_style_loss'] + losses['kl_skill_loss'])
-                      + weights.get('orthogonal_loss', 0.0) * losses['orthogonal_loss']
-                      + weights.get('contrastive_loss', 0.0) * losses['contrastive_loss']
-                      + weights.get('style_classification_loss', 0.0) * losses['style_classification_loss']
+                      + weights.get('orthogonal_loss', 0.0) * losses.get('orthogonal_loss', torch.tensor(0.0, device=x.device))
+                      + weights.get('contrastive_loss', 0.0) * losses.get('contrastive_loss', torch.tensor(0.0, device=x.device))
+                      + weights.get('style_classification_loss', 0.0) * losses.get('style_classification_loss', torch.tensor(0.0, device=x.device))
                       + weights.get('skill_regression_loss', 0.0) * losses['skill_regression_loss'])
 
         losses['total_loss'] = total_loss
@@ -415,9 +421,9 @@ class StyleSkillSeparationNet(BaseExperimentModel):
         batch_size = style_features.size(0)
         device = style_features.device
         
-        # 被験者IDを数値インデックスに変換
-        unique_subjects = list(set(subject_ids))
-        subject_to_idx = {subj: i for i, subj in enumerate(unique_subjects)}
+        # CLAUDE_ADDED: 全被験者を固定的なインデックスにマッピング（一貫性を保つ）
+        all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa']
+        subject_to_idx = {subj: i for i, subj in enumerate(all_subjects)}
         subject_indices = [subject_to_idx[subj] for subj in subject_ids]
         
         # 予測用の類似度行列を計算
