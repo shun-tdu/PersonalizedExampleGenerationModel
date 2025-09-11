@@ -18,7 +18,7 @@ class BaseEvaluator(ABC):
         self.evaluation_config = config.get('evaluation', {})
 
     @abstractmethod
-    def evaluate(self, model, test_data, device, result: EnhancedEvaluationResult = None) -> EnhancedEvaluationResult:
+    def evaluate(self, model, test_data, result: EnhancedEvaluationResult = None) -> EnhancedEvaluationResult:
         """評価を実行
         
         Args:
