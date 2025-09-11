@@ -5,6 +5,8 @@ from typing import Dict, Any, List, Optional, Union
 from dataclasses import dataclass, asdict
 from PIL import Image
 import matplotlib.pyplot as plt
+import plotly
+import plotly.express as px
 import numpy as np
 
 
@@ -57,14 +59,18 @@ class EnhancedEvaluationResult:
             'type': 'metric'
         }
 
-    def add_visualization(self, name: str, fig_or_path: Union[plt.Figure, str],
+    def add_visualization(self, name: str, fig_or_path: Union[plt.Figure, plotly.graph_objs.Figure, str],
                           description: str = "", category: str = "general",
                           format: str = "png", create_thumbnail: bool = True):
-        """可視化結果を追加（Figureオブジェクトまたはパスを受付）"""
+        """可視化結果を追加（Matplot Figureオブジェクト, Plotly Graph Objectまたはパスを受付）"""
 
         if isinstance(fig_or_path, plt.Figure):
             # matplotlib Figureの場合
-            file_path = self._save_figure(fig_or_path, name, format)
+            file_path = self._save_matplot_figure(fig_or_path, name, format)
+        elif isinstance(fig_or_path, plotly.graph_objs.Figure):
+            # plotly Figureの場合
+            file_path = self._save_plotly_figure(fig_or_path, name)
+            format="html"
         elif isinstance(fig_or_path, str) and os.path.exists(fig_or_path):
             # 既存ファイルパスの場合
             file_path = fig_or_path
@@ -92,7 +98,7 @@ class EnhancedEvaluationResult:
 
         self.visualizations[name] = viz_item
 
-    def _save_figure(self, fig: plt.Figure, name: str, format: str = "png") -> str:
+    def _save_matplot_figure(self, fig: plt.Figure, name: str, format: str = "png") -> str:
         """matplotlib Figureを保存"""
         filename = f"{name}_exp{self.experiment_id}.{format}"
         file_path = os.path.join(self.plots_dir, filename)
@@ -102,6 +108,46 @@ class EnhancedEvaluationResult:
         plt.close(fig)  # メモリリークを防ぐ
 
         return file_path
+
+    def _save_plotly_figure(self, fig:plotly.graph_objs.Figure, name:str):
+        """plotly FigureをインタラクティブなHTMLとして保存し、埋め込み用HTMLも生成"""
+        filename = f"{name}_exp{self.experiment_id}.html"
+        file_path = os.path.join(self.plots_dir, filename)
+
+        fig.update_traces(marker=dict(size=5, opacity=0.8))
+
+        # HTMLファイルとして保存
+        print(f"💾 Saving interactive plot to '{filename}'...")
+        fig.write_html(file_path)
+        
+        # 埋め込み用のHTMLコンテンツも生成して保存
+        embed_filename = f"{name}_embed_exp{self.experiment_id}.html"
+        embed_file_path = os.path.join(self.plots_dir, embed_filename)
+        self._save_plotly_embed_html(fig, embed_file_path)
+
+        return file_path
+    
+    def _save_plotly_embed_html(self, fig: plotly.graph_objs.Figure, embed_file_path: str):
+        """plotly figureを埋め込み専用のHTMLとして保存"""
+        # 埋め込み用に最適化されたHTMLを生成
+        embed_html = fig.to_html(
+            include_plotlyjs='cdn',  # CDNからplotly.jsを読み込み
+            div_id=f"plotly-div-{os.path.basename(embed_file_path).replace('.html', '')}",
+            config={
+                'displayModeBar': True,  # ツールバーを表示
+                'responsive': True,      # レスポンシブ対応
+                'toImageButtonOptions': {
+                    'format': 'png',
+                    'filename': 'plot',
+                    'height': 500,
+                    'width': 700,
+                    'scale': 1
+                }
+            }
+        )
+        
+        with open(embed_file_path, 'w', encoding='utf-8') as f:
+            f.write(embed_html)
 
     def _create_thumbnail(self, file_path: str, name: str, size: tuple = (200, 200)) -> str:
         """サムネイル画像を生成"""
@@ -177,9 +223,11 @@ class EnhancedEvaluationResult:
                 .metric-description {{ font-size: 0.9em; color: #666; }}
                 .viz-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }}
                 .viz-card {{ background-color: #f9f9f9; padding: 15px; border-radius: 5px; text-align: center; }}
+                .plotly-viz {{ min-height: 600px; }}
+                .plotly-container {{ margin: 10px 0; }}
                 .viz-thumbnail {{ max-width: 100%; height: auto; border-radius: 3px; cursor: pointer; }}
                 .viz-title {{ font-weight: bold; margin: 10px 0 5px 0; }}
-                .viz-description {{ font-size: 0.9em; color: #666; }}
+                .viz-description {{ font-size: 0.9em; color: #666; margin-top: 10px; }}
                 .category {{ margin: 30px 0; }}
                 .modal {{ display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.9); }}
                 .modal-content {{ margin: auto; display: block; width: 90%; max-width: 1000px; }}
@@ -262,7 +310,7 @@ class EnhancedEvaluationResult:
         return '\n'.join(html_parts)
 
     def _generate_visualizations_html(self, viz_by_category: Dict[str, List]) -> str:
-        """可視化用HTMLを生成"""
+        """可視化用HTMLを生成（plotlyは埋め込み、その他は従来通り）"""
         html_parts = []
 
         for category, viz_items in viz_by_category.items():
@@ -270,19 +318,40 @@ class EnhancedEvaluationResult:
             html_parts.append('<div class="viz-grid">')
 
             for viz_item in viz_items:
-                # 相対パスに変換
-                rel_full_path = os.path.relpath(viz_item.file_path, self.reports_dir)
-                rel_thumb_path = (os.path.relpath(viz_item.thumbnail_path, self.reports_dir)
-                                  if viz_item.thumbnail_path else rel_full_path)
+                if viz_item.format == "html":
+                    # plotlyの場合：埋め込み用HTMLを使用
+                    embed_filename = viz_item.file_path.replace(".html", "_embed.html")
+                    rel_embed_path = os.path.relpath(embed_filename, self.reports_dir)
+                    
+                    html_parts.append(f'''
+                    <div class="viz-card plotly-viz">
+                        <div class="viz-title">{viz_item.name}</div>
+                        <div class="plotly-container">
+                            <iframe src="{rel_embed_path}" 
+                                    width="100%" 
+                                    height="500px" 
+                                    frameborder="0" 
+                                    scrolling="no"
+                                    style="border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                            </iframe>
+                        </div>
+                        <div class="viz-description">{viz_item.description}</div>
+                    </div>
+                    ''')
+                else:
+                    # matplotlib等の従来の画像の場合
+                    rel_full_path = os.path.relpath(viz_item.file_path, self.reports_dir)
+                    rel_thumb_path = (os.path.relpath(viz_item.thumbnail_path, self.reports_dir)
+                                      if viz_item.thumbnail_path else rel_full_path)
 
-                html_parts.append(f'''
-                <div class="viz-card">
-                    <div class="viz-title">{viz_item.name}</div>
-                    <img src="{rel_thumb_path}" alt="{viz_item.name}" 
-                         class="viz-thumbnail" data-fullsize="{rel_full_path}">
-                    <div class="viz-description">{viz_item.description}</div>
-                </div>
-                ''')
+                    html_parts.append(f'''
+                    <div class="viz-card">
+                        <div class="viz-title">{viz_item.name}</div>
+                        <img src="{rel_thumb_path}" alt="{viz_item.name}" 
+                             class="viz-thumbnail" data-fullsize="{rel_full_path}">
+                        <div class="viz-description">{viz_item.description}</div>
+                    </div>
+                    ''')
 
             html_parts.append('</div></div>')
 
