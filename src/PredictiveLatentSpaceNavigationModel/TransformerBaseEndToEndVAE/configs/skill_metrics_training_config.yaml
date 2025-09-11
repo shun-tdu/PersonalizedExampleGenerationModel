@@ -91,11 +91,7 @@ evaluation:
   
   # スタイル・スキル分離評価
   style_separation_analysis: true
-#  skill_regression_analysis: true
-#  prototype_analysis: true
-#
-#  # 被験者識別評価 (未知被験者への適応能力)
-#  subject_identification_analysis: true
+
   
   # 可視化
   create_plots: true

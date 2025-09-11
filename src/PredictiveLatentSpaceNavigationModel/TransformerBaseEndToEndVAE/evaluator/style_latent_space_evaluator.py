@@ -7,7 +7,8 @@ import plotly.express as px
 import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
-from torch.utils.data import ConcatDataset, DataLoader
+from sklearn.cluster import KMeans
+
 
 from base_evaluator import BaseEvaluator
 from src.PredictiveLatentSpaceNavigationModel.TransformerBaseEndToEndVAE.evaluator import EnhancedEvaluationResult
@@ -18,9 +19,28 @@ class VisualizeStyleSpaceEvaluator(BaseEvaluator):
     def __init__(self, config:Dict[str, Any]):
         super().__init__(config)
         self.min_samples_for_tsne = 30
+        style_components = config.get('evaluation').get('style_component')
+        self.n_components = style_components if style_components in [2, 3] else 2
 
-    def evaluate(self, model, test_data, device) -> EnhancedEvaluationResult:
-        pass
+    def evaluate(self, model, test_data, result: EnhancedEvaluationResult) -> None:
+        """スタイル潜在空間の可視化評価を実行"""
+        experiment_id = test_data.get('experiment_id')
+        z_style = test_data.get('z_style')
+        subject_ids = test_data.get('subject_ids')
+        output_dir = test_data.get('output_dir')
+
+        print("=" * 60)
+        print("スタイル潜在空間の可視化評価実行")
+        print("=" * 60)
+
+        pca_fig, tsne_fig = self._create_style_latent_space_visualizations(z_style=z_style, subject_ids=subject_ids)
+
+        result.add_visualization("style_pca",pca_fig,
+                                 description="スタイル潜在空間のPCA可視化",
+                                 category="style_analysis")
+        result.add_visualization("style_tsne", tsne_fig,
+                                 description="スタイル潜在空間のt-SNE可視化",
+                                 category="style_analysis")
 
     def get_required_data(self) -> List[str]:
         return ['z_style', 'experiment_id']
@@ -146,11 +166,211 @@ class StyleClusteringEvaluator(BaseEvaluator):
     def __init__(self, config:Dict[str, Any]):
         pass
 
-    def evaluate(self, model, test_data, device) -> EnhancedEvaluationResult:
-        pass
+    def evaluate(self, model, test_data, result: EnhancedEvaluationResult) -> None:
+        """スタイル潜在空間のクラスタリング評価を実行"""
+        z_style = test_data.get('z_style')
+        subject_ids = test_data.get('subject_ids')
+
+        print("=" * 60)
+        print("スタイル潜在空間クラスタリング評価実行")
+        print("=" * 60)
+
+        # 被験者情報の準備
+        unique_subjects = list(set(subject_ids))
+        n_subjects = len(unique_subjects)
+
+        if n_subjects < self.min_subjects_for_clustering:
+            print(f"⚠️ 被験者数不足: {n_subjects} < {self.min_subjects_for_clustering}")
+            result.add_metric("clustering_status", 0, "被験者数不足", "clustering")
+            return
+
+        # 真のクラスタラベル作成
+        subject_to_idx = {subj: i for i, subj in enumerate(unique_subjects)}
+        true_labels = [subject_to_idx[subj] for subj in subject_ids]
+
+        # K-meansクラスタリング実行
+        clustering_results = self._perform_kmeans_clustering(z_style, true_labels, n_subjects)
+
+        # シルエットスコア評価
+        silhouette_results = self._perform_silhouette_score_evaluation(z_style, true_labels, n_subjects)
+
+        # 調整ランド指標評価
+        ari_results = self._perform_adjusted_rand_index_evaluation(z_style, true_labels, n_subjects)
+
+        # 結果をメトリクスに追加
+        self._add_clustering_metrics(result, clustering_results, silhouette_results, ari_results)
+
+        print("✅ スタイル潜在空間クラスタリング評価完了")
+
+    def _perform_kmeans_clustering(self, z_style, true_labels, n_clusters):
+        """K-meansクラスタリングを実行"""
+
+        try:
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+            predicted_labels = kmeans.fit_predict(z_style)
+
+            print(f"📊 K-means完了: {n_clusters}クラスタ")
+            return {
+                'predicted_labels': predicted_labels,
+                'cluster_centers': kmeans.cluster_centers_,
+                'inertia': kmeans.inertia_,
+                'success': True
+            }
+        except Exception as e:
+            print(f"❌ K-meansエラー: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def _perform_silhouette_score_evaluation(self, z_style, true_labels, n_clusters):
+        """シルエットスコア評価"""
+        from sklearn.metrics import silhouette_score, silhouette_samples
+        from sklearn.cluster import KMeans
+
+        results = {}
+
+        try:
+            # K-meansでクラスタリング
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+            predicted_labels = kmeans.fit_predict(z_style)
+
+            # 全体のシルエットスコア
+            overall_silhouette = silhouette_score(z_style, predicted_labels)
+
+            # サンプルごとのシルエットスコア
+            sample_silhouette = silhouette_samples(z_style, predicted_labels)
+
+            # クラスタごとの平均シルエットスコア
+            cluster_silhouettes = {}
+            for i in range(n_clusters):
+                cluster_mask = predicted_labels == i
+                if np.any(cluster_mask):
+                    cluster_silhouettes[i] = np.mean(sample_silhouette[cluster_mask])
+
+            # 真のラベルでのシルエットスコア（参考値）
+            true_silhouette = silhouette_score(z_style, true_labels) if len(set(true_labels)) > 1 else 0.0
+
+            print(f"🎯 シルエットスコア:")
+            print(f"  予測クラスタ: {overall_silhouette:.4f}")
+            print(f"  真のラベル: {true_silhouette:.4f}")
+
+            # 判定
+            if overall_silhouette > 0.7:
+                silhouette_status = "優秀"
+            elif overall_silhouette > 0.5:
+                silhouette_status = "良好"
+            elif overall_silhouette > 0.25:
+                silhouette_status = "普通"
+            else:
+                silhouette_status = "不良"
+
+            print(f"  判定: {silhouette_status}")
+
+            results = {
+                'overall_silhouette': overall_silhouette,
+                'true_label_silhouette': true_silhouette,
+                'cluster_silhouettes': cluster_silhouettes,
+                'sample_silhouettes': sample_silhouette,
+                'silhouette_status': silhouette_status,
+                'success': True
+            }
+
+        except Exception as e:
+            print(f"❌ シルエットスコア計算エラー: {e}")
+            results = {'success': False, 'error': str(e)}
+
+        return results
+
+    def _perform_adjusted_rand_index_evaluation(self, z_style, true_labels, n_clusters):
+        """調整ランド指標評価"""
+        from sklearn.metrics import adjusted_rand_score
+        from sklearn.cluster import KMeans
+
+        results = {}
+
+        try:
+            # K-meansでクラスタリング
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+            predicted_labels = kmeans.fit_predict(z_style)
+
+            # 調整ランド指標計算
+            ari = adjusted_rand_score(true_labels, predicted_labels)
+
+            print(f"🎲 調整ランド指標 (ARI): {ari:.4f}")
+
+            # 判定
+            if ari > 0.75:
+                ari_status = "優秀"
+            elif ari > 0.5:
+                ari_status = "良好"
+            elif ari > 0.25:
+                ari_status = "普通"
+            else:
+                ari_status = "不良"
+
+            print(f"  判定: {ari_status}")
+
+            # 追加の分析: クラスタ純度
+            cluster_purities = self._calculate_cluster_purity(true_labels, predicted_labels, n_clusters)
+
+            results = {
+                'ari': ari,
+                'ari_status': ari_status,
+                'predicted_labels': predicted_labels,
+                'cluster_purities': cluster_purities,
+                'success': True
+            }
+
+        except Exception as e:
+            print(f"❌ ARI計算エラー: {e}")
+            results = {'success': False, 'error': str(e)}
+
+        return results
+
+    def _calculate_cluster_purity(self, true_labels, predicted_labels, n_clusters):
+        """クラスタ純度の計算"""
+        purities = {}
+
+        for cluster_id in range(n_clusters):
+            cluster_mask = np.array(predicted_labels) == cluster_id
+            if np.any(cluster_mask):
+                cluster_true_labels = np.array(true_labels)[cluster_mask]
+                # 最も多い真のラベルの割合
+                unique_labels, counts = np.unique(cluster_true_labels, return_counts=True)
+                max_count = np.max(counts)
+                purity = max_count / len(cluster_true_labels)
+                purities[cluster_id] = {
+                    'purity': purity,
+                    'dominant_label': unique_labels[np.argmax(counts)],
+                    'size': len(cluster_true_labels)
+                }
+
+        return purities
+
+    def _add_clustering_metrics(self, result, clustering_results, silhouette_results, ari_results):
+        """クラスタリングメトリクスを結果に追加"""
+        # シルエットスコアメトリクス
+        if silhouette_results.get('success', False):
+            result.add_metric('style_clustering_silhouette',
+                              silhouette_results['overall_silhouette'],
+                              'スタイル潜在空間のシルエットスコア', 'clustering')
+            result.add_metric('style_clustering_true_silhouette',
+                              silhouette_results['true_label_silhouette'],
+                              '真のラベルでのシルエットスコア（参考）', 'clustering')
+
+        # ARI メトリクス
+        if ari_results.get('success', False):
+            result.add_metric('style_clustering_ari',
+                              ari_results['ari'],
+                              'スタイル潜在空間の調整ランド指標', 'clustering')
+
+        # K-meansメトリクス
+        if clustering_results.get('success', False):
+            result.add_metric('style_clustering_inertia',
+                              clustering_results['inertia'],
+                              'K-meansクラスタ内二乗和', 'clustering')
 
     def get_required_data(self) -> List[str]:
-        pass
+        return ['z_style', 'subject_ids', 'experiment_id']
+
 
 class StyleClassificationEvaluator(BaseEvaluator):
     """スタイル潜在変数から簡単なSVM,MLPで被験者の分類が可能化を評価"""
