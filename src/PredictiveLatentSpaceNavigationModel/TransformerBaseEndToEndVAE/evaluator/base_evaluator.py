@@ -18,8 +18,18 @@ class BaseEvaluator(ABC):
         self.evaluation_config = config.get('evaluation', {})
 
     @abstractmethod
-    def evaluate(self, model, test_data, device) -> EnhancedEvaluationResult:
-        """評価を実行"""
+    def evaluate(self, model, test_data, device, result: EnhancedEvaluationResult = None) -> EnhancedEvaluationResult:
+        """評価を実行
+        
+        Args:
+            model: 評価対象のモデル
+            test_data: テストデータ
+            device: デバイス
+            result: 共有の評価結果オブジェクト（Noneの場合は新規作成）
+            
+        Returns:
+            EnhancedEvaluationResult: 評価結果（共有モードの場合はresult引数と同じオブジェクト）
+        """
         pass
 
     @abstractmethod
@@ -130,6 +140,60 @@ class EvaluationPipeline:
                 
         return None
 
+    def run_unified_evaluation(self, model, test_data, device) -> 'EnhancedEvaluationResult':
+        """統一されたレポートで全ての評価を実行（共有EnhancedEvaluationResultを使用）"""
+        # EnhancedEvaluationResultの初期化
+        experiment_id = test_data.get('experiment_id', 0)
+        output_dir = test_data.get('output_dir', 'outputs')
+        
+        shared_result = EnhancedEvaluationResult(experiment_id, output_dir)
+        
+        successful_evaluations = 0
+        total_evaluations = len(self.evaluators)
+
+        for evaluator in self.evaluators:
+            print(f"実行中: {evaluator.__class__.__name__}")
+
+            try:
+                # 必要なデータの確認
+                required_data = evaluator.get_required_data()
+                missing_data = [key for key in required_data if key not in test_data]
+
+                if missing_data:
+                    print(f"警告: {evaluator.__class__.__name__} に必要なデータが不足: {missing_data}")
+                    continue
+
+                # 共有結果オブジェクトを渡して評価実行
+                returned_result = evaluator.evaluate(model, test_data, device, shared_result)
+                
+                # 統一パターンでは共有結果と同じオブジェクトが返されることを確認
+                if returned_result is not shared_result:
+                    print(f"警告: {evaluator.__class__.__name__} が異なる結果オブジェクトを返しました")
+
+                successful_evaluations += 1
+                print(f"✓ {evaluator.__class__.__name__} 完了")
+
+            except Exception as e:
+                print(f"✗ 評価エラー ({evaluator.__class__.__name__}): {e}")
+                import traceback
+                print(f"詳細: {traceback.format_exc()}")
+                continue
+
+        # 評価完了サマリー
+        print(f"\n統一評価完了: {successful_evaluations}/{total_evaluations} 成功")
+
+        # 統合レポート生成
+        if successful_evaluations > 0:
+            try:
+                report_path = shared_result.create_comprehensive_report()
+                print(f"統一レポート生成: {report_path}")
+                return shared_result
+            except Exception as e:
+                print(f"レポート生成エラー: {e}")
+                return shared_result
+                
+        return shared_result
+
     def get_evaluator_info(self) -> List[Dict[str, str]]:
         """登録されている評価器の情報を取得"""
         evaluator_info = []
@@ -186,13 +250,15 @@ class LatentSpaceEvaluator(BaseEvaluator):
     def get_required_data(self) -> List[str]:
         return ['test_loader', 'output_dir']
 
-    def evaluate(self, model, test_data, device) -> EnhancedEvaluationResult:
+    def evaluate(self, model, test_data, device, result: EnhancedEvaluationResult = None) -> EnhancedEvaluationResult:
         """潜在空間の包括評価"""
         experiment_id = test_data.get('experiment_id', 0)
         output_dir = test_data['output_dir']
         test_loader = test_data['test_loader']
 
-        result = EnhancedEvaluationResult(experiment_id, output_dir)
+        # 共有結果オブジェクトが渡されない場合は新規作成
+        if result is None:
+            result = EnhancedEvaluationResult(experiment_id, output_dir)
 
         # 潜在変数抽出
         latent_data = self._extract_latent_variables(model, test_loader, device)

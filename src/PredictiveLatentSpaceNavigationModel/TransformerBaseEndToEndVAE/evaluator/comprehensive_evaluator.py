@@ -23,7 +23,7 @@ class ComprehensiveLatentSpaceEvaluator(BaseEvaluator):
     def get_required_data(self) -> List[str]:
         return ['test_loader', 'train_dataset', 'val_dataset', 'test_dataset', 'output_dir', 'experiment_id']
 
-    def evaluate(self, model, test_data, device) -> EnhancedEvaluationResult:
+    def evaluate(self, model, test_data, device, result: EnhancedEvaluationResult = None) -> EnhancedEvaluationResult:
         """包括的潜在空間評価を実行"""
         experiment_id = test_data.get('experiment_id')
         output_dir = test_data['output_dir']
@@ -33,7 +33,9 @@ class ComprehensiveLatentSpaceEvaluator(BaseEvaluator):
 
         train_config = self.config.get('training', {})
 
-        result = EnhancedEvaluationResult(experiment_id, output_dir)
+        # 共有結果オブジェクトが渡されない場合は新規作成
+        if result is None:
+            result = EnhancedEvaluationResult(experiment_id, output_dir)
 
         print("=" * 60)
         print("包括的潜在空間分析開始")
