@@ -38,7 +38,7 @@ class VisualizeStyleSpaceEvaluator(BaseEvaluator):
         print("スタイル潜在空間の可視化評価実行")
         print("=" * 60)
 
-        pca_fig, tsne_fig = self._create_style_latent_space_visualizations(z_style=z_style, subject_ids=subject_ids)
+        pca_fig, tsne_fig = self._create_style_latent_space_visualizations(z_style=z_style, subject_ids=subject_ids, n_components=self.n_components)
 
         result.add_visualization("style_pca",pca_fig,
                                  description="スタイル潜在空間のPCA可視化",
