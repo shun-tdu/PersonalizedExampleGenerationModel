@@ -255,10 +255,70 @@ class IntegratedExperimentRunner:
         # 評価パイプライン設定
         evaluation_pipeline = EvaluationPipeline(self.config)
         
-        # 評価実行
-        results = evaluation_pipeline.run_evaluation(model, test_data, self.device)
+        # テストデータから評価に必要な潜在変数とスキルスコアを抽出
+        enhanced_test_data = self._prepare_evaluation_data(model, test_data)
+        
+        # 統一評価実行（複数評価器による包括的評価）
+        results = evaluation_pipeline.run_unified_evaluation(model, enhanced_test_data, self.device)
         
         return results
+    
+    def _prepare_evaluation_data(self, model, test_data):
+        """評価用データの準備（潜在変数・再構成データ・スキルスコアの抽出）"""
+        print("評価用データ準備中...")
+        
+        model.eval()
+        test_loader = test_data['test_loader']
+        
+        all_originals = []
+        all_reconstructed = []
+        all_z_style = []
+        all_z_skill = []
+        all_subject_ids = []
+        all_skill_scores = []
+        
+        with torch.no_grad():
+            for batch_data in test_loader:
+                # SkillMetricsDatasetからのデータ: (trajectories, subject_ids, skill_scores)
+                trajectories = batch_data[0].to(self.device)  # [batch, seq_len, 6]
+                subject_ids = batch_data[1]                   # List[str]
+                skill_scores = batch_data[2].to(self.device)  # [batch,]
+                
+                # エンコード
+                encoded = model.encode(trajectories)
+                z_style = encoded['z_style']  # [batch, style_dim]
+                z_skill = encoded['z_skill']  # [batch, skill_dim]
+                
+                # デコード（再構成）
+                decoded = model.decode(z_style, z_skill)
+                reconstructed = decoded['trajectory']  # [batch, seq_len, 6]
+                
+                # CPU上に移動してリストに追加
+                all_originals.append(trajectories.cpu().numpy())
+                all_reconstructed.append(reconstructed.cpu().numpy())
+                all_z_style.append(z_style.cpu().numpy())
+                all_z_skill.append(z_skill.cpu().numpy())
+                all_subject_ids.extend(subject_ids)
+                all_skill_scores.append(skill_scores.cpu().numpy())
+        
+        # 結合してnumpy配列に変換
+        enhanced_data = test_data.copy()
+        enhanced_data.update({
+            'originals': np.vstack(all_originals),           # [total_samples, seq_len, 6]
+            'reconstructed': np.vstack(all_reconstructed),   # [total_samples, seq_len, 6]
+            'z_style': np.vstack(all_z_style),               # [total_samples, style_dim]
+            'z_skill': np.vstack(all_z_skill),               # [total_samples, skill_dim]
+            'subject_ids': all_subject_ids,                  # List[str]
+            'skill_scores': np.concatenate(all_skill_scores) # [total_samples,]
+        })
+        
+        print(f"評価データ準備完了:")
+        print(f"  - サンプル数: {len(all_subject_ids)}")
+        print(f"  - 被験者数: {len(set(all_subject_ids))}")
+        print(f"  - スタイル潜在次元: {enhanced_data['z_style'].shape[1]}")
+        print(f"  - スキル潜在次元: {enhanced_data['z_skill'].shape[1]}")
+        
+        return enhanced_data
         
     def _finalize_results(self, model_path, evaluation_results):
         """結果の最終化"""
