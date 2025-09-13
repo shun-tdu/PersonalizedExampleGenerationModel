@@ -8,7 +8,8 @@ import torch
 from IPython.core.pylabtools import figsize
 
 from .result_manager import EnhancedEvaluationResult, VisualizationItem
-
+from  .base_line_evaluator import TrajectoryGenerationEvaluator
+from .skill_latent_space_evaluator import VisualizeSkillSpaceEvaluator, SkillScoreRegressionEvaluator, SkillLatentDimensionVSScoreEvaluator
 
 class BaseEvaluator(ABC):
     """評価器の基底クラス"""
@@ -18,17 +19,14 @@ class BaseEvaluator(ABC):
         self.evaluation_config = config.get('evaluation', {})
 
     @abstractmethod
-    def evaluate(self, model, test_data, result: EnhancedEvaluationResult = None) -> EnhancedEvaluationResult:
+    def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult) -> None:
         """評価を実行
         
         Args:
             model: 評価対象のモデル
             test_data: テストデータ
             device: デバイス
-            result: 共有の評価結果オブジェクト（Noneの場合は新規作成）
-            
-        Returns:
-            EnhancedEvaluationResult: 評価結果（共有モードの場合はresult引数と同じオブジェクト）
+            result: 共有の評価結果オブジェクト（呼び出し元で作成済み）
         """
         pass
 
@@ -52,13 +50,16 @@ class EvaluationPipeline:
         """評価器をセットアップ"""
         evaluation_config = self.config.get('evaluation', {})
 
-        # デフォルト評価器
+        # デフォルト評価機のフラグ読み取り
         if evaluation_config.get('comprehensive_latent_analysis', True):
             from .comprehensive_evaluator import ComprehensiveLatentSpaceEvaluator
             self.evaluators.append(ComprehensiveLatentSpaceEvaluator(self.config))
 
         elif evaluation_config.get('latent_space_analysis', True):
             self.evaluators.append(LatentSpaceEvaluator(self.config))
+
+        elif evaluation_config.get('trajectory_generation_analysis', True):
+            self.evaluators.append()
 
 
         # if evaluation_config.get('skill_axis_analysis', True):
@@ -72,7 +73,7 @@ class EvaluationPipeline:
             if evaluator_class:
                 self.evaluators.append(evaluator_class(self.config))
 
-    def _load_evaluator_class(self, evaluator_config):
+    def _load_evaluator_class(self, evaluator_config: Dict[str, str]) -> Optional[type]:
         """カスタム評価器クラスを動的ロード"""
         try:
             module_name = evaluator_config['module']
@@ -86,7 +87,7 @@ class EvaluationPipeline:
             print(f"カスタム評価器ロードエラー: {e}")
             return None
 
-    def run_evaluation(self, model, test_data, device) -> 'EnhancedEvaluationResult':
+    def run_evaluation(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device) -> 'EnhancedEvaluationResult':
         """全ての評価を実行"""
         # EnhancedEvaluationResultの初期化に必要なパラメータ
         experiment_id = test_data.get('experiment_id', 0)
@@ -140,7 +141,7 @@ class EvaluationPipeline:
                 
         return None
 
-    def run_unified_evaluation(self, model, test_data, device) -> 'EnhancedEvaluationResult':
+    def run_unified_evaluation(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device) -> 'EnhancedEvaluationResult':
         """統一されたレポートで全ての評価を実行（共有EnhancedEvaluationResultを使用）"""
         # EnhancedEvaluationResultの初期化
         experiment_id = test_data.get('experiment_id', 0)
@@ -220,7 +221,7 @@ class EvaluationPipeline:
 
         return validation_results
 
-    def run_selective_evaluation(self, model, test_data, device,
+    def run_selective_evaluation(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device,
                                  evaluator_names: List[str] = None) -> 'EnhancedEvaluationResult':
         """指定された評価器のみ実行"""
         if evaluator_names is None:
@@ -250,7 +251,7 @@ class LatentSpaceEvaluator(BaseEvaluator):
     def get_required_data(self) -> List[str]:
         return ['test_loader', 'output_dir']
 
-    def evaluate(self, model, test_data, device, result: EnhancedEvaluationResult = None) -> EnhancedEvaluationResult:
+    def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult):
         """潜在空間の包括評価"""
         experiment_id = test_data.get('experiment_id', 0)
         output_dir = test_data['output_dir']
@@ -289,9 +290,8 @@ class LatentSpaceEvaluator(BaseEvaluator):
         # HTMLレポート生成
         report_path = result.create_comprehensive_report()
 
-        return result
 
-    def _extract_latent_variables(self, model, test_loader, device):
+    def _extract_latent_variables(self, model: torch.nn.Module, test_loader: torch.utils.data.DataLoader, device: torch.device) -> Dict[str, Any]:
         """潜在変数を抽出"""
         model.eval()
         all_z_style = []
@@ -328,12 +328,12 @@ class LatentSpaceEvaluator(BaseEvaluator):
             'originals': np.vstack(all_originals)
         }
 
-    def _evaluate_reconstruction(self, latent_data) -> Dict[str, float]:
+    def _evaluate_reconstruction(self, latent_data: Dict[str, np.ndarray]) -> Dict[str, float]:
         """再構成性能評価"""
         mse = np.mean((latent_data['originals'] - latent_data['reconstructions']) ** 2)
         return {'mse': mse}
 
-    def _evaluate_style_separation(self, latent_data) -> Dict[str, float]:
+    def _evaluate_style_separation(self, latent_data: Dict[str, Any]) -> Dict[str, float]:
         """スタイル分離性能評価"""
         from sklearn.cluster import KMeans
         from sklearn.metrics import adjusted_rand_score
@@ -375,7 +375,7 @@ class LatentSpaceEvaluator(BaseEvaluator):
             'separation_ratio': separation_ratio
         }
 
-    def _evaluate_skill_representation(self, latent_data, test_df) -> Dict[str, float]:
+    def _evaluate_skill_representation(self, latent_data: Dict[str, np.ndarray], test_df: Optional[Any]) -> Dict[str, float]:
         """スキル表現評価"""
         if test_df is None:
             return {}
@@ -415,7 +415,7 @@ class LatentSpaceEvaluator(BaseEvaluator):
 
         return correlations
 
-    def _create_pca_visualization(self, latent_data) -> plt.Figure:
+    def _create_pca_visualization(self, latent_data: Dict[str, np.ndarray]) -> plt.Figure:
         """PCA可視化のFigureを生成"""
         from sklearn.decomposition import PCA
 
