@@ -1,6 +1,7 @@
 # スキル潜在空間の評価器
 from typing import List, Dict, Any, Union, Tuple
 import numpy as np
+import torch
 import matplotlib.pyplot as plt
 import plotly
 import plotly.express as px
@@ -20,7 +21,7 @@ class VisualizeSkillSpaceEvaluator(BaseEvaluator):
         skill_components = config.get('evaluation', {}).get('skill_component', 2)
         self.n_components = skill_components if skill_components in [2, 3] else 2
 
-    def evaluate(self, model, test_data, result: EnhancedEvaluationResult) -> None:
+    def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult):
         """スキル潜在空間の可視化評価を実行"""
         z_skill = test_data.get('z_skill')
         skill_scores = test_data.get('skill_scores')
@@ -46,7 +47,7 @@ class VisualizeSkillSpaceEvaluator(BaseEvaluator):
     def get_required_data(self) -> List[str]:
         return ['z_skill', 'skill_scores', 'subject_ids', 'experiment_id']
 
-    def _create_skill_latent_space_visualizations(self, z_skill, skill_scores, subject_ids, n_components=2) -> Union[Tuple[plt.Figure, plt.Figure], Tuple[plotly.graph_objs.Figure, plotly.graph_objs.Figure]]:
+    def _create_skill_latent_space_visualizations(self, z_skill: np.ndarray, skill_scores: np.ndarray, subject_ids: List[str], n_components: int = 2) -> Union[Tuple[plt.Figure, plt.Figure], Tuple[plotly.graph_objs.Figure, plotly.graph_objs.Figure]]:
         """包括的可視化生成 - スキルスコアによる色分け。2Dの場合はMatplotlib、3Dの場合はPlotly Figureオブジェクトを返す"""
         print(f"\n🎯 スキル空間可視化生成中...")
 
@@ -211,7 +212,7 @@ class SkillScoreRegressionEvaluator(BaseEvaluator):
         self.random_state = 42
         self.min_samples = 20
 
-    def evaluate(self, model, test_data, result: EnhancedEvaluationResult) -> None:
+    def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult):
         """スキル潜在変数からのスキルスコア回帰評価を実行"""
         z_skill = test_data.get('z_skill')
         skill_scores = test_data.get('skill_scores')
@@ -256,7 +257,7 @@ class SkillScoreRegressionEvaluator(BaseEvaluator):
         
         print("✅ スキルスコア回帰評価完了")
 
-    def _preprocess_data(self, z_skill, skill_scores):
+    def _preprocess_data(self, z_skill: np.ndarray, skill_scores: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """データ前処理"""
         from sklearn.preprocessing import StandardScaler
         
@@ -278,7 +279,7 @@ class SkillScoreRegressionEvaluator(BaseEvaluator):
         
         return X_clean, y_clean
 
-    def _evaluate_mlp_regression(self, X, y):
+    def _evaluate_mlp_regression(self, X: np.ndarray, y: np.ndarray) -> Dict[str, Any]:
         """MLP回帰評価"""
         from sklearn.neural_network import MLPRegressor
         from sklearn.model_selection import train_test_split
@@ -364,7 +365,7 @@ class SkillScoreRegressionEvaluator(BaseEvaluator):
             print(f"  ❌ MLP評価エラー: {e}")
             return {'success': False, 'error': str(e)}
 
-    def _evaluate_svm_regression(self, X, y):
+    def _evaluate_svm_regression(self, X: np.ndarray, y: np.ndarray) -> Dict[str, Any]:
         """SVM回帰評価"""
         from sklearn.svm import SVR
         from sklearn.model_selection import train_test_split, GridSearchCV
@@ -459,7 +460,7 @@ class SkillScoreRegressionEvaluator(BaseEvaluator):
             print(f"  ❌ SVM評価エラー: {e}")
             return {'success': False, 'error': str(e)}
 
-    def _evaluate_baseline_regression(self, X, y):
+    def _evaluate_baseline_regression(self, X: np.ndarray, y: np.ndarray) -> Dict[str, Any]:
         """ベースライン回帰評価（線形回帰）"""
         from sklearn.linear_model import LinearRegression
         from sklearn.model_selection import train_test_split
@@ -499,7 +500,7 @@ class SkillScoreRegressionEvaluator(BaseEvaluator):
             print(f"  ❌ ベースライン評価エラー: {e}")
             return {'success': False, 'error': str(e)}
 
-    def _perform_cross_validation(self, X, y):
+    def _perform_cross_validation(self, X: np.ndarray, y: np.ndarray) -> Dict[str, Dict[str, Any]]:
         """交差検証による頑健性評価"""
         from sklearn.model_selection import cross_val_score
         from sklearn.neural_network import MLPRegressor
@@ -533,7 +534,7 @@ class SkillScoreRegressionEvaluator(BaseEvaluator):
         
         return cv_results
 
-    def _create_regression_visualization(self, X, y, mlp_results, svm_results, baseline_results):
+    def _create_regression_visualization(self, X: np.ndarray, y: np.ndarray, mlp_results: Dict[str, Any], svm_results: Dict[str, Any], baseline_results: Dict[str, Any]) -> plt.Figure:
         """回帰性能の可視化"""
         fig, axes = plt.subplots(2, 3, figsize=(18, 12))
         
@@ -622,7 +623,7 @@ class SkillScoreRegressionEvaluator(BaseEvaluator):
         plt.tight_layout()
         return fig
 
-    def _add_regression_metrics(self, result, mlp_results, svm_results, baseline_results, cv_results):
+    def _add_regression_metrics(self, result: EnhancedEvaluationResult, mlp_results: Dict[str, Any], svm_results: Dict[str, Any], baseline_results: Dict[str, Any], cv_results: Dict[str, Dict[str, Any]]) -> None:
         """回帰メトリクスを結果に追加"""
         # MLP結果
         if mlp_results.get('success', False):
@@ -672,7 +673,7 @@ class SkillLatentDimensionVSScoreEvaluator(BaseEvaluator):
         self.min_samples = 10
         self.significance_level = 0.05
 
-    def evaluate(self, model, test_data, result: EnhancedEvaluationResult) -> None:
+    def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult):
         """スキル潜在次元とスキルスコアの線形関係評価を実行"""
         z_skill = test_data.get('z_skill')
         skill_scores = test_data.get('skill_scores')
@@ -711,7 +712,7 @@ class SkillLatentDimensionVSScoreEvaluator(BaseEvaluator):
         
         print("✅ スキル潜在次元 vs スキルスコア線形関係評価完了")
 
-    def _perform_pca_analysis(self, z_skill, skill_scores):
+    def _perform_pca_analysis(self, z_skill: np.ndarray, skill_scores: np.ndarray) -> Dict[str, Any]:
         """PCA分析でスキル潜在空間の主次元を特定"""
         from sklearn.decomposition import PCA
         from scipy.stats import pearsonr
@@ -759,7 +760,7 @@ class SkillLatentDimensionVSScoreEvaluator(BaseEvaluator):
             'z_skill_pca': z_skill_pca
         }
 
-    def _analyze_dimension_correlations(self, z_skill, skill_scores):
+    def _analyze_dimension_correlations(self, z_skill: np.ndarray, skill_scores: np.ndarray) -> Dict[str, Any]:
         """各潜在次元とスキルスコアの相関分析"""
         from scipy.stats import pearsonr, spearmanr
         
@@ -808,7 +809,7 @@ class SkillLatentDimensionVSScoreEvaluator(BaseEvaluator):
             'best_dim_correlation': best_dim_correlation
         }
 
-    def _perform_regression_analysis(self, z_skill, skill_scores):
+    def _perform_regression_analysis(self, z_skill: np.ndarray, skill_scores: np.ndarray) -> Dict[str, Any]:
         """線形回帰分析"""
         from sklearn.linear_model import LinearRegression
         from sklearn.metrics import r2_score, mean_squared_error
@@ -897,7 +898,7 @@ class SkillLatentDimensionVSScoreEvaluator(BaseEvaluator):
         
         return results
 
-    def _create_linearity_visualization(self, z_skill, skill_scores, pca_results, correlation_results, regression_results):
+    def _create_linearity_visualization(self, z_skill: np.ndarray, skill_scores: np.ndarray, pca_results: Dict[str, Any], correlation_results: Dict[str, Any], regression_results: Dict[str, Any]) -> plt.Figure:
         """線形関係の可視化"""
         fig, axes = plt.subplots(2, 3, figsize=(18, 12))
         
@@ -990,7 +991,7 @@ class SkillLatentDimensionVSScoreEvaluator(BaseEvaluator):
         plt.tight_layout()
         return fig
 
-    def _add_linearity_metrics(self, result, pca_results, correlation_results, regression_results):
+    def _add_linearity_metrics(self, result: EnhancedEvaluationResult, pca_results: Dict[str, Any], correlation_results: Dict[str, Any], regression_results: Dict[str, Any]) -> None:
         """線形関係メトリクスを結果に追加"""
         # PCA関連メトリクス
         if pca_results:

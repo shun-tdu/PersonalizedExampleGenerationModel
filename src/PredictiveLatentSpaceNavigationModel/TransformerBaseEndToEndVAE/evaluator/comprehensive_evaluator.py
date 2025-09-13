@@ -23,7 +23,7 @@ class ComprehensiveLatentSpaceEvaluator(BaseEvaluator):
     def get_required_data(self) -> List[str]:
         return ['test_loader', 'train_dataset', 'val_dataset', 'test_dataset', 'output_dir', 'experiment_id']
 
-    def evaluate(self, model, test_data, device, result: EnhancedEvaluationResult = None) -> EnhancedEvaluationResult:
+    def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult = None) -> EnhancedEvaluationResult:
         """包括的潜在空間評価を実行"""
         experiment_id = test_data.get('experiment_id')
         output_dir = test_data['output_dir']

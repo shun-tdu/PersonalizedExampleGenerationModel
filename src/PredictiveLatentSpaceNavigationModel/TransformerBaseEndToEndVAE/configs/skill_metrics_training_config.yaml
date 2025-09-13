@@ -85,30 +85,24 @@ data:
 
 # 評価設定
 evaluation:
-  # 基本評価
-  reconstruction_quality: true
-  comprehensive_latent_analysis: true
-  
-  # スタイル・スキル分離評価
-  style_separation_analysis: true
+  # ベースライン評価器
+  trajectory_generation_analysis: True
+  style_skill_orthogonality_analysis: True
 
+  # スタイル空間評価器
+  visualize_style_space_analysis: True
+  style_clustering_analysis: True
+  style_classification_analysis: True
+
+  # スキル空間評価器
+  visualize_skill_space_analysis: True
+  skill_score_regression_analysis: True
+  skill_latent_dimension_vs_score_analysis: True
   
   # 可視化
   create_plots: true
   save_trajectories: true
   generate_examples: true
-
-#  generate_style_interpolation: true
-#  generate_skill_interpolation: true
-  
-#  # 評価指標
-#  metrics:
-#    - "reconstruction_mse"
-#    - "style_classification_accuracy"
-#    - "skill_regression_mse"
-#    - "style_kl_divergence"
-#    - "skill_kl_divergence"
-#    - "prototype_cluster_quality"
 
 # 出力設定
 output:

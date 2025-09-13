@@ -370,14 +370,14 @@ class SkillMetricCalculator:
         for (subject_id, trial_num, block), trial_group in preprocessed_data.groupby(['subject_id', 'trial_num', 'block']):
             try:
                 # 各トライアルから軌道曲率、速度滑らかさ、加速度滑らかさ、ジャーク、制御安定性、時間的一貫性、動作時間、終点誤差を計算
-                curvature = self._calculate_curvature(trial_group)
-                velocity_smoothness = self._calculate_velocity_smoothness(trial_group)
-                acceleration_smoothness = self._calculate_acceleration_smoothness(trial_group)
-                jerk_score = self._calculate_jerk(trial_group)
-                control_stability = self._calculate_control_stability(trial_group)
-                temporal_consistency = self._calculate_temporal_consistency(trial_group)
-                trial_time = self._calculate_trial_time(trial_group)
-                endpoint_error = self._calculate_endpoint_error(trial_group)
+                curvature = self.calculate_curvature(trial_group)
+                velocity_smoothness = self.calculate_velocity_smoothness(trial_group)
+                acceleration_smoothness = self.calculate_acceleration_smoothness(trial_group)
+                jerk_score = self.calculate_jerk(trial_group)
+                control_stability = self.calculate_control_stability(trial_group)
+                temporal_consistency = self.calculate_temporal_consistency(trial_group)
+                trial_time = self.calculate_trial_time(trial_group)
+                endpoint_error = self.calculate_endpoint_error(trial_group)
 
                 # 結果をまとめる
                 metrics = {
@@ -407,7 +407,8 @@ class SkillMetricCalculator:
 
         return skill_metrics_df
 
-    def _standardize_metrics(self, metrics_df: pd.DataFrame) -> pd.DataFrame:
+    @staticmethod
+    def standardize_metrics(metrics_df: pd.DataFrame) -> pd.DataFrame:
         """スキル指標を標準化する"""
         standardized_df = metrics_df.copy()
 
@@ -437,8 +438,8 @@ class SkillMetricCalculator:
 
         return standardized_df
 
-
-    def _calculate_curvature(self, trial_data: pd.DataFrame):
+    @staticmethod
+    def calculate_curvature(trial_data: pd.DataFrame):
         """軌道の曲率を計算"""
         positions = trial_data[['HandlePosX','HandlePosY']].values
 
@@ -462,7 +463,8 @@ class SkillMetricCalculator:
 
         return np.mean(curvatures) if curvatures else 0.0
 
-    def _calculate_velocity_smoothness(self, trial_data: pd.DataFrame):
+    @staticmethod
+    def calculate_velocity_smoothness(trial_data: pd.DataFrame):
         """速度の滑らかさを計算"""
         velocities = trial_data[['HandleVelX','HandleVelY']].values
 
@@ -476,7 +478,8 @@ class SkillMetricCalculator:
         smoothness = 1.0 / (1.0 + np.std(velocity_changes))
         return smoothness
 
-    def _calculate_acceleration_smoothness(self, trial_data: pd.DataFrame):
+    @staticmethod
+    def calculate_acceleration_smoothness(trial_data: pd.DataFrame):
         """加速度の滑らかさ"""
 
         if len(trial_data) < 3:
@@ -489,7 +492,8 @@ class SkillMetricCalculator:
         acc_changes = np.abs(np.diff(acc_magnitude))
         return 1.0 / (1.0 + np.std(acc_changes))
 
-    def _calculate_control_stability(self, trial_data: pd.DataFrame):
+    @staticmethod
+    def calculate_control_stability(trial_data: pd.DataFrame):
         """制御安定性指標"""
         if len(trial_data) < 5:
             return np.nan
@@ -503,7 +507,8 @@ class SkillMetricCalculator:
 
         return stability
 
-    def _calculate_temporal_consistency(self, trial_data: pd.DataFrame):
+    @staticmethod
+    def calculate_temporal_consistency(trial_data: pd.DataFrame):
         """時間的一貫性"""
         if len(trial_data) < 10:
             return np.nan
@@ -515,13 +520,15 @@ class SkillMetricCalculator:
         consistency = 1.0 / (1.0 + np.std(time_intervals) / np.mean(time_intervals))
         return consistency
 
-    def _calculate_trial_time(self, trial_data: pd.DataFrame) -> float:
+    @staticmethod
+    def calculate_trial_time(trial_data: pd.DataFrame) -> float:
         """動作時間の計算 - 軌道の長さから推定"""
         time_stamps = trial_data['Timestamp'].values
 
         return time_stamps[-1] - time_stamps[0]
-    
-    def _calculate_endpoint_error(self, trial_data: pd.DataFrame) -> float:
+
+    @staticmethod
+    def calculate_endpoint_error(trial_data: pd.DataFrame) -> float:
         """終点誤差の計算 - 目標位置からの距離"""
         # 最後の位置を終点として使用
         final_x = trial_data['HandlePosX'].iloc[-1]
@@ -532,8 +539,9 @@ class SkillMetricCalculator:
         
         endpoint_error = np.sqrt((final_x - target_x)**2 + (final_y - target_y)**2)
         return endpoint_error
-    
-    def _calculate_jerk(self, trial_data: pd.DataFrame) -> float:
+
+    @staticmethod
+    def calculate_jerk(trial_data: pd.DataFrame) -> float:
         """ジャーク（加速度の変化率）の計算"""
         acc_x = trial_data['HandleAccX'].values
         acc_y = trial_data['HandleAccY'].values

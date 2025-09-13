@@ -1,6 +1,7 @@
 # スタイル潜在空間の評価器
 from typing import List, Dict, Any, Union, Tuple
 import numpy as np
+import torch
 import matplotlib.pyplot as plt
 import plotly
 import plotly.express as px
@@ -8,7 +9,6 @@ import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.cluster import KMeans
-
 
 from base_evaluator import BaseEvaluator
 from src.PredictiveLatentSpaceNavigationModel.TransformerBaseEndToEndVAE.evaluator import EnhancedEvaluationResult
@@ -22,16 +22,10 @@ class VisualizeStyleSpaceEvaluator(BaseEvaluator):
         style_components = config.get('evaluation').get('style_component')
         self.n_components = style_components if style_components in [2, 3] else 2
 
-    def evaluate(self, model, test_data, device, result: EnhancedEvaluationResult = None) -> EnhancedEvaluationResult:
+    def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult):
         """スタイル潜在空間の可視化評価を実行"""
-        experiment_id = test_data.get('experiment_id', 0)
-        output_dir = test_data.get('output_dir', 'outputs')
         z_style = test_data.get('z_style')
         subject_ids = test_data.get('subject_ids')
-
-        # 共有結果オブジェクトが渡されない場合は新規作成
-        if result is None:
-            result = EnhancedEvaluationResult(experiment_id, output_dir)
 
         print("=" * 60)
         print("スタイル潜在空間の可視化評価実行")
@@ -46,12 +40,12 @@ class VisualizeStyleSpaceEvaluator(BaseEvaluator):
                                  description="スタイル潜在空間のt-SNE可視化",
                                  category="style_analysis")
         
-        return result
+        print("✅ スタイル潜在空間可視化評価完了")
 
     def get_required_data(self) -> List[str]:
         return ['z_style', 'experiment_id']
 
-    def _create_style_latent_space_visualizations(self, z_style, subject_ids, n_components=2) -> Union[Tuple[plt.Figure,plt.Figure], Tuple[plotly.graph_objs.Figure,plotly.graph_objs.Figure]]:
+    def _create_style_latent_space_visualizations(self, z_style: np.ndarray, subject_ids: List[str], n_components: int = 2) -> Union[Tuple[plt.Figure,plt.Figure], Tuple[plotly.graph_objs.Figure,plotly.graph_objs.Figure]]:
         """包括的可視化生成 - 主成分次元が2のときはMatplot Figure、 3のときはPlotly Figureオブジェクトを返す"""
         print(f"\n🎨 可視化生成中...")
 
@@ -173,16 +167,10 @@ class StyleClusteringEvaluator(BaseEvaluator):
         super().__init__(config)
         self.min_subjects_for_clustering = 2
 
-    def evaluate(self, model, test_data, device, result: EnhancedEvaluationResult = None) -> EnhancedEvaluationResult:
+    def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult):
         """スタイル潜在空間のクラスタリング評価を実行"""
-        experiment_id = test_data.get('experiment_id', 0)
-        output_dir = test_data.get('output_dir', 'outputs')
         z_style = test_data.get('z_style')
         subject_ids = test_data.get('subject_ids')
-
-        # 共有結果オブジェクトが渡されない場合は新規作成
-        if result is None:
-            result = EnhancedEvaluationResult(experiment_id, output_dir)
 
         print("=" * 60)
         print("スタイル潜在空間クラスタリング評価実行")
@@ -213,8 +201,6 @@ class StyleClusteringEvaluator(BaseEvaluator):
         self._add_clustering_metrics(result, clustering_results, silhouette_results, ari_results)
 
         print("✅ スタイル潜在空間クラスタリング評価完了")
-        
-        return result
 
     def _perform_kmeans_clustering(self, z_style, true_labels, n_clusters):
         """K-meansクラスタリングを実行"""
@@ -396,16 +382,10 @@ class StyleClassificationEvaluator(BaseEvaluator):
         self.min_samples_per_subject = 3
         self.min_subjects = 2
 
-    def evaluate(self, model, test_data, device, result: EnhancedEvaluationResult = None) -> EnhancedEvaluationResult:
+    def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult):
         """スタイル潜在変数からの被験者分類評価を実行"""
-        experiment_id = test_data.get('experiment_id', 0)
-        output_dir = test_data.get('output_dir', 'outputs')
         z_style = test_data.get('z_style')
         subject_ids = test_data.get('subject_ids')
-
-        # 共有結果オブジェクトが渡されない場合は新規作成
-        if result is None:
-            result = EnhancedEvaluationResult(experiment_id, output_dir)
 
         print("=" * 60)
         print("被験者分類評価実行 (MLP & SVM)")
@@ -418,7 +398,7 @@ class StyleClassificationEvaluator(BaseEvaluator):
         if len(unique_subjects) < self.min_subjects:
             print(f"⚠️ 被験者数不足: {len(unique_subjects)} < {self.min_subjects}")
             result.add_metric("classification_status", 0, "被験者数不足", "style_classification")
-            return result
+            return
             
         insufficient_samples = [subj for subj, count in subject_counts.items() 
                                if count < self.min_samples_per_subject]
@@ -454,8 +434,6 @@ class StyleClassificationEvaluator(BaseEvaluator):
                                 category="style_analysis")
         
         print("✅ 被験者分類評価完了")
-        
-        return result
 
     def _preprocess_classification_data(self, z_style, subject_ids):
         """分類用データ前処理"""

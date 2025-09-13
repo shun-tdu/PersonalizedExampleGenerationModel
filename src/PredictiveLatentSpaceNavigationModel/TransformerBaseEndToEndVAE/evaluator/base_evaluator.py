@@ -8,8 +8,10 @@ import torch
 from IPython.core.pylabtools import figsize
 
 from .result_manager import EnhancedEvaluationResult, VisualizationItem
-from  .base_line_evaluator import TrajectoryGenerationEvaluator
+from .base_line_evaluator import TrajectoryGenerationEvaluator, OrthogonalityEvaluator
 from .skill_latent_space_evaluator import VisualizeSkillSpaceEvaluator, SkillScoreRegressionEvaluator, SkillLatentDimensionVSScoreEvaluator
+from .style_latent_space_evaluator import VisualizeStyleSpaceEvaluator, StyleClusteringEvaluator, StyleClassificationEvaluator
+
 
 class BaseEvaluator(ABC):
     """評価器の基底クラス"""
@@ -50,21 +52,34 @@ class EvaluationPipeline:
         """評価器をセットアップ"""
         evaluation_config = self.config.get('evaluation', {})
 
-        # デフォルト評価機のフラグ読み取り
-        if evaluation_config.get('comprehensive_latent_analysis', True):
+        # 旧仕様評価器（優先度高）
+        if evaluation_config.get('comprehensive_latent_analysis', False):
             from .comprehensive_evaluator import ComprehensiveLatentSpaceEvaluator
             self.evaluators.append(ComprehensiveLatentSpaceEvaluator(self.config))
-
-        elif evaluation_config.get('latent_space_analysis', True):
+        if evaluation_config.get('latent_space_analysis', False):
             self.evaluators.append(LatentSpaceEvaluator(self.config))
 
-        elif evaluation_config.get('trajectory_generation_analysis', True):
-            self.evaluators.append()
+        # BaseLine評価器
+        if evaluation_config.get('trajectory_generation_analysis', False):
+            self.evaluators.append(TrajectoryGenerationEvaluator(self.config))
+        if evaluation_config.get('style_skill_orthogonality_analysis', False):
+            self.evaluators.append(OrthogonalityEvaluator(self.config))
 
+        # スタイル空間評価器
+        if evaluation_config.get('visualize_style_space_analysis', False):
+            self.evaluators.append(VisualizeStyleSpaceEvaluator(self.config))
+        if evaluation_config.get('style_clustering_analysis', False):
+            self.evaluators.append(StyleClusteringEvaluator(self.config))
+        if evaluation_config.get('style_classification_analysis', False):
+            self.evaluators.append(StyleClassificationEvaluator(self.config))
 
-        # if evaluation_config.get('skill_axis_analysis', True):
-        #     self.evaluators.append(SkillAxisEvaluator(self.config))
-
+        # スキル空間評価器
+        if evaluation_config.get('visualize_skill_space_analysis', False):
+            self.evaluators.append(VisualizeSkillSpaceEvaluator(self.config))
+        if evaluation_config.get('skill_score_regression_analysis', False):
+            self.evaluators.append(SkillScoreRegressionEvaluator(self.config))
+        if evaluation_config.get('skill_latent_dimension_vs_score_analysis', False):
+            self.evaluators.append(SkillLatentDimensionVSScoreEvaluator(self.config))
 
         # カスタム評価器の動的ロード
         custom_evaluators = evaluation_config.get('custom_evaluators', [])
@@ -165,11 +180,7 @@ class EvaluationPipeline:
                     continue
 
                 # 共有結果オブジェクトを渡して評価実行
-                returned_result = evaluator.evaluate(model, test_data, device, shared_result)
-                
-                # 統一パターンでは共有結果と同じオブジェクトが返されることを確認
-                if returned_result is not shared_result:
-                    print(f"警告: {evaluator.__class__.__name__} が異なる結果オブジェクトを返しました")
+                evaluator.evaluate(model, test_data, device, shared_result)
 
                 successful_evaluations += 1
                 print(f"✓ {evaluator.__class__.__name__} 完了")
