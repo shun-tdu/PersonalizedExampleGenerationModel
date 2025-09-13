@@ -863,7 +863,7 @@ class StyleClassificationEvaluator(BaseEvaluator):
         
         # 6. 統計サマリー
         axes[1, 2].axis('off')
-        summary_text = "分類性能サマリー\n" + "="*20 + "\n"
+        summary_text = "Classification Performance Summary\n" + "="*20 + "\n"
         
         for result, name in successful_results:
             summary_text += f"{name}:\n"
@@ -872,11 +872,11 @@ class StyleClassificationEvaluator(BaseEvaluator):
             summary_text += f"  Recall = {result.get('recall', 0):.3f}\n"
             summary_text += f"  F1-Score = {result.get('f1', 0):.3f}\n"
             if 'overfitting' in result:
-                summary_text += f"  過学習 = {result.get('overfitting', 0):.3f}\n"
+                summary_text += f"  OverFitting = {result.get('overfitting', 0):.3f}\n"
             summary_text += "\n"
         
-        summary_text += f"被験者数: {len(label_mapping)}\n"
-        summary_text += f"総サンプル数: {len(y)}"
+        summary_text += f"NumSubjects: {len(label_mapping)}\n"
+        summary_text += f"NumTotalSample: {len(y)}"
         
         axes[1, 2].text(0.1, 0.9, summary_text, transform=axes[1, 2].transAxes,
                        verticalalignment='top', fontsize=9,

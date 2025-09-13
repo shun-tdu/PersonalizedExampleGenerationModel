@@ -91,7 +91,7 @@ evaluation:
 
   # スタイル空間評価器
   visualize_style_space_analysis: True
-  style_component: 3
+  style_component: 2
   style_clustering_analysis: True
   style_classification_analysis: True
 

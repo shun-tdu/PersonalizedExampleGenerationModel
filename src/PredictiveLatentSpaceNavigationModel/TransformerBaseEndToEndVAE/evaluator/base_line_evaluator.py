@@ -213,7 +213,7 @@ class OrthogonalityEvaluator(BaseEvaluator):
 
         # ヒートマップを作成
         fig_latent_corr, ax_latent_corr = plt.subplots(figsize=(6, 8))
-        sns.heatmap(cross_correlation, annot=True, cmap='RdBu_r', center=0, fmt='.2f', ax=ax_latent_corr)
+        sns.heatmap(cross_correlation, annot=True, cmap='RdBu_r', center=0, fmt='.2f', ax=ax_latent_corr,annot_kws={"size": 4})
         ax_latent_corr.set_title('Cross-Correlation between Style (8D) and Skill (2D)')
 
         return fig_latent_corr

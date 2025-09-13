@@ -612,7 +612,7 @@ class SkillScoreRegressionEvaluator(BaseEvaluator):
         
         # 6. 統計サマリー
         axes[1, 2].axis('off')
-        summary_text = "回帰性能サマリー\n" + "="*20 + "\n"
+        summary_text = "Regression Performance Summary\n" + "="*20 + "\n"
         
         for result, name in successful_results:
             summary_text += f"{name}:\n"
@@ -620,7 +620,7 @@ class SkillScoreRegressionEvaluator(BaseEvaluator):
             summary_text += f"  RMSE = {result.get('rmse', 0):.3f}\n"
             summary_text += f"  MAE = {result.get('mae', 0):.3f}\n"
             if 'overfitting' in result:
-                summary_text += f"  過学習 = {result.get('overfitting', 0):.3f}\n"
+                summary_text += f"  Overfitting = {result.get('overfitting', 0):.3f}\n"
             summary_text += "\n"
         
         axes[1, 2].text(0.1, 0.9, summary_text, transform=axes[1, 2].transAxes,
@@ -873,13 +873,13 @@ class SkillLatentDimensionVSScoreEvaluator(BaseEvaluator):
             
             # 線形性判定
             if r2_uni > 0.7:
-                linearity_status = "強い線形関係"
+                linearity_status = "Strong linear relationship"
             elif r2_uni > 0.4:
-                linearity_status = "中程度の線形関係"
+                linearity_status = "Moderate linear relationship"
             elif r2_uni > 0.1:
-                linearity_status = "弱い線形関係"
+                linearity_status = "Weak linear relationship"
             else:
-                linearity_status = "線形関係なし"
+                linearity_status = "No linear relationship"
                 
             print(f"  線形性判定: {linearity_status}")
             
@@ -978,18 +978,18 @@ class SkillLatentDimensionVSScoreEvaluator(BaseEvaluator):
         
         # 6. 統計サマリー
         axes[1, 2].axis('off')
-        summary_text = "線形関係分析結果\n" + "="*20 + "\n"
+        summary_text = "Linear Relationship Analysis\n" + "="*20 + "\n"
         
         if regression_results.get('success', False):
-            summary_text += f"単変量R²: {regression_results.get('univariate_r2', 0):.3f}\n"
-            summary_text += f"多変量R²: {regression_results.get('multivariate_r2', 0):.3f}\n"
-            summary_text += f"判定: {regression_results.get('linearity_status', 'N/A')}\n\n"
+            summary_text += f"Univariate R²: {regression_results.get('univariate_r2', 0):.3f}\n"
+            summary_text += f"Multivariate R²: {regression_results.get('multivariate_r2', 0):.3f}\n"
+            summary_text += f"Verdict: {regression_results.get('linearity_status', 'N/A')}\n\n"
         
         if pca_results:
-            summary_text += f"最高PC相関: {pca_results.get('best_correlation', 0):.3f}\n"
+            summary_text += f"Highest PC Correlation: {pca_results.get('best_correlation', 0):.3f}\n"
         
         if correlation_results:
-            summary_text += f"最高次元相関: {correlation_results.get('best_dim_correlation', 0):.3f}\n"
+            summary_text += f"Highest Dim Correlation: {correlation_results.get('best_dim_correlation', 0):.3f}\n"
             
         axes[1, 2].text(0.1, 0.9, summary_text, transform=axes[1, 2].transAxes, 
                        verticalalignment='top', fontsize=10,
