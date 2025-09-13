@@ -6,8 +6,13 @@ from typing import  Dict, List, Tuple, Optional
 from pathlib import  Path
 from scipy.interpolate import interp1d, UnivariateSpline
 from scipy import stats
-from factor_analyzer import FactorAnalyzer
 # from sklearn.decomposition import FactorAnalysis
+try:
+    from factor_analyzer import FactorAnalyzer
+    FACTOR_ANALYZER_AVAILABLE = True
+except ImportError:
+    FACTOR_ANALYZER_AVAILABLE = False
+    FactorAnalyzer = None
 
 from sklearn.preprocessing import StandardScaler
 
@@ -669,7 +674,9 @@ class SkillAnalyzer:
             n_factors = max(1, np.sum(eigenvalues > 1))
             
             # 因子分析の実行
-            # fa = FactorAnalysis(n_components=n_factors, random_state=42)
+            if not FACTOR_ANALYZER_AVAILABLE:
+                return {'error': 'factor_analyzer ライブラリがインストールされていません'}
+            
             fa = FactorAnalyzer(n_factors=n_factors, rotation=rotation)
             fa.fit(scaled_data)
             
@@ -991,7 +998,7 @@ class SkillScoreCalculator:
         self.output = output_manager
         self.factor_weights = np.array([-0.565, 0.245, -0.19])
 
-    def calc_skill_score(self, skill_metrics_df: pd.DataFrame, expert_scaler: StandardScaler, expert_fa: FactorAnalyzer ) -> pd.DataFrame:
+    def calc_skill_score(self, skill_metrics_df: pd.DataFrame, expert_scaler: StandardScaler, expert_fa) -> pd.DataFrame:
         """スキルスコアを計算する"""
         plot_data_list = []
 
@@ -1044,7 +1051,7 @@ class SkillScoreCalculator:
 
         return skill_score_df
 
-    def calculate_stable_skill_score(self, skill_metrics_df: pd.DataFrame,expert_scaler: StandardScaler, expert_fa: FactorAnalyzer, window_size=10):
+    def calculate_stable_skill_score(self, skill_metrics_df: pd.DataFrame,expert_scaler: StandardScaler, expert_fa, window_size=10):
         """安定したスキルスコア計算"""
         stable_scores = []
 

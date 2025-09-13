@@ -8,9 +8,7 @@ import torch
 from IPython.core.pylabtools import figsize
 
 from .result_manager import EnhancedEvaluationResult, VisualizationItem
-from .base_line_evaluator import TrajectoryGenerationEvaluator, OrthogonalityEvaluator
-from .skill_latent_space_evaluator import VisualizeSkillSpaceEvaluator, SkillScoreRegressionEvaluator, SkillLatentDimensionVSScoreEvaluator
-from .style_latent_space_evaluator import VisualizeStyleSpaceEvaluator, StyleClusteringEvaluator, StyleClassificationEvaluator
+# Evaluator imports moved to _setup_evaluators method to avoid circular imports
 
 
 class BaseEvaluator(ABC):
@@ -61,24 +59,32 @@ class EvaluationPipeline:
 
         # BaseLine評価器
         if evaluation_config.get('trajectory_generation_analysis', False):
+            from .base_line_evaluator import TrajectoryGenerationEvaluator
             self.evaluators.append(TrajectoryGenerationEvaluator(self.config))
         if evaluation_config.get('style_skill_orthogonality_analysis', False):
+            from .base_line_evaluator import OrthogonalityEvaluator
             self.evaluators.append(OrthogonalityEvaluator(self.config))
 
         # スタイル空間評価器
         if evaluation_config.get('visualize_style_space_analysis', False):
+            from .style_latent_space_evaluator import VisualizeStyleSpaceEvaluator
             self.evaluators.append(VisualizeStyleSpaceEvaluator(self.config))
         if evaluation_config.get('style_clustering_analysis', False):
+            from .style_latent_space_evaluator import StyleClusteringEvaluator
             self.evaluators.append(StyleClusteringEvaluator(self.config))
         if evaluation_config.get('style_classification_analysis', False):
+            from .style_latent_space_evaluator import StyleClassificationEvaluator
             self.evaluators.append(StyleClassificationEvaluator(self.config))
 
         # スキル空間評価器
         if evaluation_config.get('visualize_skill_space_analysis', False):
+            from .skill_latent_space_evaluator import VisualizeSkillSpaceEvaluator
             self.evaluators.append(VisualizeSkillSpaceEvaluator(self.config))
         if evaluation_config.get('skill_score_regression_analysis', False):
+            from .skill_latent_space_evaluator import SkillScoreRegressionEvaluator
             self.evaluators.append(SkillScoreRegressionEvaluator(self.config))
         if evaluation_config.get('skill_latent_dimension_vs_score_analysis', False):
+            from .skill_latent_space_evaluator import SkillLatentDimensionVSScoreEvaluator
             self.evaluators.append(SkillLatentDimensionVSScoreEvaluator(self.config))
 
         # カスタム評価器の動的ロード

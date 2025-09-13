@@ -8,9 +8,29 @@ import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics.pairwise import cosine_similarity
 
-from base_evaluator import BaseEvaluator
-from src.PredictiveLatentSpaceNavigationModel.TransformerBaseEndToEndVAE.evaluator import EnhancedEvaluationResult
-from src.PredictiveLatentSpaceNavigationModel.DataPreprocess.analyze_skill_metrics import SkillMetricCalculator
+from .base_evaluator import BaseEvaluator
+from .result_manager import EnhancedEvaluationResult
+try:
+    from PredictiveLatentSpaceNavigationModel.DataPreprocess.analyze_skill_metrics import SkillMetricCalculator
+except ImportError:
+    try:
+        from DataPreprocess.analyze_skill_metrics import SkillMetricCalculator
+    except ImportError:
+        import sys
+        import os
+        # 複数の可能なパスを試す
+        possible_paths = ['/app', '/app/PredictiveLatentSpaceNavigationModel', 
+                         os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')),
+                         os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../..'))]
+        for path in possible_paths:
+            if path not in sys.path:
+                sys.path.append(path)
+        
+        # 最後の試行
+        try:
+            from DataPreprocess.analyze_skill_metrics import SkillMetricCalculator
+        except ImportError:
+            from PredictiveLatentSpaceNavigationModel.DataPreprocess.analyze_skill_metrics import SkillMetricCalculator
 
 
 class TrajectoryGenerationEvaluator(BaseEvaluator):

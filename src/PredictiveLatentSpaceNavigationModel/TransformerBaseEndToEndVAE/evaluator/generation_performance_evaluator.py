@@ -2,8 +2,8 @@
 from typing import List, Dict, Any
 import torch
 
-from base_evaluator import BaseEvaluator
-from src.PredictiveLatentSpaceNavigationModel.TransformerBaseEndToEndVAE.evaluator import EnhancedEvaluationResult
+from .base_evaluator import BaseEvaluator
+from .result_manager import EnhancedEvaluationResult
 
 class StyleTransferEvaluator(BaseEvaluator):
     """スタイル潜在変数を固定してスキル潜在変数を変化させたときにスタイルを維持したまま、スキルスコアが変化するかを評価"""

@@ -10,8 +10,8 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.cluster import KMeans
 
-from base_evaluator import BaseEvaluator
-from src.PredictiveLatentSpaceNavigationModel.TransformerBaseEndToEndVAE.evaluator import EnhancedEvaluationResult
+from .base_evaluator import BaseEvaluator
+from .result_manager import EnhancedEvaluationResult
 
 
 class VisualizeStyleSpaceEvaluator(BaseEvaluator):
