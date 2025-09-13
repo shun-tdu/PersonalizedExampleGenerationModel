@@ -3,11 +3,18 @@ from typing import List, Dict, Any, Union, Tuple
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+import matplotlib
 import plotly
 import plotly.express as px
 import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
+
+# CLAUDE_ADDED: 日本語フォント警告を回避するためのmatplotlib設定
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+matplotlib.rcParams['font.family'] = 'DejaVu Sans'
+matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial', 'Liberation Sans']
 
 from .base_evaluator import BaseEvaluator
 from .result_manager import EnhancedEvaluationResult

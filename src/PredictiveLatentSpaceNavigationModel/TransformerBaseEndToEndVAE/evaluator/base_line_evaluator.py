@@ -2,8 +2,15 @@ from typing import List, Dict, Any, Union, Tuple
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+import matplotlib
 import seaborn as sns
 import pandas as pd
+
+# CLAUDE_ADDED: 日本語フォント警告を回避するためのmatplotlib設定
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+matplotlib.rcParams['font.family'] = 'DejaVu Sans'
+matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial', 'Liberation Sans']
 
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics.pairwise import cosine_similarity
@@ -121,8 +128,15 @@ class TrajectoryGenerationEvaluator(BaseEvaluator):
                                        SkillMetricCalculator.calculate_jerk(trajectory_df),
                                        SkillMetricCalculator.calculate_control_stability(trajectory_df),
                                        SkillMetricCalculator.calculate_temporal_consistency(trajectory_df),
-                                       SkillMetricCalculator.calculate_trial_time(trajectory_df),
-                                       SkillMetricCalculator.calculate_endpoint_error(trajectory_df)]
+                                       SkillMetricCalculator.calculate_trial_time(trajectory_df)]
+            
+            # エンドポイントエラーは目標位置が必要なため、データに含まれている場合のみ計算
+            if 'TargetEndPosX' in trajectory_df.columns and 'TargetEndPosY' in trajectory_df.columns:
+                skill_metrics_per_batch.append(SkillMetricCalculator.calculate_endpoint_error(trajectory_df))
+            else:
+                # 目標位置データがない場合は0で代替（またはスキップ）
+                skill_metrics_per_batch.append(0.0)
+            
             all_skill_metrics.append(skill_metrics_per_batch)
 
         all_skill_metrics_array = np.array(all_skill_metrics)  # shape: [batch_size, num_metrics]

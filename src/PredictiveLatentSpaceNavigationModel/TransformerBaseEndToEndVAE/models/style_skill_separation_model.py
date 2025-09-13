@@ -399,7 +399,8 @@ class StyleSkillSeparationNet(BaseExperimentModel):
 
     def decode(self, z_style, z_skill):
         """デコードのみ"""
-        return self.decoder(z_style, z_skill)
+        trajectory = self.decoder(z_style, z_skill)
+        return {'trajectory': trajectory}
     
     def _prototype_based_classification(self, z_style: torch.Tensor, subject_ids: list = None):
         """プロトタイプベースのスタイル識別"""

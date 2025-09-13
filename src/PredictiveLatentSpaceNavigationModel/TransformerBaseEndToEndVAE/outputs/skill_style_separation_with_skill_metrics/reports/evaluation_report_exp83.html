@@ -1,0 +1,440 @@
+
+        <!DOCTYPE html>
+        <html lang="ja">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>実験 83 評価レポート</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+                .container { max-width: 1200px; margin: 0 auto; background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+                h1 { color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px; }
+                h2 { color: #444; margin-top: 30px; }
+                .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0; }
+                .metric-card { background-color: #f9f9f9; padding: 15px; border-radius: 5px; border-left: 4px solid #4CAF50; }
+                .metric-name { font-weight: bold; color: #333; }
+                .metric-value { font-size: 1.2em; color: #4CAF50; margin: 5px 0; }
+                .metric-description { font-size: 0.9em; color: #666; }
+                .viz-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }
+                .viz-card { background-color: #f9f9f9; padding: 15px; border-radius: 5px; text-align: center; }
+                .plotly-viz { min-height: 600px; }
+                .plotly-container { margin: 10px 0; }
+                .viz-thumbnail { max-width: 100%; height: auto; border-radius: 3px; cursor: pointer; }
+                .viz-title { font-weight: bold; margin: 10px 0 5px 0; }
+                .viz-description { font-size: 0.9em; color: #666; margin-top: 10px; }
+                .category { margin: 30px 0; }
+                .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.9); }
+                .modal-content { margin: auto; display: block; width: 90%; max-width: 1000px; }
+                .close { position: absolute; top: 15px; right: 35px; color: #f1f1f1; font-size: 40px; font-weight: bold; cursor: pointer; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>実験 83 評価レポート</h1>
+                <p>生成日時: 2025-09-13 04:57:35</p>
+
+                <!-- メトリクス セクション -->
+                <h2>📊 評価メトリクス</h2>
+                <div class="category"><h3>Baseline</h3>
+<div class="metric-grid">
+
+                <div class="metric-card">
+                    <div class="metric-name">reconstructed_trajectory_rmse</div>
+                    <div class="metric-value">0.3364</div>
+                    <div class="metric-description">元軌道と再構築軌道のRMSE</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">reconstructed_trajectory_skill_metrics_rmse</div>
+                    <div class="metric-value">1.4865</div>
+                    <div class="metric-description">元軌道と再構築軌道のスキル指標のRMSE</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">latent_space_cosine_similarity</div>
+                    <div class="metric-value">1.0000</div>
+                    <div class="metric-description">潜在変数のコサイン類似度</div>
+                </div>
+                
+</div></div>
+<div class="category"><h3>Clustering</h3>
+<div class="metric-grid">
+
+                <div class="metric-card">
+                    <div class="metric-name">style_clustering_silhouette</div>
+                    <div class="metric-value">0.2879</div>
+                    <div class="metric-description">スタイル潜在空間のシルエットスコア</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_clustering_true_silhouette</div>
+                    <div class="metric-value">0.2623</div>
+                    <div class="metric-description">真のラベルでのシルエットスコア（参考）</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_clustering_ari</div>
+                    <div class="metric-value">0.6736</div>
+                    <div class="metric-description">スタイル潜在空間の調整ランド指標</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_clustering_inertia</div>
+                    <div class="metric-value">2284.0562</div>
+                    <div class="metric-description">K-meansクラスタ内二乗和</div>
+                </div>
+                
+</div></div>
+<div class="category"><h3>Style_Classification</h3>
+<div class="metric-grid">
+
+                <div class="metric-card">
+                    <div class="metric-name">style_mlp_accuracy</div>
+                    <div class="metric-value">0.8750</div>
+                    <div class="metric-description">MLP分類精度</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_mlp_f1</div>
+                    <div class="metric-value">0.8750</div>
+                    <div class="metric-description">MLP F1スコア</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_mlp_overfitting</div>
+                    <div class="metric-value">0.0625</div>
+                    <div class="metric-description">MLPの過学習度</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_svm_accuracy</div>
+                    <div class="metric-value">0.9107</div>
+                    <div class="metric-description">SVM分類精度</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_svm_f1</div>
+                    <div class="metric-value">0.9107</div>
+                    <div class="metric-description">SVM F1スコア</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_rf_accuracy</div>
+                    <div class="metric-value">0.8929</div>
+                    <div class="metric-description">RandomForest分類精度</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_best_classification_accuracy</div>
+                    <div class="metric-value">0.9107</div>
+                    <div class="metric-description">最優秀分類モデルの精度</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_mlp_cv_accuracy_mean</div>
+                    <div class="metric-value">0.9536</div>
+                    <div class="metric-description">MLPのCV平均精度</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_mlp_cv_accuracy_std</div>
+                    <div class="metric-value">0.0331</div>
+                    <div class="metric-description">MLPのCV精度標準偏差</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_svm_cv_accuracy_mean</div>
+                    <div class="metric-value">0.9750</div>
+                    <div class="metric-description">SVMのCV平均精度</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_svm_cv_accuracy_std</div>
+                    <div class="metric-value">0.0267</div>
+                    <div class="metric-description">SVMのCV精度標準偏差</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_randomforest_cv_accuracy_mean</div>
+                    <div class="metric-value">0.9571</div>
+                    <div class="metric-description">RandomForestのCV平均精度</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">style_randomforest_cv_accuracy_std</div>
+                    <div class="metric-value">0.0242</div>
+                    <div class="metric-description">RandomForestのCV精度標準偏差</div>
+                </div>
+                
+</div></div>
+<div class="category"><h3>Skill_Regression</h3>
+<div class="metric-grid">
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_mlp_r2</div>
+                    <div class="metric-value">0.9216</div>
+                    <div class="metric-description">MLP回帰のR²値</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_mlp_rmse</div>
+                    <div class="metric-value">0.3855</div>
+                    <div class="metric-description">MLP回帰のRMSE</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_mlp_overfitting</div>
+                    <div class="metric-value">-0.0536</div>
+                    <div class="metric-description">MLPの過学習度</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_svm_r2</div>
+                    <div class="metric-value">0.9550</div>
+                    <div class="metric-description">SVM回帰のR²値</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_svm_rmse</div>
+                    <div class="metric-value">0.2922</div>
+                    <div class="metric-description">SVM回帰のRMSE</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_linear_r2</div>
+                    <div class="metric-value">0.8804</div>
+                    <div class="metric-description">線形回帰のR²値</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_best_regression_r2</div>
+                    <div class="metric-value">0.9550</div>
+                    <div class="metric-description">最優秀回帰モデルのR²値</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_mlp_cv_r2_mean</div>
+                    <div class="metric-value">0.3992</div>
+                    <div class="metric-description">MLPのCV平均R²値</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_mlp_cv_r2_std</div>
+                    <div class="metric-value">0.3144</div>
+                    <div class="metric-description">MLPのCV R²標準偏差</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_svm_cv_r2_mean</div>
+                    <div class="metric-value">0.5302</div>
+                    <div class="metric-description">SVMのCV平均R²値</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_svm_cv_r2_std</div>
+                    <div class="metric-value">0.2744</div>
+                    <div class="metric-description">SVMのCV R²標準偏差</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_linear_cv_r2_mean</div>
+                    <div class="metric-value">-0.1662</div>
+                    <div class="metric-description">LinearのCV平均R²値</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_linear_cv_r2_std</div>
+                    <div class="metric-value">0.8608</div>
+                    <div class="metric-description">LinearのCV R²標準偏差</div>
+                </div>
+                
+</div></div>
+<div class="category"><h3>Skill_Linearity</h3>
+<div class="metric-grid">
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_pc_best_correlation</div>
+                    <div class="metric-value">0.8135</div>
+                    <div class="metric-description">主成分との最高相関係数</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_dim_best_correlation</div>
+                    <div class="metric-value">0.7791</div>
+                    <div class="metric-description">潜在次元との最高相関係数</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_significant_correlations</div>
+                    <div class="metric-value">13.0000</div>
+                    <div class="metric-description">有意な相関を持つ次元数</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_univariate_r2</div>
+                    <div class="metric-value">0.6071</div>
+                    <div class="metric-description">単変量回帰のR²値</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_multivariate_r2</div>
+                    <div class="metric-value">0.8643</div>
+                    <div class="metric-description">多変量回帰のR²値</div>
+                </div>
+                
+
+                <div class="metric-card">
+                    <div class="metric-name">skill_regression_f_statistic</div>
+                    <div class="metric-value">104.6988</div>
+                    <div class="metric-description">回帰の有意性F統計量</div>
+                </div>
+                
+</div></div>
+
+                <!-- 可視化 セクション -->
+                <h2>📈 可視化結果</h2>
+                <div class="category"><h3>Baseline</h3>
+<div class="viz-grid">
+
+                    <div class="viz-card">
+                        <div class="viz-title">latent_space_correlation</div>
+                        <img src="../thumbnails/thumb_latent_space_correlation_exp83.png" alt="latent_space_correlation" 
+                             class="viz-thumbnail" data-fullsize="../plots/latent_space_correlation_exp83.png">
+                        <div class="viz-description">潜在変数の相関ヒートマップ</div>
+                    </div>
+                    
+</div></div>
+<div class="category"><h3>Style_Analysis</h3>
+<div class="viz-grid">
+
+                    <div class="viz-card">
+                        <div class="viz-title">style_pca</div>
+                        <img src="../thumbnails/thumb_style_pca_exp83.png" alt="style_pca" 
+                             class="viz-thumbnail" data-fullsize="../plots/style_pca_exp83.png">
+                        <div class="viz-description">スタイル潜在空間のPCA可視化</div>
+                    </div>
+                    
+
+                    <div class="viz-card">
+                        <div class="viz-title">style_tsne</div>
+                        <img src="../thumbnails/thumb_style_tsne_exp83.png" alt="style_tsne" 
+                             class="viz-thumbnail" data-fullsize="../plots/style_tsne_exp83.png">
+                        <div class="viz-description">スタイル潜在空間のt-SNE可視化</div>
+                    </div>
+                    
+
+                    <div class="viz-card">
+                        <div class="viz-title">style_classification_analysis</div>
+                        <img src="../thumbnails/thumb_style_classification_analysis_exp83.png" alt="style_classification_analysis" 
+                             class="viz-thumbnail" data-fullsize="../plots/style_classification_analysis_exp83.png">
+                        <div class="viz-description">MLPとSVMによる被験者分類性能分析</div>
+                    </div>
+                    
+</div></div>
+<div class="category"><h3>Skill_Analysis</h3>
+<div class="viz-grid">
+
+                    <div class="viz-card">
+                        <div class="viz-title">skill_pca</div>
+                        <img src="../thumbnails/thumb_skill_pca_exp83.png" alt="skill_pca" 
+                             class="viz-thumbnail" data-fullsize="../plots/skill_pca_exp83.png">
+                        <div class="viz-description">スキル潜在空間のPCA可視化（スキルスコアによる色分け）</div>
+                    </div>
+                    
+
+                    <div class="viz-card">
+                        <div class="viz-title">skill_tsne</div>
+                        <img src="../thumbnails/thumb_skill_tsne_exp83.png" alt="skill_tsne" 
+                             class="viz-thumbnail" data-fullsize="../plots/skill_tsne_exp83.png">
+                        <div class="viz-description">スキル潜在空間のt-SNE可視化（スキルスコアによる色分け）</div>
+                    </div>
+                    
+
+                    <div class="viz-card">
+                        <div class="viz-title">skill_regression_analysis</div>
+                        <img src="../thumbnails/thumb_skill_regression_analysis_exp83.png" alt="skill_regression_analysis" 
+                             class="viz-thumbnail" data-fullsize="../plots/skill_regression_analysis_exp83.png">
+                        <div class="viz-description">MLPとSVMによるスキルスコア回帰性能分析</div>
+                    </div>
+                    
+
+                    <div class="viz-card">
+                        <div class="viz-title">skill_linearity_analysis</div>
+                        <img src="../thumbnails/thumb_skill_linearity_analysis_exp83.png" alt="skill_linearity_analysis" 
+                             class="viz-thumbnail" data-fullsize="../plots/skill_linearity_analysis_exp83.png">
+                        <div class="viz-description">スキル潜在次元とスキルスコアの線形関係分析</div>
+                    </div>
+                    
+</div></div>
+
+            </div>
+
+            <!-- 画像拡大表示用のモーダル -->
+            <div id="imageModal" class="modal">
+                <span class="close">&times;</span>
+                <img class="modal-content" id="modalImage">
+            </div>
+
+            <script>
+                // モーダル表示のJavaScript
+                document.addEventListener('DOMContentLoaded', function() {
+                    const modal = document.getElementById('imageModal');
+                    const modalImg = document.getElementById('modalImage');
+                    const closeBtn = document.getElementsByClassName('close')[0];
+
+                    // サムネイルクリック時の処理
+                    document.querySelectorAll('.viz-thumbnail').forEach(function(thumb) {
+                        thumb.addEventListener('click', function() {
+                            modal.style.display = 'block';
+                            modalImg.src = this.getAttribute('data-fullsize');
+                        });
+                    });
+
+                    // モーダルを閉じる
+                    closeBtn.addEventListener('click', function() {
+                        modal.style.display = 'none';
+                    });
+
+                    modal.addEventListener('click', function(e) {
+                        if (e.target === modal) {
+                            modal.style.display = 'none';
+                        }
+                    });
+                });
+            </script>
+        </body>
+        </html>
+        

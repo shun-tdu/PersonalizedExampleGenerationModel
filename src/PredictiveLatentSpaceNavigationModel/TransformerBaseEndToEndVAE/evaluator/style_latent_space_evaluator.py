@@ -3,12 +3,19 @@ from typing import List, Dict, Any, Union, Tuple
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
+import matplotlib
 import plotly
 import plotly.express as px
 import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.cluster import KMeans
+
+# CLAUDE_ADDED: 日本語フォント警告を回避するためのmatplotlib設定
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+matplotlib.rcParams['font.family'] = 'DejaVu Sans'
+matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial', 'Liberation Sans']
 
 from .base_evaluator import BaseEvaluator
 from .result_manager import EnhancedEvaluationResult
@@ -805,7 +812,7 @@ class StyleClassificationEvaluator(BaseEvaluator):
                 axes[0, 1].text(i+0.2, f1 + 0.01, f'{f1:.3f}', ha='center', va='bottom')
         
         # 3. 特徴量重要度（RandomForestがある場合）
-        rf_result = next((r for r, name in successful_results if name == 'RandomForest'), None)
+        rf_result = next(((r, name) for r, name in successful_results if name == 'RandomForest'), None)
         if rf_result and rf_result[0].get('success', False):
             model = rf_result[0]['model']
             if hasattr(model, 'feature_importances_'):

@@ -306,6 +306,7 @@ class IntegratedExperimentRunner:
         enhanced_data.update({
             'originals': np.vstack(all_originals),           # [total_samples, seq_len, 6]
             'reconstructed': np.vstack(all_reconstructed),   # [total_samples, seq_len, 6]
+            'reconstructions': np.vstack(all_reconstructed), # TrajectoryGenerationEvaluator用（複数形）
             'z_style': np.vstack(all_z_style),               # [total_samples, style_dim]
             'z_skill': np.vstack(all_z_skill),               # [total_samples, skill_dim]
             'subject_ids': all_subject_ids,                  # List[str]

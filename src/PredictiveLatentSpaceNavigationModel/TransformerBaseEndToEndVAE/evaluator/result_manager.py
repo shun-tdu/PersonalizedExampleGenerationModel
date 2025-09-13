@@ -5,9 +5,18 @@ from typing import Dict, Any, List, Optional, Union
 from dataclasses import dataclass, asdict
 from PIL import Image
 import matplotlib.pyplot as plt
+import matplotlib
 import plotly
 import plotly.express as px
 import numpy as np
+
+# CLAUDE_ADDED: 日本語フォント警告を回避するためのmatplotlib設定
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
+
+# フォント設定を英語フォントに固定
+matplotlib.rcParams['font.family'] = 'DejaVu Sans'
+matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial', 'Liberation Sans']
 
 
 @dataclass
