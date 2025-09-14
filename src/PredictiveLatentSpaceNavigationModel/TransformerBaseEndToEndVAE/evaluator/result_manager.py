@@ -126,11 +126,11 @@ class EnhancedEvaluationResult:
         fig.update_traces(marker=dict(size=5, opacity=0.8))
 
         # HTMLファイルとして保存
-        print(f"💾 Saving interactive plot to '{filename}'...")
+        print(f"Saving interactive plot to '{filename}'...")
         fig.write_html(file_path)
-        
-        # 埋め込み用のHTMLコンテンツも生成して保存
-        embed_filename = f"{name}_embed_exp{self.experiment_id}.html"
+
+        # 埋め込み用のHTMLコンテンツも生成して保存 (CLAUDE_ADDED: ファイル名形式を統一)
+        embed_filename = f"{name}_exp{self.experiment_id}_embed.html"
         embed_file_path = os.path.join(self.plots_dir, embed_filename)
         self._save_plotly_embed_html(fig, embed_file_path)
 
@@ -158,7 +158,7 @@ class EnhancedEvaluationResult:
         with open(embed_file_path, 'w', encoding='utf-8') as f:
             f.write(embed_html)
 
-    def _create_thumbnail(self, file_path: str, name: str, size: tuple = (200, 200)) -> str:
+    def _create_thumbnail(self, file_path: str, name: str, size: tuple = (600, 600)) -> str:
         """サムネイル画像を生成"""
         try:
             with Image.open(file_path) as img:
@@ -249,11 +249,11 @@ class EnhancedEvaluationResult:
                 <p>生成日時: {self._get_current_timestamp()}</p>
 
                 <!-- メトリクス セクション -->
-                <h2>📊 評価メトリクス</h2>
+                <h2>評価メトリクス</h2>
                 {self._generate_metrics_html(metrics_by_category)}
 
                 <!-- 可視化 セクション -->
-                <h2>📈 可視化結果</h2>
+                <h2>可視化結果</h2>
                 {self._generate_visualizations_html(viz_by_category)}
 
             </div>
@@ -328,25 +328,46 @@ class EnhancedEvaluationResult:
 
             for viz_item in viz_items:
                 if viz_item.format == "html":
-                    # plotlyの場合：埋め込み用HTMLを使用
-                    embed_filename = viz_item.file_path.replace(".html", "_embed.html")
-                    rel_embed_path = os.path.relpath(embed_filename, self.reports_dir)
-                    
-                    html_parts.append(f'''
-                    <div class="viz-card plotly-viz">
-                        <div class="viz-title">{viz_item.name}</div>
-                        <div class="plotly-container">
-                            <iframe src="{rel_embed_path}" 
-                                    width="100%" 
-                                    height="500px" 
-                                    frameborder="0" 
-                                    scrolling="no"
-                                    style="border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                            </iframe>
+                    # plotlyの場合：埋め込み用HTMLを使用 (CLAUDE_ADDED: 正しいファイル名形式で参照)
+                    base_name = os.path.splitext(os.path.basename(viz_item.file_path))[0]
+                    embed_filename = f"{base_name}_embed.html"
+                    embed_file_path = os.path.join(self.plots_dir, embed_filename)
+
+                    # CLAUDE_ADDED: 埋め込みファイルの存在確認とエラーハンドリング
+                    if os.path.exists(embed_file_path):
+                        rel_embed_path = os.path.relpath(embed_file_path, self.reports_dir)
+                        html_parts.append(f'''
+                        <div class="viz-card plotly-viz">
+                            <div class="viz-title">{viz_item.name}</div>
+                            <div class="plotly-container">
+                                <iframe src="{rel_embed_path}"
+                                        width="100%"
+                                        height="500px"
+                                        frameborder="0"
+                                        scrolling="no"
+                                        style="border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
+                                        onerror="console.error('Failed to load plotly iframe: {rel_embed_path}')">
+                                    <p>インタラクティブプロットを読み込み中...</p>
+                                </iframe>
+                            </div>
+                            <div class="viz-description">{viz_item.description}</div>
                         </div>
-                        <div class="viz-description">{viz_item.description}</div>
-                    </div>
-                    ''')
+                        ''')
+                    else:
+                        # 埋め込みファイルが見つからない場合は元のファイルへのリンクを表示
+                        rel_orig_path = os.path.relpath(viz_item.file_path, self.reports_dir)
+                        html_parts.append(f'''
+                        <div class="viz-card">
+                            <div class="viz-title">{viz_item.name}</div>
+                            <div style="padding: 20px; text-align: center; border: 2px dashed #ccc; border-radius: 5px;">
+                                <p>インタラクティブプロット</p>
+                                <a href="{rel_orig_path}" target="_blank" style="color: #4CAF50; text-decoration: none;">
+                                    新しいタブで開く →
+                                </a>
+                            </div>
+                            <div class="viz-description">{viz_item.description}</div>
+                        </div>
+                        ''')
                 else:
                     # matplotlib等の従来の画像の場合
                     rel_full_path = os.path.relpath(viz_item.file_path, self.reports_dir)
