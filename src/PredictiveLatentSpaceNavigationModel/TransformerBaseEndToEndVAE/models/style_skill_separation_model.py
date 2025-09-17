@@ -86,6 +86,7 @@ class StyleSkillSeparationNetEncoder(nn.Module):
                  d_model,
                  n_heads,
                  n_layers,
+                 dropout,
                  style_latent_dim,
                  skill_latent_dim
                  ):
@@ -101,7 +102,8 @@ class StyleSkillSeparationNetEncoder(nn.Module):
         encoder_layers = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
-            batch_first=True
+            batch_first=True,
+            dropout=dropout
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=n_layers)
 
@@ -145,6 +147,7 @@ class StyleSkillSeparationNetDecoder(nn.Module):
                  d_model,
                  n_heads,
                  n_layers,
+                 dropout,
                  style_latent_dim,
                  skill_latent_dim):
         super().__init__()
@@ -165,7 +168,8 @@ class StyleSkillSeparationNetDecoder(nn.Module):
         # Transformerデコーダ層
         decoder_layers = nn.TransformerEncoderLayer(d_model=d_model,
                                                          nhead=n_heads,
-                                                         batch_first=True
+                                                         batch_first=True,
+                                                    dropout=dropout
                                                          )
         self.transformer_decoder = nn.TransformerEncoder(decoder_layers, num_layers=n_layers)
 
@@ -201,7 +205,9 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                  seq_len=100,
                  d_model=128,
                  n_heads=4,
-                 n_layers = 2,
+                 n_encoder_layers=2,
+                 n_decoder_layer=2,
+                 dropout=0.1,
                  style_latent_dim = 8,
                  skill_latent_dim = 8,
                  n_subjects = 6,
@@ -212,7 +218,9 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                          seq_len=seq_len,
                          d_model=d_model,
                          n_heads=n_heads,
-                         n_layers = n_layers,
+                         n_encoder_layers=n_encoder_layers,
+                         n_decoder_layer=n_decoder_layer,
+                         dropout=dropout,
                          style_latent_dim = style_latent_dim,
                          skill_latent_dim = skill_latent_dim,
                          n_subjects = n_subjects,
@@ -248,7 +256,8 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                                                       seq_len,
                                                       d_model,
                                                       n_heads,
-                                                      n_layers,
+                                                      n_encoder_layers,
+                                                      dropout,
                                                       style_latent_dim,
                                                       skill_latent_dim
                                                       )
@@ -257,7 +266,8 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                                                       seq_len,
                                                       d_model,
                                                       n_heads,
-                                                      n_layers,
+                                                      n_decoder_layer,
+                                                      dropout,
                                                       style_latent_dim,
                                                       skill_latent_dim)
 
@@ -353,8 +363,14 @@ class StyleSkillSeparationNet(BaseExperimentModel):
 
         # 直交性損失(z_styleとz_skillの独立性を促進)
         if self.calc_orthogonal_loss:
-            cos_sim = F.cosine_similarity(z_style, z_skill, dim=1)
-            losses['orthogonal_loss'] = torch.mean(cos_sim ** 2)
+            # バッチ方向で標準化
+            z_style_norm = (z_style - z_style.mean(dim=0)) / (z_style.std(dim=0) + 1e-8)
+            z_skill_norm = (z_skill - z_skill.mean(dim=0)) / (z_skill.std(dim=0) + 1e-8)
+
+            # 相関行列を計算
+            cross_correlation_matrix = torch.matmul(z_style_norm.T, z_skill_norm) / z_style.shape[0]
+
+            losses['orthogonal_loss'] = torch.mean(cross_correlation_matrix ** 2)
 
         if subject_ids is not None:
             # CLAUDE_ADDED: 全被験者を固定的なインデックスにマッピング（一貫性を保つ）
