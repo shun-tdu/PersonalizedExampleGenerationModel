@@ -29,25 +29,47 @@ class TrainingVisualizer:
         if num_plots == 1:
             axes = [axes]
 
-        # 2. 各描画領域と損失グループをzimでループ
+        # 2. 各描画領域と損失グループをzipでループ
         for ax, (loss_name, keys_to_plot) in zip(axes, loss_type.items()):
+            # CLAUDE_ADDED: 損失名の表示を改善するマッピング
+            display_names = {
+                'kl_style': 'Style Space KL',
+                'kl_skill': 'Skill Space KL',
+                'manifold': 'Manifold Formation',
+                'style_classification': 'Style Classification',
+                'skill_regression': 'Skill Regression'
+            }
+
             for key in keys_to_plot:
                 loss_values = history[key]
                 epochs = range(1, len(loss_values) + 1)
 
+                # CLAUDE_ADDED: より詳細で明確な凡例ラベル
                 if 'train' in key:
-                    label = f'Train {loss_name}'
+                    if loss_name in display_names:
+                        label = f'Train {display_names[loss_name]}'
+                    else:
+                        label = f'Train {loss_name.capitalize()}'
                     ax.plot(epochs, loss_values, label=label, color='C0', linestyle='-')
                 elif 'val' in key:
-                    label = f'Validation {loss_name}'
-                    ax.plot(epochs, loss_values, label=label, color='C1', linestyle= '--')
+                    if loss_name in display_names:
+                        label = f'Validation {display_names[loss_name]}'
+                    else:
+                        label = f'Validation {loss_name.capitalize()}'
+                    ax.plot(epochs, loss_values, label=label, color='C1', linestyle='--')
 
             # 3. 各グラフの装飾
-            ax.set_title(f'{loss_name.capitalize()} Loss Curve', fontsize=16)
+            # CLAUDE_ADDED: より適切なタイトル表示
+            if loss_name in display_names:
+                title = f'{display_names[loss_name]} Loss Curve'
+            else:
+                title = f'{loss_name.capitalize()} Loss Curve'
+
+            ax.set_title(title, fontsize=16)
             ax.set_xlabel('Epoch', fontsize=12)
             ax.set_ylabel('Loss', fontsize=12)
             ax.legend(fontsize=10)
-            ax.grid(True, linestyle='--', alpha = 0.6)
+            ax.grid(True, linestyle='--', alpha=0.6)
 
         # 4. グラフ全体のレイアウトを調整し、ファイルに保存
         fig.suptitle(f'All Loss Curves (Experiment {self.experiment_id})', fontsize=20, y=1.02)
@@ -67,15 +89,31 @@ class TrainingVisualizer:
     def _detect_loss_types(self, history: Dict) -> Dict[str, list]:
         """プロットする要素を検出"""
         loss_types = {}
-        detection_filters = ['total', 'reconstruction', 'kl', 'orthogonal', 'contrastive', 'adversarial', 'style_classification', 'skill_regression']
+        # CLAUDE_ADDED: manifold_lossとKL損失の細分化を追加
+        detection_filters = [
+            'total', 'reconstruction',
+            'kl_style', 'kl_skill',  # KL損失を分離
+            'orthogonal', 'contrastive', 'adversarial',
+            'manifold',  # manifold_loss追加
+            'style_classification', 'skill_regression'
+        ]
 
         # lossの開始
         for key in history.keys():
             if '_loss' in key:
-                for detection_filter in detection_filters:
-                    if detection_filter in key:
-                        loss_types.setdefault(detection_filter, []).append(key)
-                        break
+                # CLAUDE_ADDED: より精密なマッチングでKL損失を分離
+                if 'kl_style' in key:
+                    loss_types.setdefault('kl_style', []).append(key)
+                elif 'kl_skill' in key:
+                    loss_types.setdefault('kl_skill', []).append(key)
+                elif 'manifold' in key:
+                    loss_types.setdefault('manifold', []).append(key)
+                else:
+                    # 従来の検出ロジック（kl_styleとkl_skill以外）
+                    for detection_filter in detection_filters:
+                        if detection_filter in key and detection_filter not in ['kl_style', 'kl_skill', 'manifold']:
+                            loss_types.setdefault(detection_filter, []).append(key)
+                            break
 
         return loss_types
 

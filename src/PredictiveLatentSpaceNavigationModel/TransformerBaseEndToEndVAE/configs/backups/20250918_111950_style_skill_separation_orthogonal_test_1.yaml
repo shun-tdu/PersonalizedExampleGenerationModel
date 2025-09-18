@@ -15,7 +15,7 @@ model:
   # 基本パラメータ
   input_dim: 6  # HandlePos, Vel, Acc (x,y)
   seq_len: 100  # target_seq_len from preprocessing
-  d_model: 768
+  d_model: 512
   n_heads: 8
   n_encoder_layers: 6
   n_decoder_layers: 6

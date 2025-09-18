@@ -35,19 +35,19 @@ model:
       start_epoch: 40
       end_epoch: 70
       start_val: 0.0
-      end_val: 0.0001
+      end_val: 0.001
     beta_skill:  # スキル空間専用のKL損失（より弱く）
       schedule: 'linear'
       start_epoch: 40
       end_epoch: 70
       start_val: 0.0
-      end_val: 0.0001
+      end_val: 0.0005
     orthogonal_loss:
       schedule: 'linear'
       start_epoch: 81
       end_epoch: 110
       start_val: 0.0
-      end_val: 0.1
+      end_val: 1.0
     contrastive_loss:
       schedule: 'linear'
       start_epoch: 111
@@ -59,24 +59,24 @@ model:
       start_epoch: 131
       end_epoch: 150
       start_val: 0.0
+      end_val: 0.01
+    style_classification_loss:
+      schedule: 'linear'
+      start_epoch: 151
+      end_epoch: 170
+      start_val: 0.0
       end_val: 0.5
-#    style_classification_loss:
-#      schedule: 'linear'
-#      start_epoch: 151
-#      end_epoch: 170
-#      start_val: 0.0
-#      end_val: 0.5
-#    skill_regression_loss:
-#      schedule: 'linear'
-#      start_epoch: 161
-#      end_epoch: 170
-#      start_val: 0.0
-#      end_val: 0.5
+    skill_regression_loss:
+      schedule: 'linear'
+      start_epoch: 161
+      end_epoch: 170
+      start_val: 0.0
+      end_val: 0.5
 
 # 学習設定
 training:
   num_epochs: 200
-  batch_size: 16
+  batch_size: 24
   learning_rate: 0.0001
   weight_decay: 0.00005
   

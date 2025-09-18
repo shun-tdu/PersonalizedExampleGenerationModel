@@ -17,8 +17,8 @@ model:
   seq_len: 100  # target_seq_len from preprocessing
   d_model: 768
   n_heads: 8
-  n_encoder_layers: 6
-  n_decoder_layers: 6
+  n_encoder_layers: 8
+  n_decoder_layers: 8
   dropout: 0.1
 
   # 潜在空間次元
@@ -35,43 +35,43 @@ model:
       start_epoch: 40
       end_epoch: 70
       start_val: 0.0
-      end_val: 0.0001
+      end_val: 0.001
     beta_skill:  # スキル空間専用のKL損失（より弱く）
       schedule: 'linear'
       start_epoch: 40
       end_epoch: 70
       start_val: 0.0
-      end_val: 0.0001
+      end_val: 0.001
     orthogonal_loss:
       schedule: 'linear'
-      start_epoch: 81
-      end_epoch: 110
+      start_epoch: 51
+      end_epoch: 80
       start_val: 0.0
-      end_val: 0.1
+      end_val: 1.0
     contrastive_loss:
       schedule: 'linear'
-      start_epoch: 111
-      end_epoch: 130
+      start_epoch: 81
+      end_epoch: 100
       start_val: 0.0
       end_val: 0.25
     manifold_loss:
       schedule: 'linear'
-      start_epoch: 131
-      end_epoch: 150
+      start_epoch: 101
+      end_epoch: 120
+      start_val: 0.0
+      end_val: 0.01
+    style_classification_loss:
+      schedule: 'linear'
+      start_epoch: 121
+      end_epoch: 140
       start_val: 0.0
       end_val: 0.5
-#    style_classification_loss:
-#      schedule: 'linear'
-#      start_epoch: 151
-#      end_epoch: 170
-#      start_val: 0.0
-#      end_val: 0.5
-#    skill_regression_loss:
-#      schedule: 'linear'
-#      start_epoch: 161
-#      end_epoch: 170
-#      start_val: 0.0
-#      end_val: 0.5
+    skill_regression_loss:
+      schedule: 'linear'
+      start_epoch: 121
+      end_epoch: 140
+      start_val: 0.0
+      end_val: 0.5
 
 # 学習設定
 training:

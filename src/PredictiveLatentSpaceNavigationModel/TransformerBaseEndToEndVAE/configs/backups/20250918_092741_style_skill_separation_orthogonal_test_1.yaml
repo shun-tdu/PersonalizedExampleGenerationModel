@@ -47,7 +47,7 @@ model:
       start_epoch: 81
       end_epoch: 110
       start_val: 0.0
-      end_val: 0.1
+      end_val: 1.0
     contrastive_loss:
       schedule: 'linear'
       start_epoch: 111

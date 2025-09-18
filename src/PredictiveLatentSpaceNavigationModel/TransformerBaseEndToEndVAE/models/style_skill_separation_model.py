@@ -206,7 +206,7 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                  d_model=128,
                  n_heads=4,
                  n_encoder_layers=2,
-                 n_decoder_layer=2,
+                 n_decoder_layers=2,  # CLAUDE_ADDED: typo修正 (単数形→複数形)
                  dropout=0.1,
                  style_latent_dim = 8,
                  skill_latent_dim = 8,
@@ -219,7 +219,7 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                          d_model=d_model,
                          n_heads=n_heads,
                          n_encoder_layers=n_encoder_layers,
-                         n_decoder_layer=n_decoder_layer,
+                         n_decoder_layers=n_decoder_layers,  # CLAUDE_ADDED: typo修正
                          dropout=dropout,
                          style_latent_dim = style_latent_dim,
                          skill_latent_dim = skill_latent_dim,
@@ -232,11 +232,25 @@ class StyleSkillSeparationNet(BaseExperimentModel):
         self.style_latent_dim = style_latent_dim
         self.skill_latent_dim = skill_latent_dim
 
+        # CLAUDE_ADDED: モデルインスタンス化時のパラメータをログ出力
+        print(f"StyleSkillSeparationNet instantiated with:")
+        print(f"  n_decoder_layers: {n_decoder_layers}")
+        print(f"  d_model: {d_model}")
+        print(f"  n_heads: {n_heads}")
+        print(f"  n_encoder_layers: {n_encoder_layers}")
+        print(f"  style_latent_dim: {style_latent_dim}")
+        print(f"  skill_latent_dim: {skill_latent_dim}")
+        print(f"  n_subjects: {n_subjects}")
+
         # 損失関数の重みスケジューラの初期化
         if loss_schedule_config is None:
             loss_schedule_config = {
-                'beta':{'schedule': 'linear', 'start_epoch': 0, 'end_epoch': 100, 'start_val': 0.0, 'end_val': 0.01},
-                'orthogonal_loss' : {'schedule': 'constant', 'val': 0.1},
+                # CLAUDE_ADDED: 分離されたKL損失スケジュール
+                'beta_style': {'schedule': 'linear', 'start_epoch': 40, 'end_epoch': 70, 'start_val': 0.0, 'end_val': 0.001},
+                'beta_skill': {'schedule': 'linear', 'start_epoch': 40, 'end_epoch': 70, 'start_val': 0.0, 'end_val': 0.0001},
+                # 後方互換性のため旧betaも保持
+                'beta': {'schedule': 'linear', 'start_epoch': 40, 'end_epoch': 70, 'start_val': 0.0, 'end_val': 0.001},
+                'orthogonal_loss': {'schedule': 'constant', 'val': 0.1},
                 'contrastive_loss': {'schedule': 'constant', 'val': 0.1},
                 'manifold_loss': {'schedule': 'constant', 'val': 0.1},
                 'style_classification_loss': {'schedule': 'constant', 'val': 0.1},
@@ -268,7 +282,7 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                                                       seq_len,
                                                       d_model,
                                                       n_heads,
-                                                      n_decoder_layer,
+                                                      n_decoder_layers,  # CLAUDE_ADDED: typo修正
                                                       dropout,
                                                       style_latent_dim,
                                                       skill_latent_dim)
@@ -386,13 +400,14 @@ class StyleSkillSeparationNet(BaseExperimentModel):
             if self.calc_contrastive_loss:
                 losses['contrastive_loss'] = self.contrastive_loss(z_style, subject_indices)
 
-            # スタイル分類サブタスク
-            losses['style_classification_loss'] = F.cross_entropy(subject_pred, subject_indices)
+            # CLAUDE_ADDED: スタイル分類サブタスクの安全な実行
+            if self.calc_style_subtask and subject_pred is not None:
+                losses['style_classification_loss'] = F.cross_entropy(subject_pred, subject_indices)
 
         # スキル空間関連の損失
         if skill_scores is not None:
-            # スキルスコア回帰損失
-            if self.calc_skill_subtask:
+            # CLAUDE_ADDED: スキルスコア回帰損失の安全な実行
+            if self.calc_skill_subtask and skill_score_pred is not None:
                 # skill_score_pred: [batch, 1] -> [batch] に変換
                 skill_score_pred_flat = skill_score_pred.squeeze(-1)
                 losses['skill_regression_loss'] = F.mse_loss(skill_score_pred_flat, skill_scores)
@@ -406,45 +421,112 @@ class StyleSkillSeparationNet(BaseExperimentModel):
 
 
         # 総合損失の計算
+        # CLAUDE_ADDED: スタイル空間とスキル空間で異なるKL重みを適用
+        beta_style_weight = weights.get('beta_style', weights.get('beta', 0.0))  # 後方互換性確保
+        beta_skill_weight = weights.get('beta_skill', weights.get('beta', 0.0))  # 後方互換性確保
+
         total_loss = (losses['reconstruction_loss']
-                      + weights.get('beta', 0.0) * (losses['kl_style_loss'] + losses['kl_skill_loss'])
+                      + beta_style_weight * losses['kl_style_loss']   # スタイル空間のKL損失
+                      + beta_skill_weight * losses['kl_skill_loss']   # スキル空間のKL損失（軽減）
                       + weights.get('orthogonal_loss', 0.0) * losses.get('orthogonal_loss', torch.tensor(0.0, device=x.device))
                       + weights.get('contrastive_loss', 0.0) * losses.get('contrastive_loss', torch.tensor(0.0, device=x.device))
                       + weights.get('manifold_loss', 0.0) * losses.get('manifold_loss', torch.tensor(0.0, device=x.device))
                       + weights.get('style_classification_loss', 0.0) * losses.get('style_classification_loss', torch.tensor(0.0, device=x.device))
-                      + weights.get('skill_regression_loss', 0.0) * losses['skill_regression_loss'])
+                      + weights.get('skill_regression_loss', 0.0) * losses.get('skill_regression_loss', torch.tensor(0.0, device=x.device)))
 
         losses['total_loss'] = total_loss
 
         return losses
 
-    def compute_manifold_loss(self, z_skill: torch.Tensor, skill_score: torch.Tensor, margin: float = 2.0):
+    def compute_manifold_loss(self, z_skill: torch.Tensor, skill_score: torch.Tensor, min_separation: float = 1.0):
         """
-        連続的なスキルスコアを用いて、熟達多様地を形成するための損失を計算する。
+        相対的分離設計による熟達多様体形成損失
+        CLAUDE_ADDED: Option 2 - 熟達者と非熟達者の重心分離 + 各グループ内凝集性
         Args:
             z_skill (torch.Tensor): スキル潜在変数[batch_size, skill_latent_dim]
             skill_score (torch.Tensor): 標準化されたスキルスコア [batch_size, ]
-            margin (float):非熟達者が保つべき、中心からの最小距離(2乗)
+            min_separation (float): 熟達者と非熟達者の最小分離距離
         """
-        # 熟達多様体の中心を原点に設定
-        expert_target = torch.zeros_like(z_skill)
+        batch_size = z_skill.size(0)
+        device = z_skill.device
 
-        # 1. 引力の計算
-        # スキルスコアが正の場合のみの重みとして機能させる
-        attraction_weight = F.relu(skill_score)
+        # 熟達者と非熟達者のマスク
+        expert_mask = skill_score > 0.0
+        novice_mask = skill_score <= 0.0
 
-        # 熟達者をターゲットに引き寄せる損失
-        distance_sq = torch.sum((z_skill - expert_target) ** 2, dim=1)
-        loss_attention = attraction_weight * distance_sq
+        n_experts = expert_mask.sum()
+        n_novices = novice_mask.sum()
 
-        # 2. 斥力の計算
-        # スキルスコアが負の場合のみの重みとして機能させる
-        repulsion_weights = F.relu(-skill_score)
-        # marginより内側に入ってきた場合にのみペナルティを与える
-        loss_repulsion = repulsion_weights * F.relu(margin - distance_sq)
+        # 各項の損失を初期化
+        loss_separation = torch.tensor(0.0, device=device, requires_grad=True)
+        loss_expert_cohesion = torch.tensor(0.0, device=device, requires_grad=True)
+        loss_novice_cohesion = torch.tensor(0.0, device=device, requires_grad=True)
 
-        # 3. 最終的な損失
-        total_manifold_loss = torch.mean(loss_attention + loss_repulsion)
+        # CLAUDE_ADDED: 1. 重心分離損失（熟達者と非熟達者の分離を促進）
+        if n_experts > 0 and n_novices > 0:
+            # 各グループの重心を計算
+            expert_centroid = z_skill[expert_mask].mean(dim=0)
+            novice_centroid = z_skill[novice_mask].mean(dim=0)
+
+            # 重心間の距離
+            centroid_distance = torch.norm(expert_centroid - novice_centroid, p=2)
+
+            # 分離が不十分な場合にペナルティ
+            loss_separation = torch.clamp(min_separation - centroid_distance, min=0.0) ** 2
+
+        # CLAUDE_ADDED: 2. 熟達者グループ内凝集性（スキルスコアに応じた重み付き）
+        if n_experts > 1:
+            z_skill_experts = z_skill[expert_mask]
+            expert_scores = skill_score[expert_mask]
+            expert_centroid = z_skill_experts.mean(dim=0)
+
+            # 各熟達者の重心からの距離（スキルスコアで重み付け）
+            expert_distances_to_centroid = torch.norm(z_skill_experts - expert_centroid.unsqueeze(0), p=2, dim=1)
+            expert_weights = torch.sigmoid(expert_scores * 2.0)  # 高スキルほど強い凝集
+            loss_expert_cohesion = torch.mean(expert_weights * expert_distances_to_centroid)
+
+        # CLAUDE_ADDED: 3. 非熟達者グループ内凝集性（適度な凝集）
+        if n_novices > 1:
+            z_skill_novices = z_skill[novice_mask]
+            novice_scores = skill_score[novice_mask]
+            novice_centroid = z_skill_novices.mean(dim=0)
+
+            # 各非熟達者の重心からの距離（低スキルほど緩い凝集）
+            novice_distances_to_centroid = torch.norm(z_skill_novices - novice_centroid.unsqueeze(0), p=2, dim=1)
+            novice_weights = torch.sigmoid(-novice_scores * 1.0)  # 低スキルほど緩い凝集
+            loss_novice_cohesion = torch.mean(novice_weights * novice_distances_to_centroid)
+
+        # CLAUDE_ADDED: 4. 適応的スキルベース分離（連続的なスキルスコアを活用）
+        loss_skill_based_separation = torch.tensor(0.0, device=device, requires_grad=True)
+        if batch_size > 1:
+            # スキルスコア差と潜在空間距離の相関を促進
+            skill_diff_matrix = torch.abs(skill_score.unsqueeze(1) - skill_score.unsqueeze(0))
+            z_skill_distance_matrix = torch.cdist(z_skill, z_skill, p=2)
+
+            # 対角成分を除外
+            mask = ~torch.eye(batch_size, dtype=torch.bool, device=device)
+            skill_diffs = skill_diff_matrix[mask]
+            z_distances = z_skill_distance_matrix[mask]
+
+            # スキル差と空間距離の正の相関を促進（高スキル差ペアは遠く配置）
+            if skill_diffs.numel() > 0:
+                # スキル差に比例した最小距離を設定
+                target_distances = skill_diffs * 0.5  # スケーリング係数
+                distance_violations = torch.clamp(target_distances - z_distances, min=0.0)
+                loss_skill_based_separation = torch.mean(distance_violations ** 2)
+
+        # CLAUDE_ADDED: 5. 重み付き総合損失
+        alpha_separation = 2.0        # 重心分離（最重要）
+        alpha_expert_cohesion = 1.0   # 熟達者凝集性
+        alpha_novice_cohesion = 0.3   # 非熟達者凝集性（緩め）
+        alpha_skill_separation = 1.5  # スキルベース分離
+
+        total_manifold_loss = (
+            alpha_separation * loss_separation +
+            alpha_expert_cohesion * loss_expert_cohesion +
+            alpha_novice_cohesion * loss_novice_cohesion +
+            alpha_skill_separation * loss_skill_based_separation
+        )
 
         return total_manifold_loss
 
