@@ -1033,3 +1033,415 @@ class SkillLatentDimensionVSScoreEvaluator(BaseEvaluator):
 
     def get_required_data(self) -> List[str]:
         return ['z_skill', 'skill_scores', 'experiment_id']
+
+
+class SkillManifoldAnalysisEvaluator(BaseEvaluator):
+    """CLAUDE_ADDED: スキル空間の熟達多様体形成をカーネル密度推定で評価"""
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.min_samples = 20
+        self.skilled_threshold_percentile = 75  # 上位25%を熟達者とみなす
+        self.density_grid_size = 50
+        self.manifold_threshold = 0.8  # 密度しきい値（正規化後）
+
+    def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult):
+        """熟達多様体分析評価を実行"""
+        z_skill = test_data.get('z_skill')
+        skill_scores = test_data.get('skill_scores')
+        subject_ids = test_data.get('subject_ids')
+
+        print("=" * 60)
+        print("スキル空間熟達多様体分析評価実行")
+        print("=" * 60)
+
+        if len(skill_scores) < self.min_samples:
+            print(f"⚠️ サンプル数不足: {len(skill_scores)} < {self.min_samples}")
+            result.add_metric("manifold_analysis_status", 0, "サンプル数不足", "skill_manifold")
+            return
+
+        # 1. 熟達者・非熟達者の分類
+        skilled_threshold = np.percentile(skill_scores, self.skilled_threshold_percentile)
+        skilled_mask = skill_scores >= skilled_threshold
+
+        z_skilled = z_skill[skilled_mask]
+        z_unskilled = z_skill[~skilled_mask]
+        scores_skilled = skill_scores[skilled_mask]
+        scores_unskilled = skill_scores[~skilled_mask]
+
+        print(f"熟達者: {len(z_skilled)}サンプル (スコア >= {skilled_threshold:.3f})")
+        print(f"非熟達者: {len(z_unskilled)}サンプル (スコア < {skilled_threshold:.3f})")
+
+        # 2. カーネル密度推定による密度分析
+        density_analysis = self._perform_density_analysis(z_skill, z_skilled, z_unskilled, skill_scores)
+
+        # 3. 多様体特性の評価
+        manifold_metrics = self._evaluate_manifold_properties(z_skilled, z_unskilled, density_analysis)
+
+        # 4. クラスタリング分析
+        clustering_analysis = self._perform_clustering_analysis(z_skilled, z_unskilled)
+
+        # 5. 可視化生成
+        visualization_fig = self._create_manifold_visualization(
+            z_skill, skill_scores, z_skilled, z_unskilled,
+            density_analysis, manifold_metrics, clustering_analysis
+        )
+
+        # 結果をメトリクスに追加
+        self._add_manifold_metrics(result, manifold_metrics, clustering_analysis, density_analysis)
+
+        # 可視化を追加
+        result.add_visualization("skill_manifold_analysis", visualization_fig,
+                                description="スキル空間における熟達多様体の形成分析",
+                                category="skill_analysis")
+
+        print("✅ スキル空間熟達多様体分析評価完了")
+
+    def _perform_density_analysis(self, z_skill: np.ndarray, z_skilled: np.ndarray, z_unskilled: np.ndarray, skill_scores: np.ndarray) -> Dict[str, Any]:
+        """カーネル密度推定による密度分析"""
+        from sklearn.neighbors import KernelDensity
+        from sklearn.decomposition import PCA
+
+        print(f"\n🌐 カーネル密度推定実行...")
+
+        try:
+            # 2次元に次元削減してから密度推定
+            pca = PCA(n_components=2)
+            z_skill_2d = pca.fit_transform(z_skill)
+            z_skilled_2d = pca.transform(z_skilled)
+            z_unskilled_2d = pca.transform(z_unskilled)
+
+            # カーネル密度推定（熟達者データ）
+            kde_skilled = KernelDensity(kernel='gaussian', bandwidth=0.5)
+            kde_skilled.fit(z_skilled_2d)
+
+            # カーネル密度推定（非熟達者データ）
+            kde_unskilled = KernelDensity(kernel='gaussian', bandwidth=0.5)
+            kde_unskilled.fit(z_unskilled_2d)
+
+            # 全体のカーネル密度推定
+            kde_all = KernelDensity(kernel='gaussian', bandwidth=0.5)
+            kde_all.fit(z_skill_2d)
+
+            # グリッド作成
+            x_min, x_max = z_skill_2d[:, 0].min() - 1, z_skill_2d[:, 0].max() + 1
+            y_min, y_max = z_skill_2d[:, 1].min() - 1, z_skill_2d[:, 1].max() + 1
+
+            xx, yy = np.meshgrid(np.linspace(x_min, x_max, self.density_grid_size),
+                               np.linspace(y_min, y_max, self.density_grid_size))
+            grid_points = np.c_[xx.ravel(), yy.ravel()]
+
+            # 密度計算
+            density_skilled = np.exp(kde_skilled.score_samples(grid_points)).reshape(xx.shape)
+            density_unskilled = np.exp(kde_unskilled.score_samples(grid_points)).reshape(xx.shape)
+            density_all = np.exp(kde_all.score_samples(grid_points)).reshape(xx.shape)
+
+            # 熟達者の密度集中度を計算
+            skilled_density_ratio = density_skilled / (density_all + 1e-8)
+
+            # 高密度領域の特定
+            density_threshold = np.percentile(density_skilled.ravel(), 90)
+            high_density_mask = density_skilled > density_threshold
+
+            print(f"  熟達者密度ピーク: {np.max(density_skilled):.4f}")
+            print(f"  非熟達者密度ピーク: {np.max(density_unskilled):.4f}")
+            print(f"  熟達者高密度領域: {np.sum(high_density_mask) / high_density_mask.size * 100:.1f}%")
+
+            return {
+                'pca': pca,
+                'z_skill_2d': z_skill_2d,
+                'z_skilled_2d': z_skilled_2d,
+                'z_unskilled_2d': z_unskilled_2d,
+                'kde_skilled': kde_skilled,
+                'kde_unskilled': kde_unskilled,
+                'kde_all': kde_all,
+                'xx': xx,
+                'yy': yy,
+                'density_skilled': density_skilled,
+                'density_unskilled': density_unskilled,
+                'density_all': density_all,
+                'skilled_density_ratio': skilled_density_ratio,
+                'high_density_mask': high_density_mask,
+                'density_peak_skilled': np.max(density_skilled),
+                'density_peak_unskilled': np.max(density_unskilled),
+                'high_density_area_ratio': np.sum(high_density_mask) / high_density_mask.size,
+                'success': True
+            }
+
+        except Exception as e:
+            print(f"  ❌ 密度推定エラー: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def _evaluate_manifold_properties(self, z_skilled: np.ndarray, z_unskilled: np.ndarray, density_analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """多様体特性の評価"""
+        print(f"\n📏 多様体特性評価...")
+
+        try:
+            metrics = {}
+
+            # 1. 熟達者の集中度（分散比較）
+            skilled_var = np.var(z_skilled, axis=0).mean()
+            unskilled_var = np.var(z_unskilled, axis=0).mean()
+            concentration_ratio = unskilled_var / (skilled_var + 1e-8)
+
+            print(f"  熟達者分散: {skilled_var:.4f}")
+            print(f"  非熟達者分散: {unskilled_var:.4f}")
+            print(f"  集中度比: {concentration_ratio:.4f}")
+
+            # 2. 密度集中度
+            if density_analysis.get('success', False):
+                density_concentration = density_analysis['density_peak_skilled'] / (density_analysis['density_peak_unskilled'] + 1e-8)
+                high_density_compactness = density_analysis['high_density_area_ratio']
+
+                print(f"  密度集中度: {density_concentration:.4f}")
+                print(f"  高密度領域圧縮性: {high_density_compactness:.4f}")
+
+                metrics.update({
+                    'density_concentration': density_concentration,
+                    'high_density_compactness': high_density_compactness
+                })
+
+            # 3. 熟達者間の平均距離 vs 非熟達者間の平均距離
+            from scipy.spatial.distance import pdist
+
+            if len(z_skilled) > 1:
+                skilled_distances = pdist(z_skilled)
+                avg_skilled_distance = np.mean(skilled_distances)
+            else:
+                avg_skilled_distance = 0
+
+            if len(z_unskilled) > 1:
+                unskilled_distances = pdist(z_unskilled)
+                avg_unskilled_distance = np.mean(unskilled_distances)
+            else:
+                avg_unskilled_distance = 0
+
+            distance_ratio = avg_unskilled_distance / (avg_skilled_distance + 1e-8)
+
+            print(f"  熟達者平均距離: {avg_skilled_distance:.4f}")
+            print(f"  非熟達者平均距離: {avg_unskilled_distance:.4f}")
+            print(f"  距離比: {distance_ratio:.4f}")
+
+            # 4. 多様体形成判定
+            manifold_score = (concentration_ratio + distance_ratio) / 2
+            if density_analysis.get('success', False):
+                manifold_score = (manifold_score + density_analysis['density_concentration']) / 2
+
+            if manifold_score > 2.0:
+                manifold_status = "Strong manifold formation"
+            elif manifold_score > 1.5:
+                manifold_status = "Moderate manifold formation"
+            elif manifold_score > 1.0:
+                manifold_status = "Weak manifold formation"
+            else:
+                manifold_status = "No clear manifold formation"
+
+            print(f"  多様体スコア: {manifold_score:.4f}")
+            print(f"  多様体判定: {manifold_status}")
+
+            metrics.update({
+                'concentration_ratio': concentration_ratio,
+                'distance_ratio': distance_ratio,
+                'manifold_score': manifold_score,
+                'manifold_status': manifold_status,
+                'skilled_variance': skilled_var,
+                'unskilled_variance': unskilled_var,
+                'avg_skilled_distance': avg_skilled_distance,
+                'avg_unskilled_distance': avg_unskilled_distance,
+                'success': True
+            })
+
+            return metrics
+
+        except Exception as e:
+            print(f"  ❌ 多様体特性評価エラー: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def _perform_clustering_analysis(self, z_skilled: np.ndarray, z_unskilled: np.ndarray) -> Dict[str, Any]:
+        """クラスタリング分析による多様体構造の評価"""
+        from sklearn.cluster import DBSCAN
+        from sklearn.metrics import silhouette_score
+
+        print(f"\n🔍 クラスタリング分析...")
+
+        try:
+            results = {}
+
+            # 熟達者のクラスタリング
+            if len(z_skilled) >= 4:  # DBSCANに最低限必要なサンプル数
+                dbscan_skilled = DBSCAN(eps=0.5, min_samples=3)
+                skilled_labels = dbscan_skilled.fit_predict(z_skilled)
+
+                n_clusters_skilled = len(set(skilled_labels)) - (1 if -1 in skilled_labels else 0)
+                n_noise_skilled = list(skilled_labels).count(-1)
+
+                if n_clusters_skilled > 0:
+                    try:
+                        silhouette_skilled = silhouette_score(z_skilled, skilled_labels)
+                    except:
+                        silhouette_skilled = 0.0
+                else:
+                    silhouette_skilled = 0.0
+
+                print(f"  熟達者クラスタ数: {n_clusters_skilled}")
+                print(f"  熟達者ノイズ点: {n_noise_skilled}/{len(z_skilled)}")
+                print(f"  熟達者シルエット係数: {silhouette_skilled:.4f}")
+
+                results.update({
+                    'skilled_clusters': n_clusters_skilled,
+                    'skilled_noise_ratio': n_noise_skilled / len(z_skilled),
+                    'skilled_silhouette': silhouette_skilled
+                })
+
+            # 非熟達者のクラスタリング
+            if len(z_unskilled) >= 4:
+                dbscan_unskilled = DBSCAN(eps=0.5, min_samples=3)
+                unskilled_labels = dbscan_unskilled.fit_predict(z_unskilled)
+
+                n_clusters_unskilled = len(set(unskilled_labels)) - (1 if -1 in unskilled_labels else 0)
+                n_noise_unskilled = list(unskilled_labels).count(-1)
+
+                if n_clusters_unskilled > 0:
+                    try:
+                        silhouette_unskilled = silhouette_score(z_unskilled, unskilled_labels)
+                    except:
+                        silhouette_unskilled = 0.0
+                else:
+                    silhouette_unskilled = 0.0
+
+                print(f"  非熟達者クラスタ数: {n_clusters_unskilled}")
+                print(f"  非熟達者ノイズ点: {n_noise_unskilled}/{len(z_unskilled)}")
+                print(f"  非熟達者シルエット係数: {silhouette_unskilled:.4f}")
+
+                results.update({
+                    'unskilled_clusters': n_clusters_unskilled,
+                    'unskilled_noise_ratio': n_noise_unskilled / len(z_unskilled),
+                    'unskilled_silhouette': silhouette_unskilled
+                })
+
+            results['success'] = True
+            return results
+
+        except Exception as e:
+            print(f"  ❌ クラスタリング分析エラー: {e}")
+            return {'success': False, 'error': str(e)}
+
+    def _create_manifold_visualization(self, z_skill: np.ndarray, skill_scores: np.ndarray,
+                                     z_skilled: np.ndarray, z_unskilled: np.ndarray,
+                                     density_analysis: Dict[str, Any], manifold_metrics: Dict[str, Any],
+                                     clustering_analysis: Dict[str, Any]) -> plt.Figure:
+        """熟達多様体の可視化"""
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+
+        if not density_analysis.get('success', False):
+            axes[0, 0].text(0.5, 0.5, '密度推定失敗', ha='center', va='center', transform=axes[0, 0].transAxes)
+            return fig
+
+        # 1. 熟達者密度マップ
+        im1 = axes[0, 0].contourf(density_analysis['xx'], density_analysis['yy'],
+                                 density_analysis['density_skilled'], levels=20, cmap='Reds', alpha=0.8)
+        axes[0, 0].scatter(density_analysis['z_skilled_2d'][:, 0], density_analysis['z_skilled_2d'][:, 1],
+                          c='red', s=30, alpha=0.7, label='Skilled')
+        axes[0, 0].scatter(density_analysis['z_unskilled_2d'][:, 0], density_analysis['z_unskilled_2d'][:, 1],
+                          c='blue', s=20, alpha=0.5, label='Unskilled')
+        axes[0, 0].set_title('Skilled Density Map')
+        axes[0, 0].legend()
+        plt.colorbar(im1, ax=axes[0, 0])
+
+        # 2. 密度比較
+        im2 = axes[0, 1].contourf(density_analysis['xx'], density_analysis['yy'],
+                                 density_analysis['skilled_density_ratio'], levels=20, cmap='RdYlBu_r', alpha=0.8)
+        axes[0, 1].scatter(density_analysis['z_skilled_2d'][:, 0], density_analysis['z_skilled_2d'][:, 1],
+                          c='red', s=30, alpha=0.7)
+        axes[0, 1].set_title('Skilled/Total Density Ratio')
+        plt.colorbar(im2, ax=axes[0, 1])
+
+        # 3. スキルスコア分布
+        scatter = axes[0, 2].scatter(density_analysis['z_skill_2d'][:, 0], density_analysis['z_skill_2d'][:, 1],
+                                   c=skill_scores, cmap='viridis', s=40, alpha=0.7)
+        axes[0, 2].set_title('Skill Score Distribution')
+        plt.colorbar(scatter, ax=axes[0, 2])
+
+        # 4. 高密度領域
+        axes[1, 0].contour(density_analysis['xx'], density_analysis['yy'],
+                          density_analysis['density_skilled'], levels=[np.percentile(density_analysis['density_skilled'].ravel(), 90)],
+                          colors='red', linewidths=2)
+        axes[1, 0].scatter(density_analysis['z_skilled_2d'][:, 0], density_analysis['z_skilled_2d'][:, 1],
+                          c='red', s=30, alpha=0.7, label='Skilled')
+        axes[1, 0].scatter(density_analysis['z_unskilled_2d'][:, 0], density_analysis['z_unskilled_2d'][:, 1],
+                          c='blue', s=20, alpha=0.5, label='Unskilled')
+        axes[1, 0].set_title('High Density Regions (90th percentile)')
+        axes[1, 0].legend()
+
+        # 5. 距離分布比較
+        if manifold_metrics.get('success', False):
+            from scipy.spatial.distance import pdist
+
+            if len(z_skilled) > 1:
+                skilled_distances = pdist(z_skilled)
+                axes[1, 1].hist(skilled_distances, bins=20, alpha=0.7, label='Skilled', color='red', density=True)
+
+            if len(z_unskilled) > 1:
+                unskilled_distances = pdist(z_unskilled)
+                axes[1, 1].hist(unskilled_distances, bins=20, alpha=0.7, label='Unskilled', color='blue', density=True)
+
+            axes[1, 1].set_xlabel('Pairwise Distance')
+            axes[1, 1].set_ylabel('Density')
+            axes[1, 1].set_title('Distance Distribution Comparison')
+            axes[1, 1].legend()
+
+        # 6. メトリクスサマリー
+        axes[1, 2].axis('off')
+        summary_text = "Manifold Analysis Summary\n" + "="*25 + "\n"
+
+        if manifold_metrics.get('success', False):
+            summary_text += f"Manifold Score: {manifold_metrics.get('manifold_score', 0):.3f}\n"
+            summary_text += f"Status: {manifold_metrics.get('manifold_status', 'N/A')}\n\n"
+            summary_text += f"Concentration Ratio: {manifold_metrics.get('concentration_ratio', 0):.3f}\n"
+            summary_text += f"Distance Ratio: {manifold_metrics.get('distance_ratio', 0):.3f}\n"
+
+            if 'density_concentration' in manifold_metrics:
+                summary_text += f"Density Concentration: {manifold_metrics.get('density_concentration', 0):.3f}\n"
+
+        if clustering_analysis.get('success', False):
+            summary_text += f"\nClustering:\n"
+            if 'skilled_clusters' in clustering_analysis:
+                summary_text += f"Skilled Clusters: {clustering_analysis.get('skilled_clusters', 0)}\n"
+            if 'unskilled_clusters' in clustering_analysis:
+                summary_text += f"Unskilled Clusters: {clustering_analysis.get('unskilled_clusters', 0)}\n"
+
+        axes[1, 2].text(0.1, 0.9, summary_text, transform=axes[1, 2].transAxes,
+                       verticalalignment='top', fontsize=9,
+                       bbox=dict(boxstyle='round', facecolor='lightgreen', alpha=0.8))
+
+        plt.tight_layout()
+        return fig
+
+    def _add_manifold_metrics(self, result: EnhancedEvaluationResult, manifold_metrics: Dict[str, Any],
+                            clustering_analysis: Dict[str, Any], density_analysis: Dict[str, Any]) -> None:
+        """多様体メトリクスを結果に追加"""
+        if manifold_metrics.get('success', False):
+            result.add_metric('skill_manifold_score', manifold_metrics.get('manifold_score', 0),
+                            '熟達多様体形成スコア', 'skill_manifold')
+            result.add_metric('skill_concentration_ratio', manifold_metrics.get('concentration_ratio', 0),
+                            '熟達者集中度比', 'skill_manifold')
+            result.add_metric('skill_distance_ratio', manifold_metrics.get('distance_ratio', 0),
+                            '距離比（非熟達者/熟達者）', 'skill_manifold')
+
+            if 'density_concentration' in manifold_metrics:
+                result.add_metric('skill_density_concentration', manifold_metrics.get('density_concentration', 0),
+                                '密度集中度', 'skill_manifold')
+
+        if clustering_analysis.get('success', False):
+            if 'skilled_clusters' in clustering_analysis:
+                result.add_metric('skill_skilled_clusters', clustering_analysis.get('skilled_clusters', 0),
+                                '熟達者クラスタ数', 'skill_manifold')
+            if 'skilled_silhouette' in clustering_analysis:
+                result.add_metric('skill_skilled_silhouette', clustering_analysis.get('skilled_silhouette', 0),
+                                '熟達者シルエット係数', 'skill_manifold')
+
+        if density_analysis.get('success', False):
+            result.add_metric('skill_high_density_area_ratio', density_analysis.get('high_density_area_ratio', 0),
+                            '高密度領域の割合', 'skill_manifold')
+
+    def get_required_data(self) -> List[str]:
+        return ['z_skill', 'skill_scores', 'subject_ids', 'experiment_id']

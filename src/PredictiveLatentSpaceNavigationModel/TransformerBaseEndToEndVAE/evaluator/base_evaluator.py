@@ -80,6 +80,9 @@ class EvaluationPipeline:
         if evaluation_config.get('visualize_skill_space_analysis', False):
             from .skill_latent_space_evaluator import VisualizeSkillSpaceEvaluator
             self.evaluators.append(VisualizeSkillSpaceEvaluator(self.config))
+        if evaluation_config.get('visualize_KDE', False):
+            from .skill_latent_space_evaluator import SkillManifoldAnalysisEvaluator
+            self.evaluators.append(SkillManifoldAnalysisEvaluator(self.config))
         if evaluation_config.get('skill_score_regression_analysis', False):
             from .skill_latent_space_evaluator import SkillScoreRegressionEvaluator
             self.evaluators.append(SkillScoreRegressionEvaluator(self.config))
