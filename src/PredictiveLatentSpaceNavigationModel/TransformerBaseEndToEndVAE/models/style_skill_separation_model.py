@@ -107,11 +107,39 @@ class StyleSkillSeparationNetEncoder(nn.Module):
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=n_layers)
 
-        # スタイル潜在空間用ヘッド
-        self.style_head = nn.Linear(d_model * seq_len, style_latent_dim * 2)
+        # CLAUDE_ADDED: より効率的な処理のため平均プールを使用
+        self.adaptive_pool = nn.AdaptiveAvgPool1d(1)
 
-        # スキル潜在空間用ヘッド
-        self.skill_head = nn.Linear(d_model * seq_len, skill_latent_dim * 2)
+        # スタイル潜在空間用ヘッド（効率化）
+        self.style_head = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(d_model // 2, style_latent_dim * 2)
+        )
+
+        # スキル潜在空間用ヘッド（効率化）
+        self.skill_head = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(d_model // 2, skill_latent_dim * 2)
+        )
+
+        # CLAUDE_ADDED: 重み初期化
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        """CLAUDE_ADDED: Xavier初期化で重みを安定化"""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                # Xavier uniform初期化
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+            elif isinstance(module, nn.LayerNorm):
+                nn.init.constant_(module.bias, 0)
+                nn.init.constant_(module.weight, 1.0)
 
     def forward(self, x):
         batch_size, _, _  = x.shape
@@ -125,12 +153,13 @@ class StyleSkillSeparationNetEncoder(nn.Module):
         # 特徴量変換
         attended = self.transformer_encoder(pos_encoded)
 
-        # Transformerの出力をシーケンス次元で平均を取る
-        transformed_flat = attended.view(batch_size, -1)
+        # CLAUDE_ADDED: より効率的な時系列プーリング
+        # シーケンス次元で平均プーリング
+        pooled_features = torch.mean(attended, dim=1)  # [batch_size, d_model]
 
         # スタイル・スキル射影
-        style_params = self.style_head(transformed_flat)
-        skill_params = self.skill_head(transformed_flat)
+        style_params = self.style_head(pooled_features)
+        skill_params = self.skill_head(pooled_features)
 
         return {
             'style_mu': style_params[:,:style_params.size(1) // 2],
@@ -155,9 +184,22 @@ class StyleSkillSeparationNetDecoder(nn.Module):
         self.seq_len = seq_len
         self.d_model = d_model
 
-        # 潜在変数サンプリング層
-        self.from_style_latent = nn.Linear(style_latent_dim, d_model * seq_len)
-        self.from_skill_latent = nn.Linear(skill_latent_dim, d_model * seq_len)
+        # CLAUDE_ADDED: 大きなd_modelに対応するための段階的拡張
+        intermediate_dim = min(d_model * 4, 2048)  # 中間次元を制限
+
+        # 潜在変数サンプリング層（段階的次元拡張）
+        self.from_style_latent = nn.Sequential(
+            nn.Linear(style_latent_dim, intermediate_dim),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(intermediate_dim, d_model * seq_len)
+        )
+        self.from_skill_latent = nn.Sequential(
+            nn.Linear(skill_latent_dim, intermediate_dim),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(intermediate_dim, d_model * seq_len)
+        )
 
         # スタイル・スキル合成層
         self.fusion_proj = nn.Linear(2 * d_model, d_model)
@@ -361,21 +403,34 @@ class StyleSkillSeparationNet(BaseExperimentModel):
         # スケジューラから現在の重みを取得
         weights = self.loss_scheduler.get_weights()
 
-        # 再構成損失
+        # CLAUDE_ADDED: 効率的なNaN/inf検出（デバッグ時のみ有効）
+        def safe_tensor(tensor, name="unknown"):
+            if self.training and hasattr(self, '_debug_nan_check') and self._debug_nan_check:
+                if torch.any(torch.isnan(tensor)) or torch.any(torch.isinf(tensor)):
+                    print(f"Warning: {name} contains NaN or inf, replacing with zeros")
+                    return torch.zeros_like(tensor)
+            return tensor
+
+        # 再構成損失 - 安全な計算
+        reconstructed = safe_tensor(reconstructed, "reconstructed")
+        x = safe_tensor(x, "input_x")
         losses = {'reconstruction_loss': F.mse_loss(reconstructed, x)}
 
-        # KLダイバージェンス
-        style_logvar_clamped = torch.clamp(encoded['style_logvar'], min=-10, max=10)
-        skill_logvar_clamped = torch.clamp(encoded['skill_logvar'], min=-10, max=10)
+        # KLダイバージェンス - より厳格なクリッピング
+        style_mu_clamped = torch.clamp(encoded['style_mu'], min=-5, max=5)
+        skill_mu_clamped = torch.clamp(encoded['skill_mu'], min=-5, max=5)
+        style_logvar_clamped = torch.clamp(encoded['style_logvar'], min=-8, max=8)
+        skill_logvar_clamped = torch.clamp(encoded['skill_logvar'], min=-8, max=8)
 
-        losses['kl_style_loss'] = -0.5 * torch.mean(
-            torch.sum(1 + style_logvar_clamped - encoded['style_mu'].pow(2)
-                      - style_logvar_clamped.exp(), dim=1)
-        )
-        losses['kl_skill_loss'] = -0.5 * torch.mean(
-            torch.sum(1 + skill_logvar_clamped - encoded['skill_mu'].pow(2)
-                      - skill_logvar_clamped.exp(), dim=1)
-        )
+        # KL損失の安全な計算
+        style_kl_terms = 1 + style_logvar_clamped - style_mu_clamped.pow(2) - style_logvar_clamped.exp()
+        skill_kl_terms = 1 + skill_logvar_clamped - skill_mu_clamped.pow(2) - skill_logvar_clamped.exp()
+
+        style_kl_terms = safe_tensor(style_kl_terms, "style_kl_terms")
+        skill_kl_terms = safe_tensor(skill_kl_terms, "skill_kl_terms")
+
+        losses['kl_style_loss'] = -0.5 * torch.mean(torch.sum(style_kl_terms, dim=1))
+        losses['kl_skill_loss'] = -0.5 * torch.mean(torch.sum(skill_kl_terms, dim=1))
 
         # 直交性損失(z_styleとz_skillの独立性を促進)
         if self.calc_orthogonal_loss:

@@ -15,8 +15,8 @@ model:
   # 基本パラメータ
   input_dim: 6  # HandlePos, Vel, Acc (x,y)
   seq_len: 100  # target_seq_len from preprocessing
-  d_model: 1024  # CLAUDE_ADDED: 768から512に縮小してNaN回避
-  n_heads: 16
+  d_model: 512  # CLAUDE_ADDED: 768から512に縮小してNaN回避
+  n_heads: 8
   n_encoder_layers: 6
   n_decoder_layers: 6
   dropout: 0.1
@@ -96,8 +96,8 @@ training:
   restore_best_weights: true
   
   # モデル保存
-  save_best_model: false
-  save_checkpoints: false
+  save_best_model: true
+  save_checkpoints: true
   checkpoint_interval: 20
   verbose: true
 

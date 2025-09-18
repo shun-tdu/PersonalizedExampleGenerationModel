@@ -96,8 +96,8 @@ training:
   restore_best_weights: true
   
   # モデル保存
-  save_best_model: false
-  save_checkpoints: false
+  save_best_model: true
+  save_checkpoints: true
   checkpoint_interval: 20
   verbose: true
 
