@@ -238,6 +238,7 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                 'beta':{'schedule': 'linear', 'start_epoch': 0, 'end_epoch': 100, 'start_val': 0.0, 'end_val': 0.01},
                 'orthogonal_loss' : {'schedule': 'constant', 'val': 0.1},
                 'contrastive_loss': {'schedule': 'constant', 'val': 0.1},
+                'manifold_loss': {'schedule': 'constant', 'val': 0.1},
                 'style_classification_loss': {'schedule': 'constant', 'val': 0.1},
                 'skill_regression_loss': {'schedule': 'constant', 'val': 0.1},
             }
@@ -246,6 +247,7 @@ class StyleSkillSeparationNet(BaseExperimentModel):
         # スケジューラ設定からlossの計算フラグを受け取り
         self.calc_orthogonal_loss = 'orthogonal_loss' in loss_schedule_config
         self.calc_contrastive_loss = 'contrastive_loss' in loss_schedule_config
+        self.calc_manifold_loss = 'manifold_loss' in loss_schedule_config
         self.calc_style_subtask = 'style_classification_loss' in loss_schedule_config
         self.calc_skill_subtask = 'skill_regression_loss' in loss_schedule_config
 
@@ -372,8 +374,10 @@ class StyleSkillSeparationNet(BaseExperimentModel):
 
             losses['orthogonal_loss'] = torch.mean(cross_correlation_matrix ** 2)
 
+        # スタイル空間関連の損失
         if subject_ids is not None:
             # CLAUDE_ADDED: 全被験者を固定的なインデックスにマッピング（一貫性を保つ）
+            # todo ここハードコード　悔い改めて直せ
             all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa']
             subject_to_idx = {subj: i for i, subj in enumerate(all_subjects)}
             subject_indices = torch.tensor([subject_to_idx[subj] for subj in subject_ids],
@@ -385,26 +389,66 @@ class StyleSkillSeparationNet(BaseExperimentModel):
             # スタイル分類サブタスク
             losses['style_classification_loss'] = F.cross_entropy(subject_pred, subject_indices)
 
+        # スキル空間関連の損失
         if skill_scores is not None:
-            # CLAUDE_ADDED: スキルスコア回帰サブタスク（次元を合わせる）
-            # skill_score_pred: [batch, 1] -> [batch] に変換
-            skill_score_pred_flat = skill_score_pred.squeeze(-1)
-            losses['skill_regression_loss'] = F.mse_loss(skill_score_pred_flat, skill_scores)
-        else:
+            # スキルスコア回帰損失
+            if self.calc_skill_subtask:
+                # skill_score_pred: [batch, 1] -> [batch] に変換
+                skill_score_pred_flat = skill_score_pred.squeeze(-1)
+                losses['skill_regression_loss'] = F.mse_loss(skill_score_pred_flat, skill_scores)
+
+            # 熟達者多様体形成損失
+            if self.calc_manifold_loss:
+                losses['manifold_loss'] = self.compute_manifold_loss(z_skill, skill_scores)
+        # else:
             # CLAUDE_ADDED: skill_scoresがNoneの場合は0の損失を設定
-            losses['skill_regression_loss'] = torch.tensor(0.0, device=x.device)
+            # losses['skill_regression_loss'] = torch.tensor(0.0, device=x.device)
+
 
         # 総合損失の計算
         total_loss = (losses['reconstruction_loss']
                       + weights.get('beta', 0.0) * (losses['kl_style_loss'] + losses['kl_skill_loss'])
                       + weights.get('orthogonal_loss', 0.0) * losses.get('orthogonal_loss', torch.tensor(0.0, device=x.device))
                       + weights.get('contrastive_loss', 0.0) * losses.get('contrastive_loss', torch.tensor(0.0, device=x.device))
+                      + weights.get('manifold_loss', 0.0) * losses.get('manifold_loss', torch.tensor(0.0, device=x.device))
                       + weights.get('style_classification_loss', 0.0) * losses.get('style_classification_loss', torch.tensor(0.0, device=x.device))
                       + weights.get('skill_regression_loss', 0.0) * losses['skill_regression_loss'])
 
         losses['total_loss'] = total_loss
 
         return losses
+
+    def compute_manifold_loss(self, z_skill: torch.Tensor, skill_score: torch.Tensor, margin: float = 2.0):
+        """
+        連続的なスキルスコアを用いて、熟達多様地を形成するための損失を計算する。
+        Args:
+            z_skill (torch.Tensor): スキル潜在変数[batch_size, skill_latent_dim]
+            skill_score (torch.Tensor): 標準化されたスキルスコア [batch_size, ]
+            margin (float):非熟達者が保つべき、中心からの最小距離(2乗)
+        """
+        # 熟達多様体の中心を原点に設定
+        expert_target = torch.zeros_like(z_skill)
+
+        # 1. 引力の計算
+        # スキルスコアが正の場合のみの重みとして機能させる
+        attraction_weight = F.relu(skill_score)
+
+        # 熟達者をターゲットに引き寄せる損失
+        distance_sq = torch.sum((z_skill - expert_target) ** 2, dim=1)
+        loss_attention = attraction_weight * distance_sq
+
+        # 2. 斥力の計算
+        # スキルスコアが負の場合のみの重みとして機能させる
+        repulsion_weights = F.relu(-skill_score)
+        # marginより内側に入ってきた場合にのみペナルティを与える
+        loss_repulsion = repulsion_weights * F.relu(margin - distance_sq)
+
+        # 3. 最終的な損失
+        total_manifold_loss = torch.mean(loss_attention + loss_repulsion)
+
+        return total_manifold_loss
+
+
 
     def encode(self, x):
         """エンコードのみ"""
