@@ -266,33 +266,70 @@ class IntegratedExperimentRunner:
     def _prepare_evaluation_data(self, model, test_data):
         """評価用データの準備（潜在変数・再構成データ・スキルスコアの抽出）"""
         print("評価用データ準備中...")
-        
+
         model.eval()
-        test_loader = test_data['test_loader']
-        
+
+        # CLAUDE_ADDED: 潜在空間可視化用に全データローダーを作成
+        from torch.utils.data import DataLoader, ConcatDataset
+
+        # 全データセットを結合
+        all_dataset = ConcatDataset([
+            test_data['train_dataset'],
+            test_data['val_dataset'],
+            test_data['test_dataset']
+        ])
+
+        # 全データ用のローダー（可視化用）
+        all_data_loader = DataLoader(
+            all_dataset,
+            batch_size=test_data['test_loader'].batch_size,
+            shuffle=False
+        )
+
+        # テストデータのみの処理（評価指標用）
+        test_evaluation_data = self._extract_data_from_loader(model, test_data['test_loader'], "test")
+
+        # 全データの処理（潜在空間可視化用）
+        all_evaluation_data = self._extract_data_from_loader(model, all_data_loader, "all")
+
+        # test_dataを複製して両方のデータを含める
+        enhanced_data = test_data.copy()
+        enhanced_data.update(test_evaluation_data)
+
+        # 全データ用の情報を別キーで追加 (CLAUDE_ADDED: 潜在空間可視化用)
+        enhanced_data.update({
+            f'all_{key}': value for key, value in all_evaluation_data.items()
+        })
+
+        return enhanced_data
+
+    def _extract_data_from_loader(self, model, data_loader, data_type):
+        """データローダーから潜在変数と再構成データを抽出"""
+        print(f"{data_type}データから潜在変数抽出中...")
+
         all_originals = []
         all_reconstructed = []
         all_z_style = []
         all_z_skill = []
         all_subject_ids = []
         all_skill_scores = []
-        
+
         with torch.no_grad():
-            for batch_data in test_loader:
+            for batch_data in data_loader:
                 # SkillMetricsDatasetからのデータ: (trajectories, subject_ids, skill_scores)
                 trajectories = batch_data[0].to(self.device)  # [batch, seq_len, 6]
                 subject_ids = batch_data[1]                   # List[str]
                 skill_scores = batch_data[2].to(self.device)  # [batch,]
-                
+
                 # エンコード
                 encoded = model.encode(trajectories)
                 z_style = encoded['z_style']  # [batch, style_dim]
                 z_skill = encoded['z_skill']  # [batch, skill_dim]
-                
+
                 # デコード（再構成）
                 decoded = model.decode(z_style, z_skill)
                 reconstructed = decoded['trajectory']  # [batch, seq_len, 6]
-                
+
                 # CPU上に移動してリストに追加
                 all_originals.append(trajectories.cpu().numpy())
                 all_reconstructed.append(reconstructed.cpu().numpy())
@@ -300,10 +337,9 @@ class IntegratedExperimentRunner:
                 all_z_skill.append(z_skill.cpu().numpy())
                 all_subject_ids.extend(subject_ids)
                 all_skill_scores.append(skill_scores.cpu().numpy())
-        
+
         # 結合してnumpy配列に変換
-        enhanced_data = test_data.copy()
-        enhanced_data.update({
+        extracted_data = {
             'originals': np.vstack(all_originals),           # [total_samples, seq_len, 6]
             'reconstructed': np.vstack(all_reconstructed),   # [total_samples, seq_len, 6]
             'reconstructions': np.vstack(all_reconstructed), # TrajectoryGenerationEvaluator用
@@ -311,15 +347,15 @@ class IntegratedExperimentRunner:
             'z_skill': np.vstack(all_z_skill),               # [total_samples, skill_dim]
             'subject_ids': all_subject_ids,                  # List[str]
             'skill_scores': np.concatenate(all_skill_scores) # [total_samples,]
-        })
-        
-        print(f"評価データ準備完了:")
+        }
+
+        print(f"{data_type}データ準備完了:")
         print(f"  - サンプル数: {len(all_subject_ids)}")
         print(f"  - 被験者数: {len(set(all_subject_ids))}")
-        print(f"  - スタイル潜在次元: {enhanced_data['z_style'].shape[1]}")
-        print(f"  - スキル潜在次元: {enhanced_data['z_skill'].shape[1]}")
-        
-        return enhanced_data
+        print(f"  - スタイル潜在次元: {extracted_data['z_style'].shape[1]}")
+        print(f"  - スキル潜在次元: {extracted_data['z_skill'].shape[1]}")
+
+        return extracted_data
         
     def _finalize_results(self, model_path, evaluation_results):
         """結果の最終化"""

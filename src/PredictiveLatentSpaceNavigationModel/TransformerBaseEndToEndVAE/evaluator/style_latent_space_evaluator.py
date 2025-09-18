@@ -31,8 +31,8 @@ class VisualizeStyleSpaceEvaluator(BaseEvaluator):
 
     def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult):
         """スタイル潜在空間の可視化評価を実行"""
-        z_style = test_data.get('z_style')
-        subject_ids = test_data.get('subject_ids')
+        z_style = test_data.get('all_z_style')
+        subject_ids = test_data.get('all_subject_ids')
 
         print("=" * 60)
         print("スタイル潜在空間の可視化評価実行")
@@ -50,7 +50,7 @@ class VisualizeStyleSpaceEvaluator(BaseEvaluator):
         print("✅ スタイル潜在空間可視化評価完了")
 
     def get_required_data(self) -> List[str]:
-        return ['z_style', 'experiment_id']
+        return ['all_z_style', 'all_subject_ids', 'experiment_id']
 
     def _create_style_latent_space_visualizations(self, z_style: np.ndarray, subject_ids: List[str], n_components: int = 2) -> Union[Tuple[plt.Figure,plt.Figure], Tuple[plotly.graph_objs.Figure,plotly.graph_objs.Figure]]:
         """包括的可視化生成 - 主成分次元が2のときはMatplot Figure、 3のときはPlotly Figureオブジェクトを返す"""
@@ -110,7 +110,7 @@ class VisualizeStyleSpaceEvaluator(BaseEvaluator):
                     "PC1": z_style_pca[:, 0],
                     "PC2": z_style_pca[:, 1],
                     "PC3": z_style_pca[:, 2],
-                    "subject_ids":subject_colors
+                    "subject_ids":subject_ids
                 })
 
                 fig_pca = px.scatter_3d(
@@ -137,7 +137,7 @@ class VisualizeStyleSpaceEvaluator(BaseEvaluator):
                         "PC1": z_style_tsne[:, 0],
                         "PC2": z_style_tsne[:, 1],
                         "PC3": z_style_tsne[:, 2],
-                        "subject_ids":subject_colors
+                        "subject_ids":subject_ids
                     })
 
                     fig_tsne = px.scatter_3d(

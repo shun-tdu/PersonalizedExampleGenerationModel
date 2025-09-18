@@ -30,9 +30,9 @@ class VisualizeSkillSpaceEvaluator(BaseEvaluator):
 
     def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult):
         """スキル潜在空間の可視化評価を実行"""
-        z_skill = test_data.get('z_skill')
-        skill_scores = test_data.get('skill_scores')
-        subject_ids = test_data.get('subject_ids')
+        z_skill = test_data.get('all_z_skill')
+        skill_scores = test_data.get('all_skill_scores')  # CLAUDE_ADDED: 全データ用に修正
+        subject_ids = test_data.get('all_subject_ids')   # CLAUDE_ADDED: 全データ用に修正
 
         print("=" * 60)
         print("スキル潜在空間の可視化評価実行")
@@ -52,14 +52,14 @@ class VisualizeSkillSpaceEvaluator(BaseEvaluator):
         print("✅ スキル潜在空間可視化評価完了")
 
     def get_required_data(self) -> List[str]:
-        return ['z_skill', 'skill_scores', 'subject_ids', 'experiment_id']
+        return ['all_z_skill', 'all_skill_scores', 'all_subject_ids', 'experiment_id']
 
     def _create_skill_latent_space_visualizations(self, z_skill: np.ndarray, skill_scores: np.ndarray, subject_ids: List[str], n_components: int = 2) -> Union[Tuple[plt.Figure, plt.Figure], Tuple[plotly.graph_objs.Figure, plotly.graph_objs.Figure]]:
         """包括的可視化生成 - スキルスコアによる色分け。2Dの場合はMatplotlib、3Dの場合はPlotly Figureオブジェクトを返す"""
         print(f"\n🎯 スキル空間可視化生成中...")
 
         # スキルスコア正規化（カラーマップ用）
-        skill_scores_normalized = (skill_scores - np.min(skill_scores)) / (np.max(skill_scores) - np.min(skill_scores) + 1e-8)
+        # skill_scores_normalized = (skill_scores - np.min(skill_scores)) / (np.max(skill_scores) - np.min(skill_scores) + 1e-8)
 
         # 2次元の場合（matplotlib）
         if n_components == 2:
