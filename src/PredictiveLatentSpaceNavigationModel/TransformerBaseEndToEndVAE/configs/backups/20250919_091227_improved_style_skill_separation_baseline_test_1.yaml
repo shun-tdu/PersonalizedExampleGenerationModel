@@ -1,7 +1,7 @@
 # Skill-Style Separation VAE Training Configuration
 
 experiment:
-  name: "style_skill_separation_model_skill_manifold_test"
+  name: "improved_style_skill_separation_model_skill_baseline_test"
   description: "スキル指標を用いたスタイル・スキル分離VAE学習実験 - 熟達多様体形成"
   priority: 1
   tags: ["skill_metrics", "style_separation", "prototype_classification", "transformer_vae"]
@@ -9,21 +9,21 @@ experiment:
 
 # モデル設定
 model:
-  class_name: "StyleSkillSeparationNet"
-  file_path: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/models/style_skill_separation_model.py"
+  class_name: "ImprovedStyleSkillSeparationNet"
+  file_path: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/models/improved_style_skill_separation_model.py"
   
   # 基本パラメータ
   input_dim: 6  # HandlePos, Vel, Acc (x,y)
   seq_len: 100  # target_seq_len from preprocessing
-  d_model: 1024  # CLAUDE_ADDED: 768から512に縮小してNaN回避
-  n_heads: 16
+  d_model: 512  # CLAUDE_ADDED: 768から512に縮小してNaN回避
+  n_heads: 8
   n_encoder_layers: 6
   n_decoder_layers: 6
   dropout: 0.1
 
   # 潜在空間次元
-  style_latent_dim: 12
-  skill_latent_dim: 12
+  style_latent_dim: 32
+  skill_latent_dim: 32
 
   # 被験者数 (学習データの被験者数)
   n_subjects: 6  # 要確認: 実際のデータに合わせて調整
@@ -77,9 +77,9 @@ model:
 training:
   num_epochs: 200
   batch_size: 16
-  learning_rate: 0.00005  # CLAUDE_ADDED: より小さな学習率でNaN回避
+  learning_rate: 0.0001  # CLAUDE_ADDED: より小さな学習率でNaN回避
   weight_decay: 0.00005
-  gradient_clip_norm: 1.0  # CLAUDE_ADDED: グラディエントクリッピング追加
+  gradient_clip_norm: 3.0  # CLAUDE_ADDED: グラディエントクリッピング追加
   
   optimizer: "AdamW"
   scheduler: "CosineAnnealingWarmRestarts"

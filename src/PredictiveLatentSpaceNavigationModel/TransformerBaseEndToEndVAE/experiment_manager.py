@@ -351,7 +351,28 @@ class ExperimentRunner:
 
                 # 学習率を更新
                 if scheduler:
-                    scheduler.step()
+                    # CLAUDE_ADDED: ReduceLROnPlateauの場合は検証損失を渡す
+                    training_config = self.config.get('training', {})
+                    scheduler_type = training_config.get('scheduler', None)
+
+                    if scheduler_type == 'ReduceLROnPlateau':
+                        # 監視する指標を取得（デフォルトは検証損失）
+                        monitor_metric = training_config.get('scheduler_monitor', 'val_total_loss')
+                        old_lr = optimizer.param_groups[0]['lr']
+
+                        if monitor_metric in all_metrics:
+                            scheduler.step(all_metrics[monitor_metric])
+                        else:
+                            # フォールバック：検証損失が使用可能な場合
+                            if 'val_total_loss' in all_metrics:
+                                scheduler.step(all_metrics['val_total_loss'])
+
+                        # CLAUDE_ADDED: 学習率変更をログ出力
+                        new_lr = optimizer.param_groups[0]['lr']
+                        if training_config.get('scheduler_verbose', False) and new_lr != old_lr:
+                            print(f"ReduceLROnPlateau: 学習率を {old_lr:.2e} から {new_lr:.2e} に変更")
+                    else:
+                        scheduler.step()
 
                 # 進捗表示
                 print(f"Epoch {epoch+1}/{num_epochs}: {epoch_metrics}")
@@ -418,6 +439,13 @@ class ExperimentRunner:
             total_loss = losses.get('total_loss', 0)
 
             total_loss.backward()
+
+            # CLAUDE_ADDED: 勾配クリッピング
+            training_config = self.config.get('training', {})
+            gradient_clip_norm = training_config.get('gradient_clip_norm', None)
+            if gradient_clip_norm is not None:
+                torch.nn.utils.clip_grad_norm_(model_wrapper.model.parameters(), gradient_clip_norm)
+
             optimizer.step()
 
             # 損失を蓄積
@@ -488,6 +516,24 @@ class ExperimentRunner:
                 step_size=training_config.get('scheduler_step_size', 50),
                 gamma=training_config.get('scheduler_gamma', 0.5)
             )
+        elif scheduler_type == 'ReduceLROnPlateau':
+            # CLAUDE_ADDED: verboseパラメータを除外（PyTorchバージョン互換性）
+            # CLAUDE_ADDED: 数値パラメータの型変換を確実に行う
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode=training_config.get('scheduler_mode', 'min'),
+                factor=float(training_config.get('scheduler_factor', 0.5)),
+                patience=int(training_config.get('scheduler_patience', 10)),
+                threshold=float(training_config.get('scheduler_threshold', 1e-4)),
+                threshold_mode=training_config.get('scheduler_threshold_mode', 'rel'),
+                cooldown=int(training_config.get('scheduler_cooldown', 0)),
+                min_lr=float(training_config.get('scheduler_min_lr', 0)),
+                eps=float(training_config.get('scheduler_eps', 1e-8))
+            )
+            # verboseの代替：手動でログ出力を設定
+            if training_config.get('scheduler_verbose', False):
+                scheduler._verbose = True  # 内部フラグを設定（非公式）
+            return scheduler
 
         return None
 

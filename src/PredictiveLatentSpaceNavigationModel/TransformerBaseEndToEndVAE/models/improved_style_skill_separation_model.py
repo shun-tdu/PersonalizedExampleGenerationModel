@@ -79,7 +79,25 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:x.size(1), :].unsqueeze(0)
 
 
-class StyleSkillSeparationNetEncoder(nn.Module):
+class ResidualConnection(nn.Module):
+    """残差接続付きの線形層"""
+    def __init__(self, dim, dropout=0.1):
+        super().__init__()
+        self.linear1 = nn.Linear(dim, dim * 2)
+        self.linear2 = nn.Linear(dim * 2, dim)
+        self.dropout = nn.Dropout(dropout)
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x):
+        residual = x
+        x = self.norm(x)
+        x = F.gelu(self.linear1(x))
+        x = self.dropout(x)
+        x = self.linear2(x)
+        return residual + x
+
+
+class ImprovedStyleSkillSeparationNetEncoder(nn.Module):
     def __init__(self,
                  input_dim,
                  seq_len,
@@ -92,11 +110,19 @@ class StyleSkillSeparationNetEncoder(nn.Module):
                  ):
         super().__init__()
 
+        # 各段階での正規化
+        self.layer_norm_after_proj = nn.LayerNorm(d_model)
+        self.layer_norm_after_transformer = nn.LayerNorm(d_model)
+        self.layer_norm_before_heads = nn.LayerNorm(d_model)
+
         # 入力射影
         self.input_proj = nn.Linear(input_dim, d_model)
 
         # 位置エンコーディング
-        self.pos_encoding = PositionalEncoding(d_model)
+        self.pos_encoding = PositionalEncoding(d_model, seq_len)
+
+        # 残差接続
+        self.self_residual_proj = ResidualConnection(d_model, dropout)
 
         # 特徴量抽出Transformer層
         encoder_layers = nn.TransformerEncoderLayer(
@@ -107,26 +133,39 @@ class StyleSkillSeparationNetEncoder(nn.Module):
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=n_layers)
 
-        # CLAUDE_ADDED: より効率的な処理のため平均プールを使用
-        self.adaptive_pool = nn.AdaptiveAvgPool1d(1)
+        # プーリング
+        self.attention_pooling = nn.MultiheadAttention(
+            embed_dim=d_model,
+            num_heads = n_heads,
+            batch_first=True,
+            dropout=dropout
+        )
+        self.pooling_query = nn.Parameter(torch.randn(1, d_model) * 0.02)
 
-        # スタイル潜在空間用ヘッド（効率化）
-        self.style_head = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(d_model // 2, style_latent_dim * 2)
+        # 改善されたヘッド
+        self.improved_style_head = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.LayerNorm(d_model),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, d_model//2),
+            nn.GELU(),
+            nn.Dropout(dropout * 0.5),
+            nn.Linear(d_model//2, style_latent_dim * 2)
         )
 
-        # スキル潜在空間用ヘッド（効率化）
-        self.skill_head = nn.Sequential(
+        self.improved_skill_head = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.LayerNorm(d_model),
+            nn.Dropout(dropout),
             nn.Linear(d_model, d_model // 2),
-            nn.ReLU(),
-            nn.Dropout(0.1),
+            nn.GELU(),
+            nn.Dropout(dropout * 0.5),
             nn.Linear(d_model // 2, skill_latent_dim * 2)
         )
 
-        # CLAUDE_ADDED: 重み初期化
+        # 重み初期化
         self._initialize_weights()
 
     def _initialize_weights(self):
@@ -142,34 +181,42 @@ class StyleSkillSeparationNetEncoder(nn.Module):
                 nn.init.constant_(module.weight, 1.0)
 
     def forward(self, x):
-        batch_size, _, _  = x.shape
+        batch_size, seq_len, input_dim = x.shape
 
-        # 入力射影
+        # 1. 入力射影 + 正規化
         encoded = self.input_proj(x)
+        encoded = self.layer_norm_after_proj(encoded)
 
-        # 位置エンコーディング
+        # 2. 位置エンコーディング
         pos_encoded = self.pos_encoding(encoded)
 
-        # 特徴量変換
+        # 3 . Transformer処理
         attended = self.transformer_encoder(pos_encoded)
+        attended = self.layer_norm_after_transformer(attended)
 
-        # CLAUDE_ADDED: より効率的な時系列プーリング
-        # シーケンス次元で平均プーリング
-        pooled_features = torch.mean(attended, dim=1)  # [batch_size, d_model]
+        # 4 . 残差接続
+        attended = self.self_residual_proj(attended)
 
-        # スタイル・スキル射影
-        style_params = self.style_head(pooled_features)
-        skill_params = self.skill_head(pooled_features)
+        # 5. アテンション付きプーリング層
+        query = self.pooling_query.unsqueeze(0).expand(batch_size, -1, -1)
+        pooled_features, _ = self.attention_pooling(query, attended, attended)
+        pooled_features = pooled_features.squeeze(1) # [batch_size, d_model]
+
+        # 6. 最終正規化
+        pooled_features = self.layer_norm_before_heads(pooled_features)
+
+        # 7. 改善されたヘッド
+        style_params = self.improved_style_head(pooled_features)
+        skill_params = self.improved_skill_head(pooled_features)
 
         return {
-            'style_mu': style_params[:,:style_params.size(1) // 2],
-            'style_logvar': style_params[:,style_params.size(1) // 2:],
-            'skill_mu': skill_params[:,:skill_params.size(1) // 2],
-            'skill_logvar': skill_params[:,skill_params.size(1) // 2:],
+            'style_mu': style_params[:, :style_params.size(1) // 2],
+            'style_logvar': style_params[:, style_params.size(1) // 2:],
+            'skill_mu': skill_params[:, :skill_params.size(1) // 2],
+            'skill_logvar': skill_params[:, skill_params.size(1) // 2:],
         }
 
-
-class StyleSkillSeparationNetDecoder(nn.Module):
+class ImprovedStyleSkillSeparationNetDecoder(nn.Module):
     def __init__(self,
                  output_dim,
                  seq_len,
@@ -178,70 +225,89 @@ class StyleSkillSeparationNetDecoder(nn.Module):
                  n_layers,
                  dropout,
                  style_latent_dim,
-                 skill_latent_dim):
+                 skill_latent_dim
+                 ):
         super().__init__()
 
         self.seq_len = seq_len
         self.d_model = d_model
 
-        # CLAUDE_ADDED: 大きなd_modelに対応するための段階的拡張
-        intermediate_dim = min(d_model * 4, 2048)  # 中間次元を制限
-
-        # 潜在変数サンプリング層（段階的次元拡張）
-        self.from_style_latent = nn.Sequential(
-            nn.Linear(style_latent_dim, intermediate_dim),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(intermediate_dim, d_model * seq_len)
-        )
-        self.from_skill_latent = nn.Sequential(
-            nn.Linear(skill_latent_dim, intermediate_dim),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(intermediate_dim, d_model * seq_len)
+        # 潜在変数サンプリング
+        self.style_projector = nn.Sequential(
+            nn.Linear(style_latent_dim, d_model),
+            nn.GELU(),
+            nn.LayerNorm(d_model),
+            ResidualConnection(d_model, dropout),
         )
 
-        # スタイル・スキル合成層
-        self.fusion_proj = nn.Linear(2 * d_model, d_model)
+        self.skill_projector = nn.Sequential(
+            nn.Linear(skill_latent_dim, d_model),
+            nn.GELU(),
+            nn.LayerNorm(d_model),
+            ResidualConnection(d_model, dropout),
+        )
+
+        # 改善された融合層
+        self.fusion_layers = nn.Sequential(
+            nn.Linear(2 * d_model, d_model),
+            nn.GELU(),
+            nn.LayerNorm(d_model),
+            ResidualConnection(d_model, dropout)
+        )
 
         # 位置エンコーディング
-        self.pos_encoding = PositionalEncoding(d_model)
-        
-        # Transformerデコーダ層
-        decoder_layers = nn.TransformerEncoderLayer(d_model=d_model,
-                                                         nhead=n_heads,
-                                                         batch_first=True,
-                                                    dropout=dropout
-                                                         )
-        self.transformer_decoder = nn.TransformerEncoder(decoder_layers, num_layers=n_layers)
+        self.pos_encoding = PositionalEncoding(d_model, seq_len)
 
-        # 出力射影
-        self.output_proj = nn.Linear(d_model, output_dim)
+        # Transformerデコーダ
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=d_model * 4,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True
+        )
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
+
+        # 学習可能なクエリベクトル
+        self.query_vector = nn.Parameter(torch.randn(seq_len, d_model) * 0.02)
+
+        # 残差接続付き出力層
+        self.output_layers = nn.Sequential(
+            ResidualConnection(d_model, dropout),
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, output_dim)
+        )
 
     def forward(self, z_style, z_skill):
-        batch_size, _ = z_style.shape
+        batch_size = z_style.size(0)
 
-        # スタイル・スキル潜在変数を系列データに変換
-        style_seq = self.from_style_latent(z_style).view(batch_size, self.seq_len, self.d_model)
-        skill_seq = self.from_skill_latent(z_skill).view(batch_size, self.seq_len, self.d_model)
+        # スタイルとスキルを個別に処理
+        style_features = self.style_projector(z_style)
+        skill_features = self.skill_projector(z_skill)
 
-        # スタイル・スキル系列データを合成
-        concatenated_seq = torch.concat([style_seq, skill_seq], dim=2)
-        fusion_seq = self.fusion_proj(concatenated_seq)
+        # スタイル・スキルを合成
+        fused_features = self.fusion_layers(
+            torch.cat([style_features, skill_features], dim=-1)
+        )
 
-        # 位置エンコーディング
-        pos_encoded = self.pos_encoding(fusion_seq)
+        # メモリとして使用
+        memory = fused_features.unsqueeze(1).expand(-1, self.seq_len, -1)
+        memory = self.pos_encoding(memory)
 
-        # Transformer Decode
-        transformed = self.transformer_decoder(pos_encoded)
+        # 学習可能なクエリベクトル
+        queries = self.query_vector.unsqueeze(0).expand(batch_size, -1, -1)
+        queries = self.pos_encoding(queries)
+
+        # Transformerデコード
+        decoded = self.transformer_decoder(queries, memory)
 
         # 出力射影
-        reconstructed = self.output_proj(transformed)
+        output = self.output_layers(decoded)
 
-        return reconstructed
+        return output
 
-
-class StyleSkillSeparationNet(BaseExperimentModel):
+class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
     def __init__(self,
                  input_dim=6,
                  seq_len=100,
@@ -269,6 +335,7 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                          loss_schedule_config = loss_schedule_config,
                          **kwargs
                          )
+
         self.seq_len = seq_len
         self.d_model = d_model
         self.style_latent_dim = style_latent_dim
@@ -307,27 +374,26 @@ class StyleSkillSeparationNet(BaseExperimentModel):
         self.calc_style_subtask = 'style_classification_loss' in loss_schedule_config
         self.calc_skill_subtask = 'skill_regression_loss' in loss_schedule_config
 
-
-
         # エンコーダ定義
-        self.encoder = StyleSkillSeparationNetEncoder(input_dim,
-                                                      seq_len,
-                                                      d_model,
-                                                      n_heads,
-                                                      n_encoder_layers,
-                                                      dropout,
-                                                      style_latent_dim,
-                                                      skill_latent_dim
-                                                      )
+        self.encoder = ImprovedStyleSkillSeparationNetEncoder(input_dim,
+                                                              seq_len,
+                                                              d_model,
+                                                              n_heads,
+                                                              n_encoder_layers,
+                                                              dropout,
+                                                              style_latent_dim,
+                                                              skill_latent_dim
+                                                              )
         # デコーダ定義
-        self.decoder = StyleSkillSeparationNetDecoder(input_dim,
-                                                      seq_len,
-                                                      d_model,
-                                                      n_heads,
-                                                      n_decoder_layers,  # CLAUDE_ADDED: typo修正
-                                                      dropout,
-                                                      style_latent_dim,
-                                                      skill_latent_dim)
+        self.decoder = ImprovedStyleSkillSeparationNetDecoder(input_dim,
+                                                              seq_len,
+                                                              d_model,
+                                                              n_heads,
+                                                              n_decoder_layers,  # CLAUDE_ADDED: typo修正
+                                                              dropout,
+                                                              style_latent_dim,
+                                                              skill_latent_dim
+                                                              )
 
         # CLAUDE_ADDED: プロトタイプベースのスタイル識別 (被験者数に依存しない)
         if self.calc_style_subtask:
@@ -362,7 +428,7 @@ class StyleSkillSeparationNet(BaseExperimentModel):
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def forward(self, x: torch.Tensor, subject_ids: str = None, skill_scores: float=None) -> Dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor, subject_ids: str = None, skill_scores: float = None) -> Dict[str, torch.Tensor]:
         batch_size, _, _ = x.shape
 
         # エンコード
@@ -390,7 +456,7 @@ class StyleSkillSeparationNet(BaseExperimentModel):
             subject_ids, skill_scores
         )
 
-        result  = {
+        result = {
             'reconstructed': reconstructed,
             'z_style': z_style,
             'z_skill': z_skill,
@@ -398,8 +464,8 @@ class StyleSkillSeparationNet(BaseExperimentModel):
 
         return result | losses
 
-
-    def compute_losses(self, x, reconstructed, encoded, z_style, z_skill, subject_pred, skill_score_pred, subject_ids, skill_scores):
+    def compute_losses(self, x, reconstructed, encoded, z_style, z_skill, subject_pred, skill_score_pred, subject_ids,
+                       skill_scores):
         # スケジューラから現在の重みを取得
         weights = self.loss_scheduler.get_weights()
 
@@ -450,7 +516,7 @@ class StyleSkillSeparationNet(BaseExperimentModel):
             all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa']
             subject_to_idx = {subj: i for i, subj in enumerate(all_subjects)}
             subject_indices = torch.tensor([subject_to_idx[subj] for subj in subject_ids],
-                                            device=z_style.device)
+                                           device=z_style.device)
             # 対照学習
             if self.calc_contrastive_loss:
                 losses['contrastive_loss'] = self.contrastive_loss(z_style, subject_indices)
@@ -471,9 +537,8 @@ class StyleSkillSeparationNet(BaseExperimentModel):
             if self.calc_manifold_loss:
                 losses['manifold_loss'] = self.compute_manifold_loss(z_skill, skill_scores)
         # else:
-            # CLAUDE_ADDED: skill_scoresがNoneの場合は0の損失を設定
-            # losses['skill_regression_loss'] = torch.tensor(0.0, device=x.device)
-
+        # CLAUDE_ADDED: skill_scoresがNoneの場合は0の損失を設定
+        # losses['skill_regression_loss'] = torch.tensor(0.0, device=x.device)
 
         # 総合損失の計算
         # CLAUDE_ADDED: スタイル空間とスキル空間で異なるKL重みを適用
@@ -481,13 +546,18 @@ class StyleSkillSeparationNet(BaseExperimentModel):
         beta_skill_weight = weights.get('beta_skill', weights.get('beta', 0.0))  # 後方互換性確保
 
         total_loss = (losses['reconstruction_loss']
-                      + beta_style_weight * losses['kl_style_loss']   # スタイル空間のKL損失
-                      + beta_skill_weight * losses['kl_skill_loss']   # スキル空間のKL損失（軽減）
-                      + weights.get('orthogonal_loss', 0.0) * losses.get('orthogonal_loss', torch.tensor(0.0, device=x.device))
-                      + weights.get('contrastive_loss', 0.0) * losses.get('contrastive_loss', torch.tensor(0.0, device=x.device))
-                      + weights.get('manifold_loss', 0.0) * losses.get('manifold_loss', torch.tensor(0.0, device=x.device))
-                      + weights.get('style_classification_loss', 0.0) * losses.get('style_classification_loss', torch.tensor(0.0, device=x.device))
-                      + weights.get('skill_regression_loss', 0.0) * losses.get('skill_regression_loss', torch.tensor(0.0, device=x.device)))
+                      + beta_style_weight * losses['kl_style_loss']  # スタイル空間のKL損失
+                      + beta_skill_weight * losses['kl_skill_loss']  # スキル空間のKL損失（軽減）
+                      + weights.get('orthogonal_loss', 0.0) * losses.get('orthogonal_loss',
+                                                                         torch.tensor(0.0, device=x.device))
+                      + weights.get('contrastive_loss', 0.0) * losses.get('contrastive_loss',
+                                                                          torch.tensor(0.0, device=x.device))
+                      + weights.get('manifold_loss', 0.0) * losses.get('manifold_loss',
+                                                                       torch.tensor(0.0, device=x.device))
+                      + weights.get('style_classification_loss', 0.0) * losses.get('style_classification_loss',
+                                                                                   torch.tensor(0.0, device=x.device))
+                      + weights.get('skill_regression_loss', 0.0) * losses.get('skill_regression_loss',
+                                                                               torch.tensor(0.0, device=x.device)))
 
         losses['total_loss'] = total_loss
 
@@ -571,69 +641,67 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                 loss_skill_based_separation = torch.mean(distance_violations ** 2)
 
         # CLAUDE_ADDED: 5. 重み付き総合損失
-        alpha_separation = 2.0        # 重心分離（最重要）
-        alpha_expert_cohesion = 1.0   # 熟達者凝集性
-        alpha_novice_cohesion = 0.3   # 非熟達者凝集性（緩め）
+        alpha_separation = 2.0  # 重心分離（最重要）
+        alpha_expert_cohesion = 1.0  # 熟達者凝集性
+        alpha_novice_cohesion = 0.3  # 非熟達者凝集性（緩め）
         alpha_skill_separation = 1.5  # スキルベース分離
 
         total_manifold_loss = (
-            alpha_separation * loss_separation +
-            alpha_expert_cohesion * loss_expert_cohesion +
-            alpha_novice_cohesion * loss_novice_cohesion +
-            alpha_skill_separation * loss_skill_based_separation
+                alpha_separation * loss_separation +
+                alpha_expert_cohesion * loss_expert_cohesion +
+                alpha_novice_cohesion * loss_novice_cohesion +
+                alpha_skill_separation * loss_skill_based_separation
         )
 
         return total_manifold_loss
-
-
 
     def encode(self, x):
         """エンコードのみ"""
         encoded = self.encoder(x)
         z_style = self.reparameterize(encoded['style_mu'], encoded['style_logvar'])
         z_skill = self.reparameterize(encoded['skill_mu'], encoded['skill_logvar'])
-        return {'z_style': z_style, 'z_skill':z_skill}
+        return {'z_style': z_style, 'z_skill': z_skill}
 
     def decode(self, z_style, z_skill):
         """デコードのみ"""
         trajectory = self.decoder(z_style, z_skill)
         return {'trajectory': trajectory}
-    
+
     def _prototype_based_classification(self, z_style: torch.Tensor, subject_ids: list = None):
         """プロトタイプベースのスタイル識別"""
         # CLAUDE_ADDED: プロトタイプ空間への写像
         style_features = self.style_prototype_network(z_style)
         style_features = F.normalize(style_features, p=2, dim=1)  # L2正規化
-        
+
         batch_size = z_style.size(0)
-        
+
         if self.training and subject_ids is not None:
             # 学習時：プロトタイプを更新しながら分類
             return self._update_prototypes_and_classify(style_features, subject_ids)
         else:
             # テスト時：既存プロトタイプとの距離ベース分類
             return self._distance_based_classification(style_features)
-    
+
     def _update_prototypes_and_classify(self, style_features: torch.Tensor, subject_ids: list):
         """学習時：プロトタイプ更新と分類を同時実行"""
         batch_size = style_features.size(0)
         device = style_features.device
-        
+
         # CLAUDE_ADDED: 全被験者を固定的なインデックスにマッピング（一貫性を保つ）
         all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa']
         subject_to_idx = {subj: i for i, subj in enumerate(all_subjects)}
         subject_indices = [subject_to_idx[subj] for subj in subject_ids]
-        
+
         # 予測用の類似度行列を計算
         similarities = torch.zeros(batch_size, self.style_prototypes.size(0), device=device)
-        
+
         # バッチ内の各サンプルについてプロトタイプを更新
         for i, (feature, subj_idx, subj_id) in enumerate(zip(style_features, subject_indices, subject_ids)):
             if subj_idx < self.style_prototypes.size(0):
                 # プロトタイプの移動平均更新 (momentum=0.9)
                 momentum = 0.9
                 current_count = self.prototype_counts[subj_idx].item()
-                
+
                 if current_count == 0:
                     # 初回: プロトタイプを直接設定
                     self.style_prototypes[subj_idx] = feature.detach()
@@ -641,35 +709,35 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                 else:
                     # 移動平均で更新
                     self.style_prototypes[subj_idx] = (
-                        momentum * self.style_prototypes[subj_idx] + 
-                        (1 - momentum) * feature.detach()
+                            momentum * self.style_prototypes[subj_idx] +
+                            (1 - momentum) * feature.detach()
                     )
                     self.prototype_counts[subj_idx] += 1.0
-        
+
         # 正規化されたプロトタイプとの類似度計算
         normalized_prototypes = F.normalize(self.style_prototypes, p=2, dim=1)
         similarities = torch.mm(style_features, normalized_prototypes.T)
-        
+
         # 温度スケーリングで確率分布に変換
         temperature = 0.5
         logits = similarities / temperature
-        
+
         return logits
-    
+
     def _distance_based_classification(self, style_features: torch.Tensor):
         """テスト時：距離ベース分類"""
         device = style_features.device
-        
+
         # 正規化されたプロトタイプとの類似度計算
         normalized_prototypes = F.normalize(self.style_prototypes, p=2, dim=1)
         similarities = torch.mm(style_features, normalized_prototypes.T)
-        
+
         # 温度スケーリング
         temperature = 0.5
         logits = similarities / temperature
-        
+
         return logits
-        
+
     def get_prototype_info(self):
         """プロトタイプの情報を取得（デバッグ用）"""
         return {
@@ -677,9 +745,4 @@ class StyleSkillSeparationNet(BaseExperimentModel):
             'counts': self.prototype_counts.cpu().numpy(),
             'active_prototypes': (self.prototype_counts > 0).sum().item()
         }
-
-
-
-
-
 

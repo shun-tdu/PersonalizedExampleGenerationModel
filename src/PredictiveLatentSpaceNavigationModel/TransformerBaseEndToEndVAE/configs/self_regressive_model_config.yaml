@@ -1,0 +1,186 @@
+# Self-Regressive Style-Skill Separation VAE Training Configuration
+
+experiment:
+  name: "self_regressive_style_skill_separation_model_test"
+  description: "自己回帰デコーダを用いたスタイル・スキル分離VAE学習実験"
+  priority: 1
+  tags: ["self_regressive", "style_separation", "teacher_forcing", "transformer_vae"]
+  dependencies: []
+
+# モデル設定
+model:
+  class_name: "SelfRegressiveStyleSkillSeparationNet"
+  file_path: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/models/self_regressive_style_skill_separation_model.py"
+
+  # 基本パラメータ
+  input_dim: 6  # HandlePos, Vel, Acc (x,y)
+  seq_len: 100  # target_seq_len from preprocessing
+  d_model: 512  # 自己回帰モデル用に調整
+  n_heads: 8
+  n_encoder_layers: 10
+  n_decoder_layers: 10
+  dropout: 0.1
+
+  # 潜在空間次元
+  style_latent_dim: 16
+  skill_latent_dim: 16
+
+  # 被験者数 (学習データの被験者数)
+  n_subjects: 6
+
+  # CLAUDE_ADDED: Teacher Forcing設定
+  teacher_forcing_config:
+    training: 0.5    # 学習時のTeacher Forcing確率
+    inference: 0.0   # 推論時のTeacher Forcing確率
+
+  # 損失重み
+  loss_schedule_config:
+    beta_style: # スタイル空間専用のKL損失
+      schedule: 'constant'
+      val: 0.0
+#      start_epoch: 30
+#      end_epoch: 60
+#      start_val: 0.0
+#      end_val: 0.0005
+    beta_skill: # スキル空間専用のKL損失（より弱く）
+      schedule: 'constant'
+      val: 0.0
+#      start_epoch: 30
+#      end_epoch: 60
+#      start_val: 0.0
+#      end_val: 0.0001
+    orthogonal_loss:
+      schedule: 'constant'
+      val: 0.0
+#      start_epoch: 61
+#      end_epoch: 90
+#      start_val: 0.0
+#      end_val: 0.05
+    contrastive_loss:
+      schedule: 'constant'
+      val: 0.0
+#      start_epoch: 91
+#      end_epoch: 120
+#      start_val: 0.0
+#      end_val: 0.1
+    manifold_loss:
+      schedule: 'constant'
+      val: 0.0
+#      start_epoch: 121
+#      end_epoch: 150
+#      start_val: 0.0
+#      end_val: 0.1
+    style_classification_loss:
+      schedule: 'constant'
+      val: 0.0
+#      start_epoch: 151
+#      end_epoch: 180
+#      start_val: 0.0
+#      end_val: 0.3
+    skill_regression_loss:
+      schedule: 'constant'
+      val: 0.0
+#      start_epoch: 151
+#      end_epoch: 180
+#      start_val: 0.0
+#      end_val: 0.3
+
+# 学習設定
+training:
+  num_epochs: 200
+  batch_size: 16
+  learning_rate: 0.0001  # 自己回帰モデル用に調整
+  weight_decay: 0.00001
+  gradient_clip_norm: 2.0  # グラディエントクリッピング
+
+  optimizer: "AdamW"
+  scheduler: "CosineAnnealingWarmRestarts"
+  scheduler_T_0: 25
+  scheduler_T_mult: 2
+  scheduler_eta_min: 0.000005
+
+  # 早期停止
+  early_stopping: true
+  patience: 50
+  min_delta: 0.0001
+  monitor: "val_total_loss"
+  mode: "min"
+  restore_best_weights: true
+
+  # モデル保存
+  save_best_model: false
+  save_checkpoints: false
+  checkpoint_interval: 25
+  verbose: true
+
+# データ設定
+data:
+  type: "skill_metrics"
+  data_path: "PredictiveLatentSpaceNavigationModel/DataPreprocess/AnalysisResults/Dataset_Generation_Test_20250908_193217/dataset"
+  val_split: 0.2
+  random_seed: 42
+
+  # DataLoader設定
+  num_workers: 2
+  pin_memory: true
+  shuffle: true
+
+# 評価設定
+evaluation:
+  # ベースライン評価器
+  trajectory_generation_analysis: True
+  style_skill_orthogonality_analysis: True
+
+  # スタイル空間評価器
+  visualize_style_space_analysis: True
+  style_component: 3
+  style_clustering_analysis: True
+  style_classification_analysis: True
+
+  # スキル空間評価器
+  visualize_skill_space_analysis: True
+  visualize_KDE: True
+  skill_component: 2
+  skill_score_regression_analysis: True
+  skill_latent_dimension_vs_score_analysis: True
+
+  # 可視化
+  create_plots: true
+  save_trajectories: true
+  generate_examples: true
+
+# 出力設定
+output:
+  base_dir: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/outputs"
+  experiment_subdir: true
+
+  save_model: true
+  save_embeddings: true
+  save_predictions: true
+  create_report: true
+
+  # ログ設定
+  log_level: "INFO"
+  tensorboard: false
+  wandb: false
+
+# システム設定
+system:
+  device: "auto"
+  mixed_precision: false
+  deterministic: true
+  benchmark: false
+
+  # メモリ最適化
+  dataloader_workers: 2
+  pin_memory: true
+
+  # デバッグ設定
+  debug_mode: false
+  profile_training: false
+
+# 注意事項とメモ
+# 1. 自己回帰モデル専用の設定ファイルです
+# 2. Teacher Forcingによる安定した学習が期待できます
+# 3. 段階的な損失重みスケジューリングで安定した学習を実現
+# 4. 推論時はTeacher Forcingを無効化して純粋な生成性能を評価
