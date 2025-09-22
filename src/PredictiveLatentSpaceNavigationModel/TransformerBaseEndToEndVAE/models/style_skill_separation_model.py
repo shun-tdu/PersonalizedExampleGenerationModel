@@ -414,7 +414,11 @@ class StyleSkillSeparationNet(BaseExperimentModel):
         # 再構成損失 - 安全な計算
         reconstructed = safe_tensor(reconstructed, "reconstructed")
         x = safe_tensor(x, "input_x")
-        losses = {'reconstruction_loss': F.mse_loss(reconstructed, x)}
+        loss_pos = F.mse_loss(reconstructed[:,:,0:2], x[:,:,0:2])
+        loss_vel = F.mse_loss(reconstructed[:,:,2:4], x[:,:,2:4])
+        loss_acc = F.mse_loss(reconstructed[:,:,4:6], x[:,:,4:6])
+        total_recon_loss = 1.0 * loss_pos + 1.0 * loss_vel + 0.1 * loss_acc
+        losses = {'reconstruction_loss': total_recon_loss}
 
         # KLダイバージェンス - より厳格なクリッピング
         style_mu_clamped = torch.clamp(encoded['style_mu'], min=-5, max=5)
