@@ -1,0 +1,139 @@
+# Skip Connection Deep Model Test Configuration
+
+experiment:
+  name: "skip_connection_deep_model_test"
+  description: "深いスキップ接続モデルによる高性能スタイル・スキル分離VAE実験"
+  priority: 2
+  tags: ["skip_connection", "deep_model", "high_performance", "transformer_vae"]
+  dependencies: []
+
+# モデル設定 - より深いネットワーク
+model:
+  class_name: "ImprovedStyleSkillSeparationNet"
+  file_path: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/models/skip_connection_style_skill_separation_model.py"
+
+  # 基本パラメータ - より深い構成
+  input_dim: 6
+  seq_len: 100
+  d_model: 256  # より大きなモデル
+  n_heads: 8
+  n_encoder_layers: 6  # より深いエンコーダー
+  n_decoder_layers: 6  # より深いデコーダー
+  dropout: 0.1
+  skip_dropout: 0.9  # 低めのスキップドロップアウト
+
+  # 潜在空間次元
+  style_latent_dim: 16  # より豊富な表現
+  skill_latent_dim: 16
+
+  # 被験者数
+  n_subjects: 6
+
+  # 損失重み
+  loss_schedule_config:
+    beta_style: # スタイル空間専用のKL損失
+      schedule: 'linear'
+      start_epoch: 51
+      end_epoch: 80
+      start_val: 0.0
+      end_val: 2.5
+    beta_skill: # スキル空間専用のKL損失
+      schedule: 'linear'
+      start_epoch: 51
+      end_epoch: 80
+      start_val: 0.0
+      end_val: 2.5
+    orthogonal_loss:
+      schedule: 'constant'
+      val: 0.0
+    contrastive_loss:
+      schedule: 'linear'
+      start_epoch: 81
+      end_epoch: 100
+      start_val: 0.0
+      end_val: 5.0
+    manifold_loss:
+      schedule: 'linear'
+      start_epoch: 81
+      end_epoch: 100
+      start_val: 0.0
+      end_val: 5.0
+
+# 学習設定
+training:
+  num_epochs: 250  # より長い学習
+  batch_size: 16  # 深いモデルのためやや小さく
+  learning_rate: 0.0005  # 適度な学習率
+  weight_decay: 0.0002
+  gradient_clip_norm: 2.0
+
+  optimizer: "AdamW"
+  scheduler: "CosineAnnealingWarmRestarts"
+  scheduler_T_0: 30
+  scheduler_T_mult: 2
+  scheduler_eta_min: 0.000005
+
+  # 早期停止
+  early_stopping: true
+  patience: 50
+  min_delta: 0.0005
+  monitor: "val_total_loss"
+  mode: "min"
+  restore_best_weights: true
+
+  # モデル保存
+  save_best_model: true
+  save_checkpoints: true
+  checkpoint_interval: 30
+  verbose: true
+
+# データ設定
+data:
+  type: "skill_metrics"
+  data_path: "PredictiveLatentSpaceNavigationModel/DataPreprocess/AnalysisResults/Dataset_Generation_Test_20250908_193217/dataset"
+  val_split: 0.2
+  random_seed: 42
+
+  num_workers: 4
+  pin_memory: true
+  shuffle: true
+
+# 評価設定
+evaluation:
+  trajectory_generation_analysis: True
+  style_skill_orthogonality_analysis: True
+  visualize_style_space_analysis: True
+  style_component: 3
+  style_clustering_analysis: True
+  style_classification_analysis: True
+  visualize_skill_space_analysis: True
+  visualize_KDE: True
+  skill_component: 2
+  skill_score_regression_analysis: True
+  skill_latent_dimension_vs_score_analysis: True
+  create_plots: true
+  save_trajectories: true
+  generate_examples: true
+
+# 出力設定
+output:
+  base_dir: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/outputs"
+  experiment_subdir: true
+  save_model: false
+  save_embeddings: true
+  save_predictions: true
+  create_report: true
+  log_level: "INFO"
+  tensorboard: false
+  wandb: false
+
+# システム設定
+system:
+  device: "auto"
+  mixed_precision: false
+  deterministic: true
+  benchmark: false
+  dataloader_workers: 4
+  pin_memory: true
+  debug_mode: false
+  profile_training: false
