@@ -1,7 +1,7 @@
 # Skip Connection Deep Model Test Configuration
 
 experiment:
-  name: "skip_connection_deep_model_test"
+  name: "gated_skip_connection_deep_model_test"
   description: "深いスキップ接続モデルによる高性能スタイル・スキル分離VAE実験"
   priority: 2
   tags: ["skip_connection", "deep_model", "high_performance", "transformer_vae"]
@@ -10,20 +10,19 @@ experiment:
 # モデル設定 - より深いネットワーク
 model:
   class_name: "ImprovedStyleSkillSeparationNet"
-  file_path: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/models/skip_connection_style_skill_separation_model.py"
+  file_path: "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/models/gated_skip_connection_style_skill_separation_model.py"
 
   # 基本パラメータ - より深い構成
   input_dim: 6
   seq_len: 100
-  d_model: 256  # より大きなモデル
+  d_model: 512
   n_heads: 8
-  n_encoder_layers: 6  # より深いエンコーダー
-  n_decoder_layers: 6  # より深いデコーダー
+  n_encoder_layers: 6
+  n_decoder_layers: 6
   dropout: 0.1
-  skip_dropout: 0.9  # 低めのスキップドロップアウト
 
   # 潜在空間次元
-  style_latent_dim: 16  # より豊富な表現
+  style_latent_dim: 16
   skill_latent_dim: 16
 
   # 被験者数
@@ -36,28 +35,28 @@ model:
       start_epoch: 51
       end_epoch: 80
       start_val: 0.0
-      end_val: 2.5
+      end_val: 25
     beta_skill: # スキル空間専用のKL損失
       schedule: 'linear'
       start_epoch: 51
       end_epoch: 80
       start_val: 0.0
-      end_val: 2.5
+      end_val: 25
     orthogonal_loss:
       schedule: 'constant'
       val: 0.0
     contrastive_loss:
       schedule: 'linear'
-      start_epoch: 81
-      end_epoch: 100
+      start_epoch: 51
+      end_epoch: 80
       start_val: 0.0
-      end_val: 5.0
+      end_val: 20.0
     manifold_loss:
       schedule: 'linear'
-      start_epoch: 81
-      end_epoch: 100
+      start_epoch: 51
+      end_epoch: 80
       start_val: 0.0
-      end_val: 5.0
+      end_val: 20.0
 
 # 学習設定
 training:
