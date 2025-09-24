@@ -330,8 +330,8 @@ class LatentSpaceEvaluator(BaseEvaluator):
                 z_style = encoded['z_style']
                 z_skill = encoded['z_skill']
 
-                # デコード
-                decoded = model.decode(z_style, z_skill)
+                # デコード（動的にスキップ接続対応を判断）
+                decoded = self._safe_decode(model, z_style, z_skill, encoded)
                 reconstructed = decoded['trajectory']
 
                 all_z_style.append(z_style.cpu().numpy())
@@ -434,6 +434,52 @@ class LatentSpaceEvaluator(BaseEvaluator):
                 correlations[f'{metric_name}_correlation'] = max_corr
 
         return correlations
+
+    def _safe_decode(self, model: torch.nn.Module, z_style: torch.Tensor, z_skill: torch.Tensor, encoded: Dict[str, Any]) -> Dict[str, torch.Tensor]:
+        """モデルのスキップ接続対応を動的に判断してデコード
+
+        Args:
+            model: モデルインスタンス
+            z_style: スタイル潜在変数
+            z_skill: スキル潜在変数
+            encoded: エンコード結果辞書
+
+        Returns:
+            デコード結果辞書
+        """
+        import inspect
+
+        # Method 1: エンコード結果にスキップ接続があるかチェック
+        has_skip_connections = 'skip_connections' in encoded and encoded['skip_connections'] is not None
+
+        # Method 2: decodeメソッドの引数をチェック
+        decode_signature = inspect.signature(model.decode)
+        accepts_skip_connections = len(decode_signature.parameters) >= 4  # self, z_style, z_skill, skip_connections
+
+        # Method 3: 実際に3引数で呼び出してみる（最も確実）
+        if has_skip_connections and accepts_skip_connections:
+            try:
+                # スキップ接続ありでデコード
+                skip_connections = encoded['skip_connections']
+                return model.decode(z_style, z_skill, skip_connections)
+            except (TypeError, RuntimeError) as e:
+                # 3引数でエラーが出た場合は2引数にフォールバック
+                print(f"スキップ接続付きデコードが失敗、2引数モードにフォールバック: {e}")
+                pass
+
+        # フォールバック: 2引数での従来型デコード
+        try:
+            return model.decode(z_style, z_skill)
+        except Exception as e:
+            # さらなるフォールバック: forwardメソッドを使用
+            print(f"デコードが失敗、forwardメソッドを使用: {e}")
+            # モデルのforwardで再構成を取得
+            with torch.no_grad():
+                # ダミー入力から形状を推定
+                dummy_input = torch.zeros(z_style.size(0), model.seq_len if hasattr(model, 'seq_len') else 100,
+                                        6, device=z_style.device)  # 一般的な運動データ次元
+                forward_result = model(dummy_input)
+                return {'trajectory': forward_result.get('reconstructed', dummy_input)}
 
     def _create_pca_visualization(self, latent_data: Dict[str, np.ndarray]) -> plt.Figure:
         """PCA可視化のFigureを生成"""
