@@ -106,9 +106,17 @@ class ImprovedStyleSkillSeparationNetEncoder(nn.Module):
                  n_layers,
                  dropout,
                  style_latent_dim,
-                 skill_latent_dim
+                 skill_latent_dim,
+                 skip_layers_from_deepest=None  # CLAUDE_ADDED: 最深層から何層分スキップ接続するか
                  ):
         super().__init__()
+
+        # CLAUDE_ADDED: スキップ接続設定
+        self.n_layers = n_layers
+        # skip_layers_from_deepestがNoneの場合は全層からスキップ接続
+        self.skip_layers_from_deepest = skip_layers_from_deepest if skip_layers_from_deepest is not None else n_layers
+        # 最深層からの層数は最大でも総層数まで
+        self.skip_layers_from_deepest = min(self.skip_layers_from_deepest, n_layers)
 
         # 各段階での正規化
         self.layer_norm_after_proj = nn.LayerNorm(d_model)
@@ -188,6 +196,7 @@ class ImprovedStyleSkillSeparationNetEncoder(nn.Module):
 
         # Skip Connections
         skip_connections = []
+        all_layer_outputs = []  # CLAUDE_ADDED: 全層の出力を保存
 
         # 1. 入力射影 + 正規化
         encoded = self.input_proj(x)
@@ -199,9 +208,13 @@ class ImprovedStyleSkillSeparationNetEncoder(nn.Module):
         # todo 学習が不安定ならここにLayerNormを追加したほうが良さそう
         # 3 . Transformer処理
         current_input = pos_encoded
-        for layer in self.encoder_layers:
+        for i, layer in enumerate(self.encoder_layers):
             current_input = layer(current_input)
-            skip_connections.append(current_input)
+            all_layer_outputs.append(current_input)  # CLAUDE_ADDED: 全層の出力を保存
+
+        # CLAUDE_ADDED: 最深層から指定した層数分のみスキップ接続として保存
+        start_idx = max(0, self.n_layers - self.skip_layers_from_deepest)
+        skip_connections = all_layer_outputs[start_idx:]
 
         # 5. アテンション付きプーリング層
         query = self.pooling_query.unsqueeze(0).expand(batch_size, -1, -1)
@@ -233,12 +246,17 @@ class ImprovedStyleSkillSeparationNetDecoder(nn.Module):
                  dropout,
                  skip_dropout,
                  style_latent_dim,
-                 skill_latent_dim
+                 skill_latent_dim,
+                 skip_layers_from_deepest=None  # CLAUDE_ADDED: スキップ接続層数
                  ):
         super().__init__()
 
         self.seq_len = seq_len
         self.d_model = d_model
+        self.n_layers = n_layers
+        # CLAUDE_ADDED: スキップ接続層数設定
+        self.skip_layers_from_deepest = skip_layers_from_deepest if skip_layers_from_deepest is not None else n_layers
+        self.skip_layers_from_deepest = min(self.skip_layers_from_deepest, n_layers)
 
         # 潜在変数サンプリング
         self.style_projector = nn.Sequential(
@@ -263,7 +281,7 @@ class ImprovedStyleSkillSeparationNetDecoder(nn.Module):
             ResidualConnection(d_model, dropout)
         )
 
-        # 各レイヤーにおける潜在空間特徴量とスキップ接続を融合するネットワーク
+        # CLAUDE_ADDED: スキップ接続を行うレイヤー分の融合ネットワーク（n_layersの全てに対して作成）
         self.skip_fusion_layers = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(2 * d_model, d_model),
@@ -279,7 +297,7 @@ class ImprovedStyleSkillSeparationNetDecoder(nn.Module):
         # 位置エンコーディング
         self.pos_encoding = PositionalEncoding(d_model, seq_len)
 
-        # Transformerデコーダ
+        # CLAUDE_ADDED: Transformerデコーダ（全n_layers分）
         self.decoder_layers = nn.ModuleList([
             nn.TransformerEncoderLayer(
                 d_model=d_model,
@@ -288,7 +306,7 @@ class ImprovedStyleSkillSeparationNetDecoder(nn.Module):
                 dropout=dropout,
                 activation='gelu',
                 batch_first=True
-            ) for _ in range(n_layers)  # CLAUDE_FIXED: ループが抜けていた重大バグ
+            ) for _ in range(n_layers)  # CLAUDE_ADDED: 全層数を保持
         ])
 
         # 残差接続付き出力層
@@ -314,15 +332,25 @@ class ImprovedStyleSkillSeparationNetDecoder(nn.Module):
         # 位置エンコーディングを適用
         decoded_features = self.pos_encoding(memory_from_z)
 
-        # TransformerEncoder層でのデコード
-        for i, layer in enumerate(self.decoder_layers):
-            # 対応するエンコーダ層からのスキップ接続（安全なインデックス）
-            skip_idx = len(skip_connections) - i - 1
-            skip = skip_connections[skip_idx]  # [batch, seq_len, d_model]
+        # CLAUDE_ADDED: TransformerEncoder層でのデコード（最深層から指定層数分のみスキップ接続）
+        available_skip_layers = len(skip_connections)
 
-            # 潜在変数とスキップ接続の情報を融合
-            combined_memory = torch.cat([decoded_features, skip], dim=2) # [batch, seq_len, 2d_model]
-            fused_input = self.skip_fusion_layers[i](combined_memory)
+        for i, layer in enumerate(self.decoder_layers):
+            # CLAUDE_ADDED: 最深層からskip_layers_from_deepest分のみスキップ接続を使用
+            # デコーダの最初の方が最深層に対応
+            use_skip_connection = i < self.skip_layers_from_deepest and i < available_skip_layers
+
+            if use_skip_connection:
+                # 対応するエンコーダ層からのスキップ接続（逆順アクセス）
+                skip_idx = available_skip_layers - i - 1
+                skip = skip_connections[skip_idx]  # [batch, seq_len, d_model]
+
+                # 潜在変数とスキップ接続の情報を融合
+                combined_memory = torch.cat([decoded_features, skip], dim=2) # [batch, seq_len, 2d_model]
+                fused_input = self.skip_fusion_layers[i](combined_memory)
+            else:
+                # スキップ接続を使用しない場合はそのまま使用
+                fused_input = decoded_features
 
             # TransformerEncoderLayerは自己注意のみなので、入力をそのまま渡す
             decoded_features = layer(fused_input)
@@ -345,6 +373,7 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
                  style_latent_dim = 8,
                  skill_latent_dim = 8,
                  n_subjects = 6,
+                 skip_layers_from_deepest = None,  # CLAUDE_ADDED: 最深層から何層分スキップ接続するか
                  loss_schedule_config: Dict[str, Any] = None,
                  **kwargs
                  ):
@@ -359,6 +388,7 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
                          style_latent_dim = style_latent_dim,
                          skill_latent_dim = skill_latent_dim,
                          n_subjects = n_subjects,
+                         skip_layers_from_deepest = skip_layers_from_deepest,
                          loss_schedule_config = loss_schedule_config,
                          **kwargs
                          )
@@ -367,6 +397,8 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
         self.d_model = d_model
         self.style_latent_dim = style_latent_dim
         self.skill_latent_dim = skill_latent_dim
+        # CLAUDE_ADDED: スキップ接続設定
+        self.skip_layers_from_deepest = skip_layers_from_deepest if skip_layers_from_deepest is not None else n_encoder_layers
 
         # CLAUDE_ADDED: モデルインスタンス化時のパラメータをログ出力
         print(f"StyleSkillSeparationNet instantiated with:")
@@ -379,6 +411,8 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
         print(f"  n_subjects: {n_subjects}")
         print(f"  dropout: {dropout}")
         print(f"  skip_dropout: {skip_dropout}")
+        print(f"  skip_layers_from_deepest: {skip_layers_from_deepest}")
+
 
         # 損失関数の重みスケジューラの初期化
         if loss_schedule_config is None:
@@ -411,7 +445,8 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
                                                               n_encoder_layers,
                                                               dropout,
                                                               style_latent_dim,
-                                                              skill_latent_dim
+                                                              skill_latent_dim,
+                                                              self.skip_layers_from_deepest  # CLAUDE_ADDED
                                                               )
         # デコーダ定義
         self.decoder = ImprovedStyleSkillSeparationNetDecoder(input_dim,
@@ -422,7 +457,8 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
                                                               dropout,
                                                               skip_dropout,
                                                               style_latent_dim,
-                                                              skill_latent_dim
+                                                              skill_latent_dim,
+                                                              self.skip_layers_from_deepest  # CLAUDE_ADDED
                                                               )
 
         # CLAUDE_ADDED: プロトタイプベースのスタイル識別 (被験者数に依存しない)
