@@ -9,6 +9,59 @@ from models.base_model import BaseExperimentModel
 from models.components.loss_weight_scheduler import LossWeightScheduler
 
 
+class ImprovedLossWeightScheduler(LossWeightScheduler):
+    """改良された損失重みスケジューラ"""
+
+    def __init__(self, loss_schedule_config, structure_priority_epochs=60):
+        super().__init__(loss_schedule_config)
+        self.structure_priority_epochs = structure_priority_epochs
+        self.current_epoch = 0
+
+    def step(self, epoch):
+        """エポックを更新"""
+        super().step(epoch)
+        self.current_epoch = epoch
+
+    def get_adaptive_weights(self, epoch, reconstruction_loss, structure_losses):
+        """適応的重み計算"""
+        base_weights = self.get_weights()
+
+        # 構造損失の平均（NaN/inf チェック付き）
+        valid_losses = [loss for loss in structure_losses.values()
+                        if torch.isfinite(loss)]
+        avg_structure_loss = sum(valid_losses) / max(len(valid_losses), 1)
+
+        if epoch < self.structure_priority_epochs:
+            # 構造優先期間：再構成損失を適度に制限
+            recon_loss_val = reconstruction_loss.item() if torch.isfinite(reconstruction_loss) else 1.0
+            recon_weight = min(1.5, max(0.5, recon_loss_val / 0.05))
+
+            # 構造損失が十分下がっていない場合は構造学習を強化
+            if avg_structure_loss > 0.3:
+                structure_multiplier = 1.8
+            elif avg_structure_loss > 0.1:
+                structure_multiplier = 1.3
+            else:
+                structure_multiplier = 1.0
+
+        else:
+            # 再構成最適化期間
+            recon_weight = 1.0
+            structure_multiplier = 0.7  # 構造損失の重みを減らす
+
+        # 重みを調整
+        adapted_weights = base_weights.copy()
+
+        # 再構成重みの調整
+        adapted_weights['reconstruction'] = recon_weight
+
+        # 構造関連損失の重み調整
+        for key in ['orthogonal_loss', 'contrastive_loss', 'style_classification_loss',
+                    'skill_regression_loss', 'manifold_loss']:
+            if key in adapted_weights:
+                adapted_weights[key] *= structure_multiplier
+
+        return adapted_weights
 
 class ContrastiveLoss(nn.Module):
     """対比学習損失"""
@@ -21,38 +74,38 @@ class ContrastiveLoss(nn.Module):
         batch_size = features.shape[0]
         labels = labels.contiguous().view(-1, 1)
 
-        # CLAUDE_ADDED: バッチサイズが小さい場合の対処
+        # バッチサイズが小さい場合の対処
         if batch_size <= 1:
             return torch.tensor(0.0, device=features.device, requires_grad=True)
 
         # 正例・負例マスク
         mask = torch.eq(labels, labels.T).float()
 
-        # 特徴量正規化 - CLAUDE_ADDED: 数値安定性向上
+        # 特徴量正規化 数値安定性向上
         features = F.normalize(features, p=2, dim=1, eps=1e-8)
 
-        # 類似度計算 - CLAUDE_ADDED: 温度パラメータをクリップ
+        # 類似度計算 温度パラメータをクリップ
         temperature_clamped = torch.clamp(torch.tensor(self.temperature), min=0.01)
         similarity_matrix = torch.matmul(features, features.T) / temperature_clamped
 
-        # CLAUDE_ADDED: 類似度をクリップして数値安定性を向上
+        # 類似度をクリップして数値安定性を向上
         similarity_matrix = torch.clamp(similarity_matrix, min=-10, max=10)
 
         # 対角成分除去
         mask = mask - torch.eye(batch_size, device=mask.device)
 
-        # 損失計算 - CLAUDE_ADDED: 数値安定性の改善
+        # 損失計算 数値安定性の改善
         exp_sim = torch.exp(similarity_matrix)
         pos_sum = torch.sum(exp_sim * mask, dim=1)
         neg_sum = torch.sum(exp_sim * (1 - torch.eye(batch_size, device=mask.device)), dim=1)
 
-        # CLAUDE_ADDED: ゼロ除算とlog(0)を防ぐ
+        # ゼロ除算とlog(0)を防ぐ
         pos_sum = torch.clamp(pos_sum, min=1e-8)
         neg_sum = torch.clamp(neg_sum, min=1e-8)
 
         loss = -torch.log(pos_sum / neg_sum)
 
-        # CLAUDE_ADDED: NaNチェック
+        # NaNチェック
         if torch.any(torch.isnan(loss)):
             return torch.tensor(0.0, device=features.device, requires_grad=True)
 
@@ -79,25 +132,53 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:x.size(1), :].unsqueeze(0)
 
 
-class ResidualConnection(nn.Module):
-    """残差接続付きの線形層"""
-    def __init__(self, dim, dropout=0.1):
+class ConstrainedSkipConnection(nn.Module):
+    def __init__(self, d_model, bottleneck_ratio=0.25, noise_std=0.05):
         super().__init__()
-        self.linear1 = nn.Linear(dim, dim * 2)
-        self.linear2 = nn.Linear(dim * 2, dim)
-        self.dropout = nn.Dropout(dropout)
-        self.norm = nn.LayerNorm(dim)
+        self.d_model = d_model
+        self.bottleneck_dim = max(int(d_model*bottleneck_ratio), 16)
+        self.noise_std = noise_std
 
-    def forward(self, x):
-        residual = x
-        x = self.norm(x)
-        x = F.gelu(self.linear1(x))
-        x = self.dropout(x)
-        x = self.linear2(x)
-        return residual + x
+        # 情報ボトルネック層
+        self.bottleneck = nn.Sequential(
+            nn.Linear(d_model, self.bottleneck_dim),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(self.bottleneck_dim, d_model)
+        )
+
+        # 重み付きゲート
+        self.gate = nn.Sequential(
+            nn.Linear(2*d_model, d_model),
+            nn.Sigmoid()
+        )
+
+    def forward(self, decoder_feature, encoder_feature, training=True):
+        """
+        Args:
+            decoder_feature:デコーダの現在の特徴量
+            encoder_feature: エンコーダからのスキップ特徴量
+            training: 学習中かどうか
+        """
+        # 1. 情報ボトルネックを通してスキップ情報を集約
+        constrained_skip = self.bottleneck(encoder_feature)
+
+        # 2. 訓練中はついうかのノイズを加える(正則化のため)
+        if training:
+            noise = torch.randn_like(constrained_skip) * self.noise_std
+            constrained_skip = constrained_skip + noise
+
+        # 3. ゲート機構で適応的に重み付け
+        combined_input = torch.cat([decoder_feature, encoder_feature], dim=2)
+        gate_weight = self.gate(combined_input)
+
+        # 4. ゲート重み付きでスキップ接続を適用
+        output = decoder_feature + gate_weight * constrained_skip
+
+        return output
 
 
-class ImprovedStyleSkillSeparationNetEncoder(nn.Module):
+class StyleSkillSeparationNetEncoder(nn.Module):
     def __init__(self,
                  input_dim,
                  seq_len,
@@ -110,58 +191,38 @@ class ImprovedStyleSkillSeparationNetEncoder(nn.Module):
                  ):
         super().__init__()
 
-        # 各段階での正規化
-        self.layer_norm_after_proj = nn.LayerNorm(d_model)
-        self.layer_norm_after_transformer = nn.LayerNorm(d_model)
-        self.layer_norm_before_heads = nn.LayerNorm(d_model)
-
         # 入力射影
         self.input_proj = nn.Linear(input_dim, d_model)
 
         # 位置エンコーディング
-        self.pos_encoding = PositionalEncoding(d_model, seq_len)
-
-        # 残差接続
-        self.self_residual_proj = ResidualConnection(d_model, dropout)
+        self.pos_encoding = PositionalEncoding(d_model)
 
         # 特徴量抽出Transformer層
         encoder_layers = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
             batch_first=True,
-            dropout=dropout
+            dropout=dropout,
+            dim_feedforward=d_model*2
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=n_layers)
 
-        # プーリング
-        self.attention_pooling = nn.MultiheadAttention(
-            embed_dim=d_model,
-            num_heads = n_heads,
-            batch_first=True,
-            dropout=dropout
-        )
-        self.pooling_query = nn.Parameter(torch.randn(1, d_model) * 0.02)
+        # スキップ接続
+        self.skip_features = []
 
-        # 改善されたヘッド
-        self.improved_style_head = nn.Sequential(
-            nn.Linear(d_model, d_model),
-            nn.GELU(),
-            nn.LayerNorm(d_model),
-            nn.Dropout(dropout),
-            nn.Linear(d_model, d_model//2),
-            nn.GELU(),
-            nn.Dropout(dropout * 0.5),
-            nn.Linear(d_model//2, style_latent_dim * 2)
-        )
-
-        self.improved_skill_head = nn.Sequential(
-            nn.Linear(d_model, d_model),
-            nn.GELU(),
-            nn.LayerNorm(d_model),
-            nn.Dropout(dropout),
+        # スタイル潜在空間用ヘッド（効率化）
+        self.style_head = nn.Sequential(
             nn.Linear(d_model, d_model // 2),
-            nn.GELU(),
-            nn.Dropout(dropout * 0.5),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(d_model // 2, style_latent_dim * 2)
+        )
+
+        # スキル潜在空間用ヘッド（効率化）
+        self.skill_head = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.ReLU(),
+            nn.Dropout(0.1),
             nn.Linear(d_model // 2, skill_latent_dim * 2)
         )
 
@@ -181,42 +242,42 @@ class ImprovedStyleSkillSeparationNetEncoder(nn.Module):
                 nn.init.constant_(module.weight, 1.0)
 
     def forward(self, x):
-        batch_size, seq_len, input_dim = x.shape
+        batch_size, _, _ = x.shape
 
-        # 1. 入力射影 + 正規化
+        # スキップ特徴量を初期化
+        self.skip_features = []
+
+        # 入力射影
         encoded = self.input_proj(x)
-        encoded = self.layer_norm_after_proj(encoded)
+        self.skip_features.append(encoded)
 
-        # 2. 位置エンコーディング
+        # 位置エンコーディング
         pos_encoded = self.pos_encoding(encoded)
 
-        # 3 . Transformer処理
-        attended = self.transformer_encoder(pos_encoded)
-        attended = self.layer_norm_after_transformer(attended)
+        # Transformer層ごとに中間特徴量を保存
+        current = pos_encoded
+        for i, layer in enumerate(self.transformer_encoder.layers):
+            current = layer(current)
+            if (i + 1) % 2 == 0:
+                self.skip_features.append(current)
 
-        # 4 . 残差接続
-        attended = self.self_residual_proj(attended)
+        # シーケンス次元でAverage Pooling
+        pooled_feature = torch.mean(current, dim=1) #[batch_size, d_model]
 
-        # 5. アテンション付きプーリング層
-        query = self.pooling_query.unsqueeze(0).expand(batch_size, -1, -1)
-        pooled_features, _ = self.attention_pooling(query, attended, attended)
-        pooled_features = pooled_features.squeeze(1) # [batch_size, d_model]
-
-        # 6. 最終正規化
-        pooled_features = self.layer_norm_before_heads(pooled_features)
-
-        # 7. 改善されたヘッド
-        style_params = self.improved_style_head(pooled_features)
-        skill_params = self.improved_skill_head(pooled_features)
+        # スタイル・スキル射影
+        style_params = self.style_head(pooled_feature)
+        skill_params = self.skill_head(pooled_feature)
 
         return {
             'style_mu': style_params[:, :style_params.size(1) // 2],
             'style_logvar': style_params[:, style_params.size(1) // 2:],
             'skill_mu': skill_params[:, :skill_params.size(1) // 2],
             'skill_logvar': skill_params[:, skill_params.size(1) // 2:],
+            'skip_feature': self.skip_features
         }
 
-class ImprovedStyleSkillSeparationNetDecoder(nn.Module):
+
+class StyleSkillSeparationNetDecoder(nn.Module):
     def __init__(self,
                  output_dim,
                  seq_len,
@@ -225,89 +286,98 @@ class ImprovedStyleSkillSeparationNetDecoder(nn.Module):
                  n_layers,
                  dropout,
                  style_latent_dim,
-                 skill_latent_dim
-                 ):
+                 skill_latent_dim):
         super().__init__()
 
         self.seq_len = seq_len
         self.d_model = d_model
 
-        # 潜在変数サンプリング
-        self.style_projector = nn.Sequential(
-            nn.Linear(style_latent_dim, d_model),
-            nn.GELU(),
-            nn.LayerNorm(d_model),
-            ResidualConnection(d_model, dropout),
+        # 中間次元を制限
+        intermediate_dim = min(d_model * 4, 2048)  # 中間次元を制限
+
+        # 潜在変数サンプリング層
+        self.from_style_latent = nn.Sequential(
+            nn.Linear(style_latent_dim, intermediate_dim),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(intermediate_dim, d_model * seq_len)
+        )
+        self.from_skill_latent = nn.Sequential(
+            nn.Linear(skill_latent_dim, intermediate_dim),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(intermediate_dim, d_model * seq_len)
         )
 
-        self.skill_projector = nn.Sequential(
-            nn.Linear(skill_latent_dim, d_model),
-            nn.GELU(),
-            nn.LayerNorm(d_model),
-            ResidualConnection(d_model, dropout),
-        )
-
-        # 改善された融合層
-        self.fusion_layers = nn.Sequential(
-            nn.Linear(2 * d_model, d_model),
-            nn.GELU(),
-            nn.LayerNorm(d_model),
-            ResidualConnection(d_model, dropout)
-        )
+        # スタイル・スキル合成層
+        self.fusion_proj = nn.Linear(2 * d_model, d_model)
 
         # 位置エンコーディング
-        self.pos_encoding = PositionalEncoding(d_model, seq_len)
+        self.pos_encoding = PositionalEncoding(d_model)
 
-        # Transformerデコーダ
-        decoder_layer = nn.TransformerDecoderLayer(
+        # Transformerデコーダ層
+        decoder_layers = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=n_heads,
-            dim_feedforward=d_model * 4,
+            batch_first=True,
             dropout=dropout,
-            activation='gelu',
-            batch_first=True
+            dim_feedforward=d_model*2
         )
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=n_layers)
+        self.transformer_decoder = nn.TransformerEncoder(decoder_layers, num_layers=n_layers)
 
-        # 学習可能なクエリベクトル
-        self.query_vector = nn.Parameter(torch.randn(seq_len, d_model) * 0.02)
-
-        # 残差接続付き出力層
-        self.output_layers = nn.Sequential(
-            ResidualConnection(d_model, dropout),
-            nn.LayerNorm(d_model),
-            nn.Linear(d_model, output_dim)
-        )
-
-    def forward(self, z_style, z_skill):
-        batch_size = z_style.size(0)
-
-        # スタイルとスキルを個別に処理
-        style_features = self.style_projector(z_style)
-        skill_features = self.skill_projector(z_skill)
-
-        # スタイル・スキルを合成
-        fused_features = self.fusion_layers(
-            torch.cat([style_features, skill_features], dim=-1)
-        )
-
-        # メモリとして使用
-        memory = fused_features.unsqueeze(1).expand(-1, self.seq_len, -1)
-        memory = self.pos_encoding(memory)
-
-        # 学習可能なクエリベクトル
-        queries = self.query_vector.unsqueeze(0).expand(batch_size, -1, -1)
-        queries = self.pos_encoding(queries)
-
-        # Transformerデコード
-        decoded = self.transformer_decoder(queries, memory)
+        # 制限付きスキップ接続層
+        self.constrained_skip_layers = nn.ModuleList([
+            ConstrainedSkipConnection(d_model, bottleneck_ratio=0.2)
+            for _ in range(min(3, n_layers//2))
+        ])
 
         # 出力射影
-        output = self.output_layers(decoded)
+        self.output_proj = nn.Linear(d_model, output_dim)
 
-        return output
+    def forward(self, z_style, z_skill, skip_features=None, skip_weight=0.0):
+        batch_size, _ = z_style.shape
 
-class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
+        # スタイル・スキル潜在変数を系列データに変換
+        style_seq = self.from_style_latent(z_style).view(batch_size, self.seq_len, self.d_model)
+        skill_seq = self.from_skill_latent(z_skill).view(batch_size, self.seq_len, self.d_model)
+
+        # スタイル・スキル系列データを合成
+        concatenated_seq = torch.concat([style_seq, skill_seq], dim=2)
+        fusion_seq = self.fusion_proj(concatenated_seq)
+
+        # 位置エンコーディング
+        pos_encoded = self.pos_encoding(fusion_seq)
+
+        # Transformer Decode
+        current = pos_encoded
+        skip_idx = 0
+
+        for i, layer in enumerate(self.transformer_decoder.layers):
+            current = layer(current)
+
+            # 制限付きスキップ接続の適用
+            if (skip_features is not None and
+                    skip_idx < len(skip_features) and
+                    skip_idx < len(self.constrained_skip_layers) and
+                    i % 2 == 1 and skip_weight > 0):
+
+                    skip_feature = skip_features[skip_idx]
+
+                    if skip_feature.size(1) == current.size(1):
+                        skip_output = self.constrained_skip_layers[skip_idx](current, skip_feature, self.training)
+
+                        # 重み付きでスキップ接続を活用
+                        current = (1 - skip_weight) * current + skip_weight * skip_output
+
+                    skip_idx += 1
+
+        # 出力射影
+        reconstructed = self.output_proj(current)
+
+        return reconstructed
+
+
+class StyleSkillSeparationNet(BaseExperimentModel):
     def __init__(self,
                  input_dim=6,
                  seq_len=100,
@@ -316,10 +386,11 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
                  n_encoder_layers=2,
                  n_decoder_layers=2,  # CLAUDE_ADDED: typo修正 (単数形→複数形)
                  dropout=0.1,
-                 style_latent_dim = 8,
-                 skill_latent_dim = 8,
-                 n_subjects = 6,
+                 style_latent_dim=8,
+                 skill_latent_dim=8,
+                 n_subjects=6,
                  loss_schedule_config: Dict[str, Any] = None,
+                 progressive_training_config: Dict[str, Any] = None,
                  **kwargs
                  ):
         super().__init__(input_dim=input_dim,
@@ -329,43 +400,68 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
                          n_encoder_layers=n_encoder_layers,
                          n_decoder_layers=n_decoder_layers,
                          dropout=dropout,
-                         style_latent_dim = style_latent_dim,
-                         skill_latent_dim = skill_latent_dim,
-                         n_subjects = n_subjects,
-                         loss_schedule_config = loss_schedule_config,
+                         style_latent_dim=style_latent_dim,
+                         skill_latent_dim=skill_latent_dim,
+                         n_subjects=n_subjects,
+                         loss_schedule_config=loss_schedule_config,
+                         progressive_training_config=progressive_training_config,
                          **kwargs
                          )
-
         self.seq_len = seq_len
         self.d_model = d_model
         self.style_latent_dim = style_latent_dim
         self.skill_latent_dim = skill_latent_dim
+        self.current_epoch = 0
 
-        # CLAUDE_ADDED: モデルインスタンス化時のパラメータをログ出力
-        print(f"StyleSkillSeparationNet instantiated with:")
-        print(f"  n_decoder_layers: {n_decoder_layers}")
-        print(f"  d_model: {d_model}")
-        print(f"  n_heads: {n_heads}")
-        print(f"  n_encoder_layers: {n_encoder_layers}")
-        print(f"  style_latent_dim: {style_latent_dim}")
-        print(f"  skill_latent_dim: {skill_latent_dim}")
-        print(f"  n_subjects: {n_subjects}")
+        # 段階的学習の設定
+        if progressive_training_config is None:
+            progressive_training_config = {
+                'enabled': True,
+                'structure_learning_epochs': 60,
+                'transition_epochs': 30,
+                'reconstruction_priority_epochs': 110
+            }
+
+        self.progressive_config = progressive_training_config
+        self.progressive_training = progressive_training_config.get('enabled', True)
+        self.structure_learning_epochs = progressive_training_config.get('structure_learning_epochs', 60)
+        self.transition_epochs = progressive_training_config.get('transition_epochs', 30)
+
+        # 動的パラメータ
+        self.skip_connection_weight = 0.0
+        self.current_dropout = dropout
 
         # 損失関数の重みスケジューラの初期化
         if loss_schedule_config is None:
             loss_schedule_config = {
-                # CLAUDE_ADDED: 分離されたKL損失スケジュール
-                'beta_style': {'schedule': 'linear', 'start_epoch': 40, 'end_epoch': 70, 'start_val': 0.0, 'end_val': 0.001},
-                'beta_skill': {'schedule': 'linear', 'start_epoch': 40, 'end_epoch': 70, 'start_val': 0.0, 'end_val': 0.0001},
-                # 後方互換性のため旧betaも保持
-                'beta': {'schedule': 'linear', 'start_epoch': 40, 'end_epoch': 70, 'start_val': 0.0, 'end_val': 0.001},
-                'orthogonal_loss': {'schedule': 'constant', 'val': 0.1},
-                'contrastive_loss': {'schedule': 'constant', 'val': 0.1},
-                'manifold_loss': {'schedule': 'constant', 'val': 0.1},
-                'style_classification_loss': {'schedule': 'constant', 'val': 0.1},
-                'skill_regression_loss': {'schedule': 'constant', 'val': 0.1},
+                # Phase 1: 基礎構造学習
+                'beta_style': {'schedule': 'linear', 'start_epoch': 5, 'end_epoch': 25, 'start_val': 0.01,
+                               'end_val': 0.1},
+                'beta_skill': {'schedule': 'linear', 'start_epoch': 5, 'end_epoch': 25, 'start_val': 0.01,
+                               'end_val': 0.05},
+                'orthogonal_loss': {'schedule': 'linear', 'start_epoch': 10, 'end_epoch': 30, 'start_val': 0.0,
+                                    'end_val': 0.3},
+
+                # Phase 2: スタイル構造化
+                'contrastive_loss': {'schedule': 'linear', 'start_epoch': 30, 'end_epoch': 50, 'start_val': 0.0,
+                                     'end_val': 0.4},
+                'style_classification_loss': {'schedule': 'linear', 'start_epoch': 35, 'end_epoch': 60,
+                                              'start_val': 0.0, 'end_val': 0.3},
+
+                # Phase 3: スキル構造化
+                'skill_regression_loss': {'schedule': 'linear', 'start_epoch': 60, 'end_epoch': 100, 'start_val': 0.0,
+                                          'end_val': 0.4},
+                'manifold_loss': {'schedule': 'linear', 'start_epoch': 80, 'end_epoch': 140, 'start_val': 0.0,
+                                  'end_val': 0.6},
+
+                # Phase 4: 後期KL強化
+                'beta_style_late': {'schedule': 'linear', 'start_epoch': 120, 'end_epoch': 150, 'start_val': 0.1,
+                                    'end_val': 0.2},
+                'beta_skill_late': {'schedule': 'linear', 'start_epoch': 120, 'end_epoch': 150, 'start_val': 0.05,
+                                    'end_val': 0.1},
             }
-        self.loss_scheduler = LossWeightScheduler(loss_schedule_config)
+
+        self.loss_scheduler = ImprovedLossWeightScheduler(loss_schedule_config, self.structure_learning_epochs)
 
         # スケジューラ設定からlossの計算フラグを受け取り
         self.calc_orthogonal_loss = 'orthogonal_loss' in loss_schedule_config
@@ -374,26 +470,31 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
         self.calc_style_subtask = 'style_classification_loss' in loss_schedule_config
         self.calc_skill_subtask = 'skill_regression_loss' in loss_schedule_config
 
+        print(f"StyleSkillSeparationNet (Improved) instantiated with:")
+        print(f"  d_model: {d_model}, n_heads: {n_heads}")
+        print(f"  n_encoder_layers: {n_encoder_layers}, n_decoder_layers: {n_decoder_layers}")
+        print(f"  style_latent_dim: {style_latent_dim}, skill_latent_dim: {skill_latent_dim}")
+        print(f"  progressive_training: {self.progressive_training}")
+
         # エンコーダ定義
-        self.encoder = ImprovedStyleSkillSeparationNetEncoder(input_dim,
-                                                              seq_len,
-                                                              d_model,
-                                                              n_heads,
-                                                              n_encoder_layers,
-                                                              dropout,
-                                                              style_latent_dim,
-                                                              skill_latent_dim
-                                                              )
+        self.encoder = StyleSkillSeparationNetEncoder(input_dim,
+                                                      seq_len,
+                                                      d_model,
+                                                      n_heads,
+                                                      n_encoder_layers,
+                                                      dropout,
+                                                      style_latent_dim,
+                                                      skill_latent_dim
+                                                      )
         # デコーダ定義
-        self.decoder = ImprovedStyleSkillSeparationNetDecoder(input_dim,
-                                                              seq_len,
-                                                              d_model,
-                                                              n_heads,
-                                                              n_decoder_layers,  # CLAUDE_ADDED: typo修正
-                                                              dropout,
-                                                              style_latent_dim,
-                                                              skill_latent_dim
-                                                              )
+        self.decoder = StyleSkillSeparationNetDecoder(input_dim,
+                                                      seq_len,
+                                                      d_model,
+                                                      n_heads,
+                                                      n_decoder_layers,  # CLAUDE_ADDED: typo修正
+                                                      dropout,
+                                                      style_latent_dim,
+                                                      skill_latent_dim)
 
         # CLAUDE_ADDED: プロトタイプベースのスタイル識別 (被験者数に依存しない)
         if self.calc_style_subtask:
@@ -410,20 +511,60 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
         # 補助タスク用ネット (スキルスコア回帰)
         if self.calc_skill_subtask:
             self.skill_score_regressor = nn.Sequential(
-                nn.Linear(skill_latent_dim, skill_latent_dim//2),
+                nn.Linear(skill_latent_dim, skill_latent_dim // 2),
                 nn.ReLU(),
                 nn.Dropout(0.1),
-                nn.Linear(skill_latent_dim//2, 1)
+                nn.Linear(skill_latent_dim // 2, 1)
             )
 
         # 対照学習の損失
         self.contrastive_loss = ContrastiveLoss()
 
+    def set_training_phase(self, epoch: int):
+        """訓練フェーズに応じてパラメータを調整"""
+        self.current_epoch = epoch
+
+        if not self.progressive_training:
+            return
+
+        if epoch < self.structure_learning_epochs:
+            # Phase 1: 構造学習期間（スキップ接続無効）
+            self.skip_connection_weight = 0.0
+            self.current_dropout = 0.3
+
+        elif epoch < self.structure_learning_epochs + self.transition_epochs:
+            # Phase 2: 移行期間（徐々にスキップ接続を有効化）
+            progress = (epoch - self.structure_learning_epochs) / self.transition_epochs
+            self.skip_connection_weight = progress
+            self.current_dropout = 0.3 - 0.1 * progress  # 0.3 -> 0.2
+
+        else:
+            # Phase 3: 再構成最適化期間（スキップ接続有効）
+            self.skip_connection_weight = 1.0
+            self.current_dropout = 0.1
+
+        # ドロップアウトの動的更新
+        self._update_dropout_rates()
+
+    def _update_dropout_rates(self):
+        """モデル全体のドロップアウト率を更新"""
+        for module in self.modules():
+            if isinstance(module, nn.Dropout):
+                module.p = self.current_dropout
+
     def on_epoch_start(self, epoch: int):
         """学習ループからエポックの開始時呼び出されるメソッド"""
         self.loss_scheduler.step(epoch)
+        if self.progressive_training:
+            self.set_training_phase(epoch)
+            if epoch % 10 == 0:  # 10エポックごとにログ出力
+                print(f"Epoch {epoch}: Skip weight = {self.skip_connection_weight:.3f}, "
+                      f"Dropout = {self.current_dropout:.3f}")
 
     def reparameterize(self, mu, logvar):
+        """改良された再パラメータ化トリック"""
+        # 数値安定性のためのクリッピング
+        logvar = torch.clamp(logvar, min=-8, max=8)
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
@@ -433,13 +574,18 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
 
         # エンコード
         encoded = self.encoder(x)
+        skip_features = encoded.get('skip_features', None)
 
         # 潜在変数サンプリング
         z_style = self.reparameterize(encoded['style_mu'], encoded['style_logvar'])
         z_skill = self.reparameterize(encoded['skill_mu'], encoded['skill_logvar'])
 
         # デコード
-        reconstructed = self.decoder(z_style, z_skill)
+        reconstructed = self.decoder(
+            z_style, z_skill,
+            skip_features = skip_features,
+            skip_weight= self.skip_connection_weight
+        )
 
         # 補助タスク
         subject_pred = None
@@ -464,102 +610,116 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
 
         return result | losses
 
-    def compute_losses(self, x, reconstructed, encoded, z_style, z_skill, subject_pred, skill_score_pred, subject_ids,
-                       skill_scores):
-        # スケジューラから現在の重みを取得
-        weights = self.loss_scheduler.get_weights()
+    def compute_losses(self, x, reconstructed, encoded, z_style, z_skill,
+                       subject_pred, skill_score_pred, subject_ids, skill_scores):
+        """修正された損失計算（KL重複問題を解決）"""
+        device = x.device
 
-        # CLAUDE_ADDED: 効率的なNaN/inf検出（デバッグ時のみ有効）
-        def safe_tensor(tensor, name="unknown"):
-            if self.training and hasattr(self, '_debug_nan_check') and self._debug_nan_check:
-                if torch.any(torch.isnan(tensor)) or torch.any(torch.isinf(tensor)):
-                    print(f"Warning: {name} contains NaN or inf, replacing with zeros")
-                    return torch.zeros_like(tensor)
-            return tensor
+        def safe_loss(loss_tensor, default_val=0.0):
+            """NaN/infを安全に処理"""
+            if torch.isnan(loss_tensor) or torch.isinf(loss_tensor):
+                return torch.tensor(default_val, device=device, requires_grad=True)
+            return loss_tensor
 
-        # 再構成損失 - 安全な計算
-        reconstructed = safe_tensor(reconstructed, "reconstructed")
-        x = safe_tensor(x, "input_x")
-        losses = {'reconstruction_loss': F.mse_loss(reconstructed, x)}
+        # 再構成損失 - 段階的損失関数
+        if self.current_epoch < 50:
+            # 構造学習期間：Huber損失
+            loss_pos = F.smooth_l1_loss(reconstructed[:, :, 0:2], x[:, :, 0:2])
+            loss_vel = F.smooth_l1_loss(reconstructed[:, :, 2:4], x[:, :, 2:4])
+            loss_acc = F.smooth_l1_loss(reconstructed[:, :, 4:6], x[:, :, 4:6])
+        else:
+            # 通常期間：MSE損失
+            loss_pos = F.mse_loss(reconstructed[:, :, 0:2], x[:, :, 0:2])
+            loss_vel = F.mse_loss(reconstructed[:, :, 2:4], x[:, :, 2:4])
+            loss_acc = F.mse_loss(reconstructed[:, :, 4:6], x[:, :, 4:6])
 
-        # KLダイバージェンス - より厳格なクリッピング
+        total_recon_loss = safe_loss(1.0 * loss_pos + 1.0 * loss_vel + 0.1 * loss_acc)
+        losses = {'reconstruction_loss': total_recon_loss}
+
+        # KLダイバージェンス - 数値安定性向上
         style_mu_clamped = torch.clamp(encoded['style_mu'], min=-5, max=5)
         skill_mu_clamped = torch.clamp(encoded['skill_mu'], min=-5, max=5)
         style_logvar_clamped = torch.clamp(encoded['style_logvar'], min=-8, max=8)
         skill_logvar_clamped = torch.clamp(encoded['skill_logvar'], min=-8, max=8)
 
-        # KL損失の安全な計算
         style_kl_terms = 1 + style_logvar_clamped - style_mu_clamped.pow(2) - style_logvar_clamped.exp()
         skill_kl_terms = 1 + skill_logvar_clamped - skill_mu_clamped.pow(2) - skill_logvar_clamped.exp()
 
-        style_kl_terms = safe_tensor(style_kl_terms, "style_kl_terms")
-        skill_kl_terms = safe_tensor(skill_kl_terms, "skill_kl_terms")
+        losses['kl_style_loss'] = safe_loss(-0.5 * torch.mean(torch.sum(style_kl_terms, dim=1)))
+        losses['kl_skill_loss'] = safe_loss(-0.5 * torch.mean(torch.sum(skill_kl_terms, dim=1)))
 
-        losses['kl_style_loss'] = -0.5 * torch.mean(torch.sum(style_kl_terms, dim=1))
-        losses['kl_skill_loss'] = -0.5 * torch.mean(torch.sum(skill_kl_terms, dim=1))
+        # 構造化損失の計算
+        structure_losses = {}
 
-        # 直交性損失(z_styleとz_skillの独立性を促進)
+        # 直交性損失
         if self.calc_orthogonal_loss:
-            # バッチ方向で標準化
-            z_style_norm = (z_style - z_style.mean(dim=0)) / (z_style.std(dim=0) + 1e-8)
-            z_skill_norm = (z_skill - z_skill.mean(dim=0)) / (z_skill.std(dim=0) + 1e-8)
+            z_style_norm = F.normalize(z_style - z_style.mean(dim=0), p=2, dim=1)
+            z_skill_norm = F.normalize(z_skill - z_skill.mean(dim=0), p=2, dim=1)
 
-            # 相関行列を計算
-            cross_correlation_matrix = torch.matmul(z_style_norm.T, z_skill_norm) / z_style.shape[0]
-
-            losses['orthogonal_loss'] = torch.mean(cross_correlation_matrix ** 2)
+            correlation = torch.mm(z_style_norm.T, z_skill_norm) / z_style.size(0)
+            orthogonal_loss = safe_loss(torch.norm(correlation, p='fro') ** 2)
+            losses['orthogonal_loss'] = orthogonal_loss
+            structure_losses['orthogonal'] = orthogonal_loss
 
         # スタイル空間関連の損失
         if subject_ids is not None:
-            # CLAUDE_ADDED: 全被験者を固定的なインデックスにマッピング（一貫性を保つ）
-            # todo ここハードコード　悔い改めて直せ
             all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa']
             subject_to_idx = {subj: i for i, subj in enumerate(all_subjects)}
-            subject_indices = torch.tensor([subject_to_idx[subj] for subj in subject_ids],
-                                           device=z_style.device)
-            # 対照学習
-            if self.calc_contrastive_loss:
-                losses['contrastive_loss'] = self.contrastive_loss(z_style, subject_indices)
+            subject_indices = torch.tensor([subject_to_idx[subj] for subj in subject_ids], device=z_style.device)
 
-            # CLAUDE_ADDED: スタイル分類サブタスクの安全な実行
+            if self.calc_contrastive_loss:
+                contrastive_loss = safe_loss(self.contrastive_loss(z_style, subject_indices))
+                losses['contrastive_loss'] = contrastive_loss
+                structure_losses['contrastive'] = contrastive_loss
+
             if self.calc_style_subtask and subject_pred is not None:
-                losses['style_classification_loss'] = F.cross_entropy(subject_pred, subject_indices)
+                style_cls_loss = safe_loss(F.cross_entropy(subject_pred, subject_indices))
+                losses['style_classification_loss'] = style_cls_loss
+                structure_losses['style_classification'] = style_cls_loss
 
         # スキル空間関連の損失
         if skill_scores is not None:
-            # CLAUDE_ADDED: スキルスコア回帰損失の安全な実行
             if self.calc_skill_subtask and skill_score_pred is not None:
-                # skill_score_pred: [batch, 1] -> [batch] に変換
                 skill_score_pred_flat = skill_score_pred.squeeze(-1)
-                losses['skill_regression_loss'] = F.mse_loss(skill_score_pred_flat, skill_scores)
+                skill_reg_loss = safe_loss(F.mse_loss(skill_score_pred_flat, skill_scores))
+                losses['skill_regression_loss'] = skill_reg_loss
+                structure_losses['skill_regression'] = skill_reg_loss
 
-            # 熟達者多様体形成損失
             if self.calc_manifold_loss:
-                losses['manifold_loss'] = self.compute_manifold_loss(z_skill, skill_scores)
-        # else:
-        # CLAUDE_ADDED: skill_scoresがNoneの場合は0の損失を設定
-        # losses['skill_regression_loss'] = torch.tensor(0.0, device=x.device)
+                manifold_loss = safe_loss(self.compute_manifold_loss(z_skill, skill_scores))
+                losses['manifold_loss'] = manifold_loss
+                structure_losses['manifold'] = manifold_loss
 
-        # 総合損失の計算
-        # CLAUDE_ADDED: スタイル空間とスキル空間で異なるKL重みを適用
-        beta_style_weight = weights.get('beta_style', weights.get('beta', 0.0))  # 後方互換性確保
-        beta_skill_weight = weights.get('beta_skill', weights.get('beta', 0.0))  # 後方互換性確保
+        # 適応的重み取得
+        weights = self.loss_scheduler.get_adaptive_weights(
+            self.current_epoch, total_recon_loss, structure_losses
+        )
 
-        total_loss = (losses['reconstruction_loss']
-                      + beta_style_weight * losses['kl_style_loss']  # スタイル空間のKL損失
-                      + beta_skill_weight * losses['kl_skill_loss']  # スキル空間のKL損失（軽減）
+        # 修正された総合損失計算（KL重複なし）
+        # beta_styleとbeta_skillは既に区分線形で統合済み、重複加算しない
+        total_loss = (weights.get('reconstruction', 1.0) * total_recon_loss
+                      + weights.get('beta_style', 0.0) * losses['kl_style_loss']  # 統合済みの重み
+                      + weights.get('beta_skill', 0.0) * losses['kl_skill_loss']  # 統合済みの重み
                       + weights.get('orthogonal_loss', 0.0) * losses.get('orthogonal_loss',
-                                                                         torch.tensor(0.0, device=x.device))
+                                                                         torch.tensor(0.0, device=device))
                       + weights.get('contrastive_loss', 0.0) * losses.get('contrastive_loss',
-                                                                          torch.tensor(0.0, device=x.device))
+                                                                          torch.tensor(0.0, device=device))
                       + weights.get('manifold_loss', 0.0) * losses.get('manifold_loss',
-                                                                       torch.tensor(0.0, device=x.device))
+                                                                       torch.tensor(0.0, device=device))
                       + weights.get('style_classification_loss', 0.0) * losses.get('style_classification_loss',
-                                                                                   torch.tensor(0.0, device=x.device))
+                                                                                   torch.tensor(0.0, device=device))
                       + weights.get('skill_regression_loss', 0.0) * losses.get('skill_regression_loss',
-                                                                               torch.tensor(0.0, device=x.device)))
+                                                                               torch.tensor(0.0, device=device)))
 
-        losses['total_loss'] = total_loss
+        losses['total_loss'] = safe_loss(total_loss)
+
+        # 学習進捗の監視（10エポックごと）
+        if self.current_epoch % 10 == 0:
+            avg_structure_loss = sum(structure_losses.values()) / max(len(structure_losses),
+                                                                      1) if structure_losses else 0.0
+            print(f"Epoch {self.current_epoch}: Recon={total_recon_loss:.4f}, Struct_avg={avg_structure_loss:.4f}")
+            print(
+                f"  Current weights - beta_style: {weights.get('beta_style', 0.0):.4f}, beta_skill: {weights.get('beta_skill', 0.0):.4f}")
 
         return losses
 
@@ -664,7 +824,7 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
 
     def decode(self, z_style, z_skill):
         """デコードのみ"""
-        trajectory = self.decoder(z_style, z_skill)
+        trajectory = self.decoder(z_style, z_skill, skip_features=None, skip_weight=0.0)
         return {'trajectory': trajectory}
 
     def _prototype_based_classification(self, z_style: torch.Tensor, subject_ids: list = None):
@@ -745,4 +905,9 @@ class ImprovedStyleSkillSeparationNet(BaseExperimentModel):
             'counts': self.prototype_counts.cpu().numpy(),
             'active_prototypes': (self.prototype_counts > 0).sum().item()
         }
+
+
+
+
+
 
