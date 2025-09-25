@@ -216,7 +216,9 @@ class ImprovedStyleSkillSeparationNetEncoder(nn.Module):
         }
 
 
-class AutoRegressiveDecoder(nn.Module):
+class TransformerAutoRegressiveDecoder(nn.Module):
+    """CLAUDE_ADDED: TransformerDecoderを使用した自己回帰型デコーダ"""
+
     def __init__(self,
                  output_dim,
                  seq_len,
@@ -233,88 +235,152 @@ class AutoRegressiveDecoder(nn.Module):
         self.d_model = d_model
         self.output_dim = output_dim
 
-        # より小さなd_modelでも効果的な設計
-        compact_dim = d_model // 2  # パラメータ削減
-
-        # 潜在変数の条件付け（コンパクト設計）
-        self.condition_encoder = nn.Sequential(
-            nn.Linear(style_latent_dim + skill_latent_dim, compact_dim),
+        # 潜在変数からメモリ（キー・バリュー）の生成
+        self.memory_encoder = nn.Sequential(
+            nn.Linear(style_latent_dim + skill_latent_dim, d_model),
+            nn.LayerNorm(d_model),
             nn.GELU(),
-            nn.LayerNorm(compact_dim),
-            nn.Linear(compact_dim, compact_dim)
+            nn.Linear(d_model, d_model)
         )
 
-        # 初期状態生成（スタート位置の予測）
-        self.initial_state_predictor = nn.Sequential(
-            nn.Linear(compact_dim, compact_dim),
-            nn.GELU(),
-            nn.Linear(compact_dim, output_dim)
+        # 入力埋め込み層（出力次元からd_modelへ）
+        self.input_embedding = nn.Linear(output_dim, d_model)
+
+        # 位置エンコーディング
+        self.pos_encoding = PositionalEncoding(d_model, seq_len)
+
+        # TransformerDecoder層
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=d_model * 4,
+            dropout=dropout,
+            activation='gelu',
+            batch_first=True
+        )
+        self.transformer_decoder = nn.TransformerDecoder(
+            decoder_layer,
+            num_layers=n_layers
         )
 
-        # 前の状態の埋め込み（位置・速度・加速度を効率的に処理）
-        self.prev_state_embedding = nn.Sequential(
-            nn.Linear(output_dim, compact_dim),
-            nn.LayerNorm(compact_dim),
-            nn.GELU()
-        )
-
-        # 状態遷移予測ネットワーク（コンパクト設計）
-        self.state_transition = nn.Sequential(
-            nn.Linear(compact_dim * 2, compact_dim),  # 条件 + 前状態
+        # 出力射影層
+        self.output_projection = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
             nn.GELU(),
-            nn.LayerNorm(compact_dim),
             nn.Dropout(dropout),
-            nn.Linear(compact_dim, compact_dim),
-            nn.GELU(),
-            nn.Linear(compact_dim, output_dim)  # 次状態の変化量を予測
+            nn.Linear(d_model // 2, output_dim)
         )
 
-        # 時間埋め込み（位置エンコーディングの代わり）
-        self.time_embedding = nn.Embedding(seq_len, compact_dim)
+        # CLAUDE_FIXED: 学習可能な開始トークン（より小さな初期化）
+        self.start_token = nn.Parameter(torch.zeros(1, 1, output_dim))  # ゼロ初期化で安定化
+
+        # CLAUDE_ADDED: 重み初期化
+        self._initialize_weights()
+
+    def _initialize_weights(self):
+        """CLAUDE_ADDED: より控えめな重み初期化"""
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                # Xavier初期化でgainを小さく
+                nn.init.xavier_uniform_(module.weight, gain=0.3)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+            elif isinstance(module, nn.LayerNorm):
+                nn.init.constant_(module.bias, 0)
+                nn.init.constant_(module.weight, 1.0)
+
+    def _generate_causal_mask(self, seq_len, device):
+        """CLAUDE_ADDED: 因果マスク生成（未来の情報を見えなくする）"""
+        mask = torch.triu(torch.ones(seq_len, seq_len, device=device), diagonal=1)
+        return mask.bool()
 
     def forward(self, z_style, z_skill, ground_truth=None, teacher_forcing_ratio=0.5):
+        """CLAUDE_ADDED: TransformerDecoderによる自己回帰生成"""
         batch_size = z_style.size(0)
         device = z_style.device
 
-        # 潜在変数を条件情報にエンコード
-        condition = torch.cat([z_style, z_skill], dim=-1)
-        condition_features = self.condition_encoder(condition)  # [batch, compact_dim]
+        # 潜在変数をメモリに変換（クロスアテンションで使用）
+        condition = torch.cat([z_style, z_skill], dim=-1)  # [batch, style_dim + skill_dim]
+        memory = self.memory_encoder(condition).unsqueeze(1)  # [batch, 1, d_model]
+        memory = memory.expand(-1, self.seq_len, -1)  # [batch, seq_len, d_model]
 
-        # 初期状態（スタート位置）を予測
-        initial_state = self.initial_state_predictor(condition_features)
-        outputs = [initial_state]
-        current_state = initial_state
+        # 学習時（Teacher Forcing使用） - CLAUDE_FIXED: teacher_forcing_ratioを正しく実装
+        if self.training and ground_truth is not None:
+            # 時刻毎にTeacher Forcingを適用
+            outputs = []
+            current_input = self.start_token.expand(batch_size, -1, -1)  # [batch, 1, output_dim]
 
-        # 自己回帰的生成
-        for t in range(1, self.seq_len):
-            # 時間情報
-            time_emb = self.time_embedding(torch.tensor(t, device=device))
-            time_emb = time_emb.unsqueeze(0).expand(batch_size, -1)
+            for t in range(self.seq_len):
+                # 現在までの入力を埋め込み
+                embedded_input = self.input_embedding(current_input)  # [batch, t+1, d_model]
+                positioned_input = self.pos_encoding(embedded_input)
 
-            # 前の状態を埋め込み
-            prev_embedded = self.prev_state_embedding(current_state)
+                # 因果マスク生成（現在の長さに対応）
+                current_len = positioned_input.size(1)
+                causal_mask = self._generate_causal_mask(current_len, device)
 
-            # 条件 + 時間 + 前状態を結合
-            combined_input = torch.cat([
-                condition_features + time_emb,  # 条件に時間情報を追加
-                prev_embedded
-            ], dim=-1)
+                # CLAUDE_FIXED: メモリは全時刻分を保持（TransformerDecoderの正しい使い方）
+                current_memory = memory  # [batch, seq_len, d_model] 全時刻分を使用
 
-            # 次状態の変化量を予測
-            delta_state = self.state_transition(combined_input)
+                # TransformerDecoder適用
+                decoded = self.transformer_decoder(
+                    tgt=positioned_input,
+                    memory=current_memory,
+                    tgt_mask=causal_mask
+                )  # [batch, t+1, d_model]
 
-            # 次の状態 = 前の状態 + 変化量（物理的な連続性）
-            next_state = current_state + delta_state
-            outputs.append(next_state)
+                # 最後のトークンのみ射影
+                next_output = self.output_projection(decoded[:, -1:, :])  # [batch, 1, output_dim]
+                outputs.append(next_output)
 
-            # Teacher Forcing の判定
-            if (self.training and ground_truth is not None and
-                    torch.rand(1).item() < teacher_forcing_ratio):
-                current_state = ground_truth[:, t, :]
-            else:
-                current_state = next_state
+                # CLAUDE_FIXED: Teacher Forcing確率に基づいて次の入力を決定
+                if t < self.seq_len - 1:  # 最後のステップでは不要
+                    if torch.rand(1).item() < teacher_forcing_ratio:
+                        # Teacher Forcing: 正解データを使用
+                        next_input = ground_truth[:, t:t+1, :]
+                    else:
+                        # 自己回帰: 自分の予測を使用
+                        next_input = next_output
 
-        return torch.stack(outputs, dim=1)
+                    current_input = torch.cat([current_input, next_input], dim=1)
+
+            output = torch.cat(outputs, dim=1)  # [batch, seq_len, output_dim]
+
+        else:
+            # 推論時（自己回帰生成）
+            outputs = []
+            current_input = self.start_token.expand(batch_size, -1, -1)  # [batch, 1, output_dim]
+
+            for t in range(self.seq_len):
+                # 現在までの入力を埋め込み
+                embedded_input = self.input_embedding(current_input)  # [batch, t+1, d_model]
+                positioned_input = self.pos_encoding(embedded_input)
+
+                # 因果マスク生成（現在の長さに対応）
+                current_len = positioned_input.size(1)
+                causal_mask = self._generate_causal_mask(current_len, device)
+
+                # CLAUDE_FIXED: メモリは全時刻分を保持（TransformerDecoderの正しい使い方）
+                current_memory = memory  # [batch, seq_len, d_model] 全時刻分を使用
+
+                # TransformerDecoder適用
+                decoded = self.transformer_decoder(
+                    tgt=positioned_input,
+                    memory=current_memory,
+                    tgt_mask=causal_mask
+                )  # [batch, t+1, d_model]
+
+                # 最後のトークンのみ射影
+                next_output = self.output_projection(decoded[:, -1:, :])  # [batch, 1, output_dim]
+                outputs.append(next_output)
+
+                # 次の入力を準備
+                if t < self.seq_len - 1:
+                    current_input = torch.cat([current_input, next_output], dim=1)
+
+            output = torch.cat(outputs, dim=1)  # [batch, seq_len, output_dim]
+
+        return output
 
 
 class SelfRegressiveStyleSkillSeparationNet(BaseExperimentModel):
@@ -406,16 +472,16 @@ class SelfRegressiveStyleSkillSeparationNet(BaseExperimentModel):
                                                               skill_latent_dim
                                                               )
 
-        # CLAUDE_ADDED: 新しいAutoRegressiveDecoderを使用
-        self.decoder = AutoRegressiveDecoder(input_dim,
-                                             seq_len,
-                                             d_model,
-                                             n_heads,
-                                             n_decoder_layers,
-                                             dropout,
-                                             style_latent_dim,
-                                             skill_latent_dim
-                                             )
+        # CLAUDE_ADDED: TransformerAutoRegressiveDecoderを使用
+        self.decoder = TransformerAutoRegressiveDecoder(input_dim,
+                                                        seq_len,
+                                                        d_model,
+                                                        n_heads,
+                                                        n_decoder_layers,
+                                                        dropout,
+                                                        style_latent_dim,
+                                                        skill_latent_dim
+                                                        )
 
         # CLAUDE_ADDED: プロトタイプベースのスタイル識別 (被験者数に依存しない)
         if self.calc_style_subtask:
@@ -446,6 +512,10 @@ class SelfRegressiveStyleSkillSeparationNet(BaseExperimentModel):
 
         # 初期化
         self._initialize_weights()
+
+    def on_epoch_start(self, epoch: int):
+        """CLAUDE_ADDED: 学習ループからエポックの開始時呼び出されるメソッド"""
+        self.loss_scheduler.step(epoch)
 
     def _initialize_weights(self):
         """CLAUDE_ADDED: Xavier初期化で重みを安定化"""
@@ -481,7 +551,7 @@ class SelfRegressiveStyleSkillSeparationNet(BaseExperimentModel):
         z_style = self.reparameterize(encoded['style_mu'], encoded['style_logvar'])
         z_skill = self.reparameterize(encoded['skill_mu'], encoded['skill_logvar'])
 
-        # CLAUDE_ADDED: AutoRegressiveDecoderで再構築（Teacher Forcing対応）
+        # CLAUDE_ADDED: TransformerAutoRegressiveDecoderで再構築（Teacher Forcing対応）
         # 訓練時は元データをground_truthとして渡す
         ground_truth = x if self.training else None
         reconstructed = self.decoder(z_style, z_skill, ground_truth, teacher_forcing_ratio)
@@ -620,3 +690,22 @@ class SelfRegressiveStyleSkillSeparationNet(BaseExperimentModel):
 
         losses['total_loss'] = total_loss
         return losses
+
+    def encode(self, x):
+        """CLAUDE_ADDED: エンコードのみ"""
+        encoded = self.encoder(x)
+        z_style = self.reparameterize(encoded['style_mu'], encoded['style_logvar'])
+        z_skill = self.reparameterize(encoded['skill_mu'], encoded['skill_logvar'])
+        return {'z_style': z_style, 'z_skill': z_skill}
+
+    def decode(self, z_style, z_skill, ground_truth=None, teacher_forcing_ratio=0.0):
+        """CLAUDE_ADDED: デコードのみ
+
+        Args:
+            z_style: スタイル潜在変数 [batch_size, style_latent_dim]
+            z_skill: スキル潜在変数 [batch_size, skill_latent_dim]
+            ground_truth: Teacher Forcing用の正解データ（オプション）
+            teacher_forcing_ratio: Teacher Forcingの確率（デフォルト: 0.0）
+        """
+        trajectory = self.decoder(z_style, z_skill, ground_truth, teacher_forcing_ratio)
+        return {'trajectory': trajectory}

@@ -64,6 +64,9 @@ class EvaluationPipeline:
         if evaluation_config.get('style_skill_orthogonality_analysis', False):
             from .base_line_evaluator import OrthogonalityEvaluator
             self.evaluators.append(OrthogonalityEvaluator(self.config))
+        if evaluation_config.get('trajectory_overlay_analysis', False):
+            from .trajectory_overlay_evaluator import TrajectoryOverlayEvaluator
+            self.evaluators.append(TrajectoryOverlayEvaluator(self.config))
 
         # スタイル空間評価器
         if evaluation_config.get('visualize_style_space_analysis', False):

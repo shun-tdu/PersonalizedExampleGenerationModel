@@ -44,6 +44,8 @@ Thumbs.db
 # 8. 大規模なデータセットや出力ファイル
 src/mlruns
 src/checkpoints
+src/PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/outputs/
+src/PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/configs/
 
 # 9. テスト関連ファイル
 .pytest_cache/
