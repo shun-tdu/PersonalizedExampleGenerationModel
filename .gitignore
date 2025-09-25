@@ -53,6 +53,7 @@ src/diffwave_overfit_generation_results/
 src/diffwave_overfit_results/
 src/outputs/
 src/PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/outputs/
+src/PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/configs/
 
 # # Model-specific output directories
 # 各モデルの出力ディレクトリ
