@@ -35,7 +35,6 @@ dist/
 
 
 # # Sensitive information
-# APIキーやパスワードなどを記述するファイル (非常に重要！)
 .env
 *.env
 secrets.yaml
@@ -53,6 +52,7 @@ src/transformer_overfit_results/
 src/diffwave_overfit_generation_results/
 src/diffwave_overfit_results/
 src/outputs/
+src/PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/outputs/
 
 # # Model-specific output directories
 # 各モデルの出力ディレクトリ
