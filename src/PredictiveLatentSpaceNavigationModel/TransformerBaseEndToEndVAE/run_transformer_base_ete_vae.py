@@ -217,6 +217,9 @@ class IntegratedExperimentRunner:
         try:
             train_loader, val_loader, test_loader, test_df, train_dataset, val_dataset, test_dataset = DataLoaderFactory.create_dataloaders(self.config)
 
+            # CLAUDE_ADDED: スケーラーとフィーチャー設定を取得（評価器で逆標準化に使用）
+            scalers, feature_config = self._load_scalers_and_config()
+
             # テストデータ準備(評価用)
             test_data = {
                 'train_dataset': train_dataset,
@@ -224,6 +227,8 @@ class IntegratedExperimentRunner:
                 'test_dataset': test_dataset,
                 'test_loader': test_loader,
                 'test_df': test_df,
+                'scalers': scalers,  # CLAUDE_ADDED: 逆標準化用スケーラー
+                'feature_config': feature_config,  # CLAUDE_ADDED: 特徴量設定
                 'output_dir': self.output_dir,
                 'experiment_id': self.experiment_id or 0,
                 'dataset_info': dataset_info
@@ -240,6 +245,32 @@ class IntegratedExperimentRunner:
             print(f"データ読み込みエラー: {e}")
             # フォールバックとして例外を再発生（エラーハンドリングは呼び出し元で）
             raise
+
+    def _load_scalers_and_config(self):
+        """スケーラーと特徴量設定を読み込み - CLAUDE_ADDED: 評価器での逆標準化に必要"""
+        import joblib
+        import os
+
+        data_config = self.config.get('data', {})
+        data_path = data_config.get('data_path')
+
+        if not data_path:
+            print("Warning: data_path not found in config. Scalers will not be available.")
+            return {}, {}
+
+        scalers_path = os.path.join(data_path, 'scalers.joblib')
+        feature_config_path = os.path.join(data_path, 'feature_config.joblib')
+
+        try:
+            scalers = joblib.load(scalers_path) if os.path.exists(scalers_path) else {}
+            feature_config = joblib.load(feature_config_path) if os.path.exists(feature_config_path) else {}
+
+            print(f"Scalers loaded: {list(scalers.keys()) if scalers else 'None'}")
+            return scalers, feature_config
+
+        except Exception as e:
+            print(f"Warning: Failed to load scalers/feature_config: {e}")
+            return {}, {}
         
     def _setup_model(self):
         """モデル設定"""
