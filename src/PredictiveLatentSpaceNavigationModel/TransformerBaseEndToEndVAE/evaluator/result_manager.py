@@ -346,7 +346,7 @@ class EnhancedEvaluationResult:
                                         frameborder="0"
                                         scrolling="no"
                                         style="border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);"
-                                        onerror="console.error('Failed to load plotly iframe: {rel_embed_path}')">
+                                        onerror="console.error('Failed to load plotly iframe: ' + this.src)">
                                     <p>インタラクティブプロットを読み込み中...</p>
                                 </iframe>
                             </div>
