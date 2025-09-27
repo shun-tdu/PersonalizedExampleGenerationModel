@@ -8,6 +8,44 @@ import numpy as np
 from models.base_model import BaseExperimentModel
 from models.components.loss_weight_scheduler import LossWeightScheduler
 
+
+class ImprovedContrastiveLoss(nn.Module):
+    def __init__(self, temperature=0.07, margin=1.0):
+        super().__init__()
+        self.temperature = temperature
+        self.margin = margin
+
+    def forward(self, features, labels):
+        # ハードネガティブマイニングを追加
+        batch_size = features.shape[0]
+
+        # 特徴量正規化
+        features = F.normalize(features, p=2, dim=1)
+
+        # ペアワイズ距離計算
+        distances = torch.cdist(features, features, p=2)
+
+        # ラベルマスク
+        labels = labels.view(-1, 1)
+        pos_mask = (labels == labels.T).float()
+        neg_mask = 1 - pos_mask
+
+        # トリプレットマージン損失的アプローチ
+        pos_distances = distances * pos_mask
+        neg_distances = distances * neg_mask + pos_mask * 1e9  # 正例ペアを除外
+
+        # 各サンプルに対して最も近い負例を選択（ハードネガティブ）
+        hardest_negatives, _ = torch.min(neg_distances, dim=1)
+
+        # 各サンプルに対する正例の平均距離
+        pos_count = pos_mask.sum(dim=1) - 1  # 自分自身を除く
+        avg_positives = pos_distances.sum(dim=1) / (pos_count + 1e-8)
+
+        # マージン損失
+        loss = F.relu(avg_positives - hardest_negatives + self.margin)
+
+        return loss.mean()
+
 class SupervisedContrastiveLoss(nn.Module):
     """
     Supervised Contrastive Loss (SupCon) の実装。
@@ -681,7 +719,7 @@ class AdaptiveGatedSkipConnectionNet(BaseExperimentModel):
             )
 
         # 対照学習
-        self.contrastive_loss = SupervisedContrastiveLoss()
+        self.contrastive_loss = ImprovedContrastiveLoss()
 
         # エポック追跡
         self.current_epoch = 0
