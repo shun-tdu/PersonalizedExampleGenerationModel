@@ -8,54 +8,183 @@ import numpy as np
 from models.base_model import BaseExperimentModel
 from models.components.loss_weight_scheduler import LossWeightScheduler
 
-
-class ContrastiveLoss(nn.Module):
-    """対比学習損失"""
-
+class SupervisedContrastiveLoss(nn.Module):
+    """
+    Supervised Contrastive Loss (SupCon) の実装。
+    各アンカーに対して複数の正例・負例を考慮し、数値的安定性のためにlogsumexpを使用する。
+    """
     def __init__(self, temperature=0.07):
         super().__init__()
         self.temperature = temperature
 
     def forward(self, features, labels):
+        """
+        Args:
+            features (torch.Tensor): 潜在特徴量 [batch_size, feature_dim]
+            labels (torch.Tensor): ラベル [batch_size]
+
+        Returns:
+            torch.Tensor: 計算された損失値
+        """
         batch_size = features.shape[0]
+        # ラベルの形状を [batch_size, 1] に統一
         labels = labels.contiguous().view(-1, 1)
 
-        # CLAUDE_ADDED: バッチサイズが小さい場合の対処
+        # バッチサイズが1以下の場合は損失を計算できない
         if batch_size <= 1:
             return torch.tensor(0.0, device=features.device, requires_grad=True)
 
-        # 正例・負例マスク
-        mask = torch.eq(labels, labels.T).float()
+        # 正例ペアを識別するためのマスクを作成
+        # torch.eq(labels, labels.T) は、同じラベルを持つペアでTrueとなる行列を生成
+        mask = torch.eq(labels, labels.T).float().to(features.device)
 
-        # 特徴量正規化 - CLAUDE_ADDED: 数値安定性向上
-        features = F.normalize(features, p=2, dim=1, eps=1e-8)
+        # 特徴量をL2正規化（コサイン類似度を計算するため）
+        features = F.normalize(features, p=2, dim=1)
 
-        # 類似度計算 - CLAUDE_ADDED: 温度パラメータをクリップ
-        temperature_clamped = torch.clamp(torch.tensor(self.temperature), min=0.01)
-        similarity_matrix = torch.matmul(features, features.T) / temperature_clamped
+        # 類似度行列を計算
+        # features と features.T の内積を計算し、温度でスケーリング
+        similarity_matrix = torch.matmul(features, features.T) / self.temperature
 
-        # CLAUDE_ADDED: 類似度をクリップして数値安定性を向上
-        similarity_matrix = torch.clamp(similarity_matrix, min=-10, max=10)
+        # 対角要素（自分自身とのペア）は損失計算から除外する
+        # `logits_mask` は対角成分が0、その他が1の行列
+        logits_mask = torch.ones_like(mask) - torch.eye(batch_size, device=features.device)
+        mask = mask * logits_mask
 
-        # 対角成分除去
-        mask = mask - torch.eye(batch_size, device=mask.device)
-
-        # 損失計算 - CLAUDE_ADDED: 数値安定性の改善
-        exp_sim = torch.exp(similarity_matrix)
-        pos_sum = torch.sum(exp_sim * mask, dim=1)
-        neg_sum = torch.sum(exp_sim * (1 - torch.eye(batch_size, device=mask.device)), dim=1)
-
-        # CLAUDE_ADDED: ゼロ除算とlog(0)を防ぐ
-        pos_sum = torch.clamp(pos_sum, min=1e-8)
-        neg_sum = torch.clamp(neg_sum, min=1e-8)
-
-        loss = -torch.log(pos_sum / neg_sum)
-
-        # CLAUDE_ADDED: NaNチェック
-        if torch.any(torch.isnan(loss)):
+        # 各アンカーに対して正例が1つも存在しない場合のエッジケース処理
+        # (例: バッチ内の全サンプルが異なるラベルを持つ場合)
+        if mask.sum() == 0:
             return torch.tensor(0.0, device=features.device, requires_grad=True)
 
-        return loss.mean()
+        # log(exp(sim)) の分母部分を計算
+        # 自分自身を除外した全ペアの類似度でlogsumexpを計算
+        # 対角成分に大きな負の値を加算し、exp計算時に0に近づけることで除外する
+        logits = similarity_matrix - (1 - logits_mask) * 1e9
+        log_prob = logits - torch.logsumexp(logits, dim=1, keepdim=True)
+
+        # 正例ペアに対するlog確率の平均を計算
+        # (mask * log_prob).sum(1) で各アンカーの正例ペアに対するlog確率の合計を計算
+        # mask.sum(1) で各アンカーの正例の数で割り、平均を求める
+        mean_log_prob_pos = (mask * log_prob).sum(1) / torch.clamp(mask.sum(1), min=1.0)
+
+        # 損失を計算（負の対数尤度）し、バッチ全体で平均化
+        loss = -mean_log_prob_pos
+        loss = loss.mean()
+
+        return loss
+
+# class ContrastiveLoss(nn.Module):
+#     """対比学習損失"""
+#
+#     def __init__(self, temperature=0.07):
+#         super().__init__()
+#         self.temperature = temperature
+#
+#     def forward(self, features, labels):
+#         batch_size = features.shape[0]
+#         labels = labels.contiguous().view(-1, 1)
+#
+#         # CLAUDE_ADDED: バッチサイズが小さい場合の対処
+#         if batch_size <= 1:
+#             return torch.tensor(0.0, device=features.device, requires_grad=True)
+#
+#         # 正例・負例マスク
+#         mask = torch.eq(labels, labels.T).float()
+#
+#         # 特徴量正規化 - CLAUDE_ADDED: 数値安定性向上
+#         features = F.normalize(features, p=2, dim=1, eps=1e-8)
+#
+#         # 類似度計算 - CLAUDE_ADDED: 温度パラメータをクリップ
+#         temperature_clamped = torch.clamp(torch.tensor(self.temperature), min=0.01)
+#         similarity_matrix = torch.matmul(features, features.T) / temperature_clamped
+#
+#         # CLAUDE_ADDED: 類似度をクリップして数値安定性を向上
+#         similarity_matrix = torch.clamp(similarity_matrix, min=-10, max=10)
+#
+#         # 対角成分除去
+#         mask = mask - torch.eye(batch_size, device=mask.device)
+#
+#         # 損失計算 - CLAUDE_ADDED: 数値安定性の改善
+#         exp_sim = torch.exp(similarity_matrix)
+#         pos_sum = torch.sum(exp_sim * mask, dim=1)
+#         neg_sum = torch.sum(exp_sim * (1 - torch.eye(batch_size, device=mask.device)), dim=1)
+#
+#         # CLAUDE_ADDED: ゼロ除算とlog(0)を防ぐ
+#         pos_sum = torch.clamp(pos_sum, min=1e-8)
+#         neg_sum = torch.clamp(neg_sum, min=1e-8)
+#
+#         loss = -torch.log(pos_sum / neg_sum)
+#
+#         # CLAUDE_ADDED: NaNチェック
+#         if torch.any(torch.isnan(loss)):
+#             return torch.tensor(0.0, device=features.device, requires_grad=True)
+#
+#         return loss.mean()
+
+
+# class ContrastiveLoss(nn.Module):
+#     """
+#     Supervised Contrastive Lossの正しい実装 - CLAUDE_ADDED: より数学的に正確で安定
+#     """
+#     def __init__(self, temperature=0.07):
+#         super().__init__()
+#         self.temperature = temperature
+#         # CLAUDE_ADDED: デバッグ用の統計情報追跡
+#         self.register_buffer('debug_stats', torch.zeros(5))  # [loss, sim_max, sim_min, pos_pairs, neg_pairs]
+#
+#     def forward(self, features, labels):
+#         batch_size = features.shape[0]
+#         if batch_size <= 1:
+#             return torch.tensor(0.0, device=features.device, requires_grad=True)
+#
+#         # 特徴量をL2正規化
+#         features = F.normalize(features, p=2, dim=1)
+#
+#         # 類似度行列を計算し、温度でスケール
+#         similarity_matrix = torch.matmul(features, features.T) / self.temperature
+#
+#         # 自分自身とのペアを除外するためのマスク
+#         logits_mask = torch.ones_like(similarity_matrix) - torch.eye(batch_size, device=features.device)
+#
+#         # 正例ペアを定義するためのマスク（自分自身は含まない）
+#         labels = labels.contiguous().view(-1, 1)
+#         positive_mask = torch.eq(labels, labels.T).float()
+#         positive_mask = positive_mask * logits_mask # 対角成分を除外
+#
+#         # 正例が存在しないサンプルの場合、損失は0とする
+#         if positive_mask.sum() == 0:
+#             return torch.tensor(0.0, device=features.device, requires_grad=True)
+#
+#         # logsumexpを計算する際、自分自身を含めないように対角成分をマスク
+#         # 非常に大きな負の値を加算することでexpの結果が0に近くなる
+#         logits = similarity_matrix - (1 - logits_mask) * 1e9
+#
+#         # 分母部分: log(sum(exp)) を安定的に計算
+#         log_denominator = torch.logsumexp(logits, dim=1, keepdim=True)
+#
+#         # log(exp(pos)/sum(exp)) = pos - log(sum(exp))
+#         log_prob = similarity_matrix - log_denominator
+#
+#         # 各サンプルについて、正例ペアに対する損失の平均を計算
+#         # positive_mask.sum(1) で各サンプルの正例数で割る
+#         mean_log_prob_pos = (positive_mask * log_prob).sum(1) / torch.clamp(positive_mask.sum(1), min=1.0)
+#
+#         # 損失を計算（負の対数尤度）し、バッチ全体で平均
+#         loss = -mean_log_prob_pos
+#         final_loss = loss.mean()
+#
+#         # CLAUDE_ADDED: デバッグ統計の更新
+#         with torch.no_grad():
+#             sim_max = similarity_matrix[logits_mask.bool()].max().item()
+#             sim_min = similarity_matrix[logits_mask.bool()].min().item()
+#             n_pos_pairs = positive_mask.sum().item()
+#             n_neg_pairs = (logits_mask - positive_mask).sum().item()
+#             self.debug_stats[0] = final_loss.item()
+#             self.debug_stats[1] = sim_max
+#             self.debug_stats[2] = sim_min
+#             self.debug_stats[3] = n_pos_pairs
+#             self.debug_stats[4] = n_neg_pairs
+#
+#         return final_loss
 
 
 class PositionalEncoding(nn.Module):
@@ -552,7 +681,7 @@ class AdaptiveGatedSkipConnectionNet(BaseExperimentModel):
             )
 
         # 対照学習
-        self.contrastive_loss = ContrastiveLoss()
+        self.contrastive_loss = SupervisedContrastiveLoss()
 
         # エポック追跡
         self.current_epoch = 0

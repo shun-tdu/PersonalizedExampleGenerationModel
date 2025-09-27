@@ -384,7 +384,7 @@ class StyleSkillSeparationNet(BaseExperimentModel):
                  d_model=128,
                  n_heads=4,
                  n_encoder_layers=2,
-                 n_decoder_layers=2,  # CLAUDE_ADDED: typo修正 (単数形→複数形)
+                 n_decoder_layers=2,
                  dropout=0.1,
                  style_latent_dim=8,
                  skill_latent_dim=8,
