@@ -816,10 +816,19 @@ class AdaptiveGatedSkipConnectionNet(BaseExperimentModel):
         losses['bottleneck_loss'] = decoder_info['bottleneck_losses'].mean()
 
         # ゲートエントロピー損失（多様性促進）
-        gate_weights = torch.tensor(decoder_info['gate_weights'], device=x.device)
-        gate_weights = torch.clamp(gate_weights, 1e-8, 1-1e-8)
-        gate_entropy = -(gate_weights * torch.log(gate_weights) +
-                        (1-gate_weights) * torch.log(1-gate_weights)).mean()
+        gate_weights = torch.tensor(decoder_info['gate_weights'], device=x.device, requires_grad=True)
+        # CLAUDE_ADDED: より厳密な数値安定性のためのクランプ
+        gate_weights = torch.clamp(gate_weights, min=1e-6, max=1-1e-6)
+
+        # CLAUDE_ADDED: NaN回避のための安全なエントロピー計算
+        log_p = torch.log(gate_weights + 1e-8)
+        log_1_minus_p = torch.log(1 - gate_weights + 1e-8)
+        gate_entropy = -(gate_weights * log_p + (1-gate_weights) * log_1_minus_p).mean()
+
+        # CLAUDE_ADDED: NaNチェックとフォールバック
+        if torch.isnan(gate_entropy) or torch.isinf(gate_entropy):
+            gate_entropy = torch.tensor(0.0, device=x.device, requires_grad=True)
+
         losses['gate_entropy_loss'] = -gate_entropy  # エントロピーを最大化
 
         # ゲートバランス損失（50%付近を目標）
