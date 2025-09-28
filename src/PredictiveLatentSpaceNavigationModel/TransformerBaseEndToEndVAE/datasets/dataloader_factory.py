@@ -11,6 +11,7 @@ from typing import Dict, Any, Tuple, Optional, Type, List
 from .base_dataset import BaseExperimentDataset
 from .generalized_coordinate_dataset import  GeneralizedCoordinateDataset
 from .skill_metrics_dataset import SkillMetricsDataset  # CLAUDE_ADDED
+from .hierarchical_skill_dataset import HierarchicalSkillDataset, StyleVAESkillSequenceDataset  # CLAUDE_ADDED
 
 class DatasetRegistry:
     """データセットタイプの登録システム"""
@@ -18,6 +19,8 @@ class DatasetRegistry:
     _datasets = {
         'generalized_coordinate': GeneralizedCoordinateDataset,
         'skill_metrics': SkillMetricsDataset,  # スキルスコア入りデータセット[batch, trajectory, subject_id, skill_score]
+        'hierarchical_skill': HierarchicalSkillDataset,  # CLAUDE_ADDED: 階層型VAE用データセット
+        'style_vae_sequences': StyleVAESkillSequenceDataset,  # CLAUDE_ADDED: StyleVAE用スキル系列データセット
     }
 
     @classmethod
@@ -57,6 +60,8 @@ class DataLoaderFactory:
             return DataLoaderFactory._create_generalized_coordinate_dataloaders(data_config, training_config)
         elif dataset_type == 'skill_metrics':
             return DataLoaderFactory._create_skill_metrics_dataloaders(data_config, training_config)  # CLAUDE_ADDED
+        elif dataset_type == 'hierarchical_skill':
+            return DataLoaderFactory._create_hierarchical_skill_dataloaders(data_config, training_config)  # CLAUDE_ADDED
         else:
             return DataLoaderFactory._create_custom_dataloaders(data_config, training_config)
 
@@ -191,6 +196,79 @@ class DataLoaderFactory:
         train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False) if val_dataset else None
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+        return train_loader, val_loader, test_loader, test_df, train_dataset, val_dataset, test_dataset
+
+    @staticmethod
+    def _create_hierarchical_skill_dataloaders(data_config: Dict[str, Any], training_config: Dict[str, Any]) -> Tuple[DataLoader, Optional[DataLoader], DataLoader, pd.DataFrame, Dataset, Optional[Dataset], Dataset]:
+        """階層型スキルデータローダーを作成 - CLAUDE_ADDED"""
+        print("階層型スキルデータローダーを作成中...")
+
+        if 'data_path' not in data_config:
+            raise KeyError("data_configに 'data_path'のキーが見つかりません")
+
+        data_path = data_config['data_path']
+        batch_size = training_config.get('batch_size', 32)
+        random_seed = data_config.get('random_seed', 42)
+        stage = data_config.get('stage', 'skill')  # 'skill' または 'style'
+
+        # データのパス
+        train_data_path = os.path.join(data_path, 'train_data.parquet')
+        test_data_path = os.path.join(data_path, 'test_data.parquet')
+        scalers_path = os.path.join(data_path, 'scalers.joblib')
+        feature_config_path = os.path.join(data_path, 'feature_config.joblib')
+
+        try:
+            # データとスケーラーを読み込み
+            train_val_df = pd.read_parquet(train_data_path)
+            test_df = pd.read_parquet(test_data_path)
+            scalers = joblib.load(scalers_path)
+            feature_config = joblib.load(feature_config_path)
+            feature_cols = feature_config['feature_cols']
+
+            print(f"Loaded scalers: {list(scalers.keys())}")
+            print(f"Feature columns: {feature_cols}")
+            print(f"Training stage: {stage}")
+
+        except FileNotFoundError as e:
+            print(f"エラー: データローダー作成に必要なファイルがありません: {e}")
+            raise
+
+        # 学習用データと検証データに分割
+        train_val_subject_ids = train_val_df['subject_id'].unique()
+
+        if len(train_val_subject_ids) < 2:
+            print("警告: 検証セットを作成するには学習データの被験者が2人以上必要です。検証セットなしで進めます。")
+            train_ids = train_val_subject_ids
+            val_ids = []
+        else:
+            train_ids, val_ids = train_test_split(
+                train_val_subject_ids,
+                test_size=data_config.get('val_split', 0.25),
+                random_state=random_seed
+            )
+
+        train_df = train_val_df[train_val_df['subject_id'].isin(train_ids)]
+        val_df = train_val_df[train_val_df['subject_id'].isin(val_ids)]
+
+        print(f"データ分割: 学習用={len(train_ids)}人, 検証用={len(val_ids)}人, テスト用={len(test_df['subject_id'].unique())}人")
+
+        # Datasetの作成（stage指定でスキル/スタイル学習切り替え）
+        train_dataset = HierarchicalSkillDataset(train_df, scalers, feature_cols, data_config, stage=stage)
+        val_dataset = HierarchicalSkillDataset(val_df, scalers, feature_cols, data_config, stage=stage) if not val_df.empty else None
+        test_dataset = HierarchicalSkillDataset(test_df, scalers, feature_cols, data_config, stage=stage)
+
+        # DataLoaderの作成
+        num_workers = data_config.get('num_workers', 4)
+        pin_memory = data_config.get('pin_memory', True)
+        shuffle = data_config.get('shuffle', True)
+
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=shuffle,
+                                num_workers=num_workers, pin_memory=pin_memory)
+        val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False,
+                              num_workers=num_workers, pin_memory=pin_memory) if val_dataset else None
+        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False,
+                               num_workers=num_workers, pin_memory=pin_memory)
 
         return train_loader, val_loader, test_loader, test_df, train_dataset, val_dataset, test_dataset
 
