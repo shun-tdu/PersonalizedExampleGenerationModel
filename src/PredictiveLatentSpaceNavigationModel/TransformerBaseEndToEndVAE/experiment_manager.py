@@ -129,6 +129,9 @@ class ModelWrapper:
         self.model = model
         self.config = config
 
+        # CLAUDE_ADDED: 汎用的なprerequisites処理
+        self._handle_prerequisites()
+
     def compute_losses(self, batch_data) -> Dict[str, Any]:
         """損失を計算して辞書で返す"""
 
@@ -169,6 +172,146 @@ class ModelWrapper:
             return self.model.evaluate(test_data)
         else:
             return {}
+
+    # CLAUDE_ADDED: 汎用的なprerequisites処理機能
+    def _handle_prerequisites(self):
+        """設定ファイルのprerequisitesセクションを処理"""
+        prerequisites = self.config.get('prerequisites', {})
+        if not prerequisites:
+            return
+
+        print("Prerequisites処理開始...")
+
+        # BaseExperimentModelのload_pretrained_weightsメソッドを使用
+        if hasattr(self.model, 'load_pretrained_weights'):
+            checkpoint_configs = self._build_checkpoint_configs(prerequisites)
+            if checkpoint_configs:
+                self.model.load_pretrained_weights(checkpoint_configs)
+                print("✓ Prerequisites処理完了")
+        else:
+            # フォールバック：旧式の個別処理
+            self._handle_legacy_prerequisites(prerequisites)
+
+    def _build_checkpoint_configs(self, prerequisites: Dict[str, Any]) -> Dict[str, Any]:
+        """prerequisitesから汎用的なチェックポイント設定を構築"""
+        checkpoint_configs = {}
+
+        output_base_dir = self.config.get('output', {}).get('base_dir', 'outputs')
+
+        for key, value in prerequisites.items():
+            if key.endswith('_checkpoint') and value:
+                # パス解決
+                checkpoint_path = self._resolve_checkpoint_path(value, output_base_dir)
+
+                if checkpoint_path:
+                    if isinstance(value, str):
+                        # 単純なパス指定
+                        checkpoint_configs[key] = checkpoint_path
+                    elif isinstance(value, dict):
+                        # 詳細設定
+                        config = value.copy()
+                        config['path'] = checkpoint_path
+                        checkpoint_configs[key] = config
+
+        return checkpoint_configs
+
+    def _resolve_checkpoint_path(self, checkpoint_spec: Any, base_dir: str) -> Optional[str]:
+        """チェックポイントパスを解決（Docker環境対応）"""
+        if isinstance(checkpoint_spec, str):
+            checkpoint_path = checkpoint_spec
+        elif isinstance(checkpoint_spec, dict):
+            checkpoint_path = checkpoint_spec.get('path')
+        else:
+            return None
+
+        if not checkpoint_path:
+            return None
+
+        # 絶対パスの場合はそのまま返す
+        if os.path.isabs(checkpoint_path):
+            return checkpoint_path if os.path.exists(checkpoint_path) else None
+
+        # CLAUDE_ADDED: Docker環境対応の相対パス解決
+        # 複数の候補パスを試行して最初に見つかったものを使用
+        candidate_paths = [
+            # 1. base_dirからの相対パス
+            os.path.join(base_dir, checkpoint_path),
+
+            # 2. 現在の作業ディレクトリからの相対パス
+            os.path.join(os.getcwd(), checkpoint_path),
+
+            # 3. base_dirを現在のディレクトリからの相対パスとして解決
+            os.path.join(os.getcwd(), base_dir, checkpoint_path),
+
+            # 4. Docker環境での典型的なパス（プロジェクトルートから）
+            os.path.join(os.getcwd(), 'PredictiveLatentSpaceNavigationModel', 'TransformerBaseEndToEndVAE', base_dir, checkpoint_path),
+
+            # 5. プロジェクトルートを推測して解決
+            self._resolve_from_project_root(checkpoint_path, base_dir),
+        ]
+
+        for candidate in candidate_paths:
+            if candidate and os.path.exists(candidate):
+                print(f"✓ Checkpoint resolved: {checkpoint_path} -> {candidate}")
+                return candidate
+
+        # すべて失敗した場合は候補を表示
+        print(f"Warning: Checkpoint not found: {checkpoint_path}")
+        print(f"Tried paths: {[p for p in candidate_paths if p]}")
+        return None
+
+    def _resolve_from_project_root(self, checkpoint_path: str, base_dir: str) -> Optional[str]:
+        """プロジェクトルートから相対パスを解決"""
+        # 現在のディレクトリからプロジェクトルートを探す
+        current_dir = os.getcwd()
+
+        # 典型的なプロジェクトの構造を想定
+        # PersonalizedExampleGeneration/src/PredictiveLatentSpaceNavigationModel/...
+        possible_roots = [
+            current_dir,
+            os.path.dirname(current_dir),
+            os.path.dirname(os.path.dirname(current_dir)),
+        ]
+
+        for root in possible_roots:
+            # プロジェクトルートの特徴的なディレクトリをチェック
+            if any(os.path.exists(os.path.join(root, marker)) for marker in [
+                'src', 'PredictiveLatentSpaceNavigationModel', 'TransformerBaseEndToEndVAE'
+            ]):
+                candidate = os.path.join(root, 'src', 'PredictiveLatentSpaceNavigationModel',
+                                       'TransformerBaseEndToEndVAE', base_dir, checkpoint_path)
+                if os.path.exists(candidate):
+                    return candidate
+
+        return None
+
+    def _handle_legacy_prerequisites(self, prerequisites: Dict[str, Any]):
+        """旧式のprerequisites処理（BaseExperimentModelを継承していないモデル用）"""
+        print("Warning: モデルがload_pretrained_weightsメソッドを持たないため、レガシー処理を使用")
+
+        # HierarchicalMotionVAE固有の処理例
+        if hasattr(self.model, '_load_skill_checkpoint'):
+            skill_checkpoint = prerequisites.get('skill_vae_checkpoint')
+            if skill_checkpoint and prerequisites.get('load_skill_vae_weights', False):
+                output_base_dir = self.config.get('output', {}).get('base_dir', 'outputs')
+                checkpoint_path = self._resolve_checkpoint_path(skill_checkpoint, output_base_dir)
+
+                if checkpoint_path:
+                    try:
+                        self.model._load_skill_checkpoint(checkpoint_path)
+                        if hasattr(self.model, '_freeze_skill_vae'):
+                            self.model._freeze_skill_vae()
+                        print(f"✓ Legacy SkillVAE checkpoint loaded: {checkpoint_path}")
+                    except Exception as e:
+                        print(f"Warning: Legacy SkillVAE checkpoint loading failed: {e}")
+                else:
+                    print(f"Warning: SkillVAE checkpoint not found: {skill_checkpoint}")
+
+        # 他のモデル固有の処理もここに追加可能
+        # elif hasattr(self.model, 'other_checkpoint_method'):
+        #     ...
+
+        print("✓ Legacy prerequisites処理完了")
 
 
 class EarlyStopping:
