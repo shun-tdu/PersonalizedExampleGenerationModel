@@ -497,97 +497,194 @@ class StyleSkillSeparationNet(BaseExperimentModel):
 
         return losses
 
-    def compute_manifold_loss(self, z_skill: torch.Tensor, skill_score: torch.Tensor, min_separation: float = 1.0):
-        """
-        相対的分離設計による熟達多様体形成損失
-        CLAUDE_ADDED: Option 2 - 熟達者と非熟達者の重心分離 + 各グループ内凝集性
-        Args:
-            z_skill (torch.Tensor): スキル潜在変数[batch_size, skill_latent_dim]
-            skill_score (torch.Tensor): 標準化されたスキルスコア [batch_size, ]
-            min_separation (float): 熟達者と非熟達者の最小分離距離
-        """
-        batch_size = z_skill.size(0)
-        device = z_skill.device
 
-        # 熟達者と非熟達者のマスク
+    def compute_manifold_loss(self, z_skill: torch.Tensor, skill_score: torch.Tensor, margin: float = 2.0):
+        """
+        CLAUDE_ADDED: 動的中心計算と相対的凝集性を考慮した改良manifold loss
+        Args:
+            z_skill (torch.Tensor): スキル潜在変数 [batch_size, skill_latent_dim]
+            skill_score (torch.Tensor): 正規化されたスキルスコア [batch_size, ]
+            margin (float): 非熟達者が保つべき、中心からの最小距離（の2乗）
+        """
+        device = z_skill.device
+        batch_size = z_skill.size(0)
+
+        # 熟達者と非熟達者のマスクを作成
         expert_mask = skill_score > 0.0
         novice_mask = skill_score <= 0.0
 
         n_experts = expert_mask.sum()
         n_novices = novice_mask.sum()
 
-        # 各項の損失を初期化
-        loss_separation = torch.tensor(0.0, device=device, requires_grad=True)
+        # 損失成分を初期化
         loss_expert_cohesion = torch.tensor(0.0, device=device, requires_grad=True)
-        loss_novice_cohesion = torch.tensor(0.0, device=device, requires_grad=True)
+        loss_separation = torch.tensor(0.0, device=device, requires_grad=True)
+        loss_expert_ranking = torch.tensor(0.0, device=device, requires_grad=True)
 
-        # CLAUDE_ADDED: 1. 重心分離損失（熟達者と非熟達者の分離を促進）
-        if n_experts > 0 and n_novices > 0:
-            # 各グループの重心を計算
-            expert_centroid = z_skill[expert_mask].mean(dim=0)
-            novice_centroid = z_skill[novice_mask].mean(dim=0)
-
-            # 重心間の距離
-            centroid_distance = torch.norm(expert_centroid - novice_centroid, p=2)
-
-            # 分離が不十分な場合にペナルティ
-            loss_separation = torch.clamp(min_separation - centroid_distance, min=0.0) ** 2
-
-        # CLAUDE_ADDED: 2. 熟達者グループ内凝集性（スキルスコアに応じた重み付き）
+        # 1. 熟達者凝集性損失：熟達者を動的中心に集める
         if n_experts > 1:
             z_skill_experts = z_skill[expert_mask]
             expert_scores = skill_score[expert_mask]
-            expert_centroid = z_skill_experts.mean(dim=0)
 
-            # 各熟達者の重心からの距離（スキルスコアで重み付け）
-            expert_distances_to_centroid = torch.norm(z_skill_experts - expert_centroid.unsqueeze(0), p=2, dim=1)
-            expert_weights = torch.sigmoid(expert_scores * 2.0)  # 高スキルほど強い凝集
-            loss_expert_cohesion = torch.mean(expert_weights * expert_distances_to_centroid)
+            # 熟達者の重心を動的に計算（スキルスコアで重み付け）
+            expert_weights = torch.softmax(expert_scores * 2.0, dim=0)  # 高スキルほど重み大
+            expert_centroid = torch.sum(expert_weights.unsqueeze(1) * z_skill_experts, dim=0)
 
-        # CLAUDE_ADDED: 3. 非熟達者グループ内凝集性（適度な凝集）
-        if n_novices > 1:
+            # 各熟達者の重心からの距離（スキルスコアに比例した重み）
+            distances_to_centroid = torch.norm(z_skill_experts - expert_centroid.unsqueeze(0), p=2, dim=1)
+            cohesion_weights = torch.sigmoid(expert_scores * 3.0)  # 高スキルほど強い凝集
+            loss_expert_cohesion = torch.mean(cohesion_weights * distances_to_centroid)
+
+        elif n_experts == 1:
+            # 熟達者が1人の場合は中心を現在位置に設定
+            expert_centroid = z_skill[expert_mask].squeeze(0)
+        else:
+            # 熟達者がいない場合は原点を中心とする
+            expert_centroid = torch.zeros(z_skill.size(1), device=device)
+
+        # 2. 分離損失：非熟達者を熟達者中心から遠ざける
+        if n_novices > 0 and n_experts > 0:
             z_skill_novices = z_skill[novice_mask]
             novice_scores = skill_score[novice_mask]
-            novice_centroid = z_skill_novices.mean(dim=0)
 
-            # 各非熟達者の重心からの距離（低スキルほど緩い凝集）
-            novice_distances_to_centroid = torch.norm(z_skill_novices - novice_centroid.unsqueeze(0), p=2, dim=1)
-            novice_weights = torch.sigmoid(-novice_scores * 1.0)  # 低スキルほど緩い凝集
-            loss_novice_cohesion = torch.mean(novice_weights * novice_distances_to_centroid)
+            # 非熟達者の熟達者中心からの距離
+            distances_from_expert_center = torch.norm(z_skill_novices - expert_centroid.unsqueeze(0), p=2, dim=1)
 
-        # CLAUDE_ADDED: 4. 適応的スキルベース分離（連続的なスキルスコアを活用）
-        loss_skill_based_separation = torch.tensor(0.0, device=device, requires_grad=True)
+            # 低スキルほど強く分離（絶対値が大きいほど強い反発）
+            separation_weights = torch.sigmoid(-novice_scores * 2.0)
+
+            # マージンより近い場合にペナルティ
+            margin_violations = torch.clamp(margin - distances_from_expert_center, min=0.0)
+            loss_separation = torch.mean(separation_weights * margin_violations ** 2)
+
+        # 3. スキルランキング損失：スキルスコア順に距離を調整
         if batch_size > 1:
-            # スキルスコア差と潜在空間距離の相関を促進
-            skill_diff_matrix = torch.abs(skill_score.unsqueeze(1) - skill_score.unsqueeze(0))
-            z_skill_distance_matrix = torch.cdist(z_skill, z_skill, p=2)
+            # ペアワイズのスキル差と距離差の関係を強化
+            skill_diff_matrix = skill_score.unsqueeze(1) - skill_score.unsqueeze(0)  # [i,j] = skill[i] - skill[j]
+            z_distance_matrix = torch.cdist(z_skill, z_skill, p=2)
 
-            # 対角成分を除外
-            mask = ~torch.eye(batch_size, dtype=torch.bool, device=device)
-            skill_diffs = skill_diff_matrix[mask]
-            z_distances = z_skill_distance_matrix[mask]
+            # 上三角マスク（重複を避ける）
+            triu_mask = torch.triu(torch.ones(batch_size, batch_size, device=device), diagonal=1).bool()
 
-            # スキル差と空間距離の正の相関を促進（高スキル差ペアは遠く配置）
-            if skill_diffs.numel() > 0:
-                # スキル差に比例した最小距離を設定
-                target_distances = skill_diffs * 0.5  # スケーリング係数
-                distance_violations = torch.clamp(target_distances - z_distances, min=0.0)
-                loss_skill_based_separation = torch.mean(distance_violations ** 2)
+            if triu_mask.any():
+                skill_diffs = skill_diff_matrix[triu_mask]
+                z_distances = z_distance_matrix[triu_mask]
 
-        # CLAUDE_ADDED: 5. 重み付き総合損失
-        alpha_separation = 2.0        # 重心分離（最重要）
-        alpha_expert_cohesion = 1.0   # 熟達者凝集性
-        alpha_novice_cohesion = 0.3   # 非熟達者凝集性（緩め）
-        alpha_skill_separation = 1.5  # スキルベース分離
+                # スキル差が正の場合（i > j）、距離も大きくなるべき
+                positive_skill_diff_mask = skill_diffs > 0.1  # 閾値で明確な差のみ考慮
+
+                if positive_skill_diff_mask.any():
+                    target_distances = torch.abs(skill_diffs[positive_skill_diff_mask]) * 0.8
+                    actual_distances = z_distances[positive_skill_diff_mask]
+
+                    # 期待される距離より近い場合にペナルティ
+                    distance_violations = torch.clamp(target_distances - actual_distances, min=0.0)
+                    loss_expert_ranking = torch.mean(distance_violations ** 2)
+
+        # 4. 重み付き総合損失
+        alpha_cohesion = 2.0      # 熟達者凝集性（最重要）
+        alpha_separation = 1.5    # 分離損失
+        alpha_ranking = 1.0       # ランキング損失
 
         total_manifold_loss = (
+            alpha_cohesion * loss_expert_cohesion +
             alpha_separation * loss_separation +
-            alpha_expert_cohesion * loss_expert_cohesion +
-            alpha_novice_cohesion * loss_novice_cohesion +
-            alpha_skill_separation * loss_skill_based_separation
+            alpha_ranking * loss_expert_ranking
         )
 
         return total_manifold_loss
+
+    # def compute_manifold_loss(self, z_skill: torch.Tensor, skill_score: torch.Tensor, min_separation: float = 1.0):
+    #     """
+    #     相対的分離設計による熟達多様体形成損失
+    #     CLAUDE_ADDED: Option 2 - 熟達者と非熟達者の重心分離 + 各グループ内凝集性
+    #     Args:
+    #         z_skill (torch.Tensor): スキル潜在変数[batch_size, skill_latent_dim]
+    #         skill_score (torch.Tensor): 標準化されたスキルスコア [batch_size, ]
+    #         min_separation (float): 熟達者と非熟達者の最小分離距離
+    #     """
+    #     batch_size = z_skill.size(0)
+    #     device = z_skill.device
+    #
+    #     # 熟達者と非熟達者のマスク
+    #     expert_mask = skill_score > 0.0
+    #     novice_mask = skill_score <= 0.0
+    #
+    #     n_experts = expert_mask.sum()
+    #     n_novices = novice_mask.sum()
+    #
+    #     # 各項の損失を初期化
+    #     loss_separation = torch.tensor(0.0, device=device, requires_grad=True)
+    #     loss_expert_cohesion = torch.tensor(0.0, device=device, requires_grad=True)
+    #     loss_novice_cohesion = torch.tensor(0.0, device=device, requires_grad=True)
+    #
+    #     # CLAUDE_ADDED: 1. 重心分離損失（熟達者と非熟達者の分離を促進）
+    #     if n_experts > 0 and n_novices > 0:
+    #         # 各グループの重心を計算
+    #         expert_centroid = z_skill[expert_mask].mean(dim=0)
+    #         novice_centroid = z_skill[novice_mask].mean(dim=0)
+    #
+    #         # 重心間の距離
+    #         centroid_distance = torch.norm(expert_centroid - novice_centroid, p=2)
+    #
+    #         # 分離が不十分な場合にペナルティ
+    #         loss_separation = torch.clamp(min_separation - centroid_distance, min=0.0) ** 2
+    #
+    #     # CLAUDE_ADDED: 2. 熟達者グループ内凝集性（スキルスコアに応じた重み付き）
+    #     if n_experts > 1:
+    #         z_skill_experts = z_skill[expert_mask]
+    #         expert_scores = skill_score[expert_mask]
+    #         expert_centroid = z_skill_experts.mean(dim=0)
+    #
+    #         # 各熟達者の重心からの距離（スキルスコアで重み付け）
+    #         expert_distances_to_centroid = torch.norm(z_skill_experts - expert_centroid.unsqueeze(0), p=2, dim=1)
+    #         expert_weights = torch.sigmoid(expert_scores * 2.0)  # 高スキルほど強い凝集
+    #         loss_expert_cohesion = torch.mean(expert_weights * expert_distances_to_centroid)
+    #
+    #     # CLAUDE_ADDED: 3. 非熟達者グループ内凝集性（適度な凝集）
+    #     if n_novices > 1:
+    #         z_skill_novices = z_skill[novice_mask]
+    #         novice_scores = skill_score[novice_mask]
+    #         novice_centroid = z_skill_novices.mean(dim=0)
+    #
+    #         # 各非熟達者の重心からの距離（低スキルほど緩い凝集）
+    #         novice_distances_to_centroid = torch.norm(z_skill_novices - novice_centroid.unsqueeze(0), p=2, dim=1)
+    #         novice_weights = torch.sigmoid(-novice_scores * 1.0)  # 低スキルほど緩い凝集
+    #         loss_novice_cohesion = torch.mean(novice_weights * novice_distances_to_centroid)
+    #
+    #     # CLAUDE_ADDED: 4. 適応的スキルベース分離（連続的なスキルスコアを活用）
+    #     loss_skill_based_separation = torch.tensor(0.0, device=device, requires_grad=True)
+    #     if batch_size > 1:
+    #         # スキルスコア差と潜在空間距離の相関を促進
+    #         skill_diff_matrix = torch.abs(skill_score.unsqueeze(1) - skill_score.unsqueeze(0))
+    #         z_skill_distance_matrix = torch.cdist(z_skill, z_skill, p=2)
+    #
+    #         # 対角成分を除外
+    #         mask = ~torch.eye(batch_size, dtype=torch.bool, device=device)
+    #         skill_diffs = skill_diff_matrix[mask]
+    #         z_distances = z_skill_distance_matrix[mask]
+    #
+    #         # スキル差と空間距離の正の相関を促進（高スキル差ペアは遠く配置）
+    #         if skill_diffs.numel() > 0:
+    #             # スキル差に比例した最小距離を設定
+    #             target_distances = skill_diffs * 0.5  # スケーリング係数
+    #             distance_violations = torch.clamp(target_distances - z_distances, min=0.0)
+    #             loss_skill_based_separation = torch.mean(distance_violations ** 2)
+    #
+    #     # CLAUDE_ADDED: 5. 重み付き総合損失
+    #     alpha_separation = 2.0        # 重心分離（最重要）
+    #     alpha_expert_cohesion = 1.0   # 熟達者凝集性
+    #     alpha_novice_cohesion = 0.3   # 非熟達者凝集性（緩め）
+    #     alpha_skill_separation = 1.5  # スキルベース分離
+    #
+    #     total_manifold_loss = (
+    #         alpha_separation * loss_separation +
+    #         alpha_expert_cohesion * loss_expert_cohesion +
+    #         alpha_novice_cohesion * loss_novice_cohesion +
+    #         alpha_skill_separation * loss_skill_based_separation
+    #     )
+    #
+    #     return total_manifold_loss
 
 
 
