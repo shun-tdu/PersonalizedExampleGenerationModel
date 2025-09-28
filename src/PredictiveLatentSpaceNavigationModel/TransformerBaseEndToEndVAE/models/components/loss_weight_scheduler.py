@@ -1,4 +1,5 @@
 from typing import Dict, Any
+import math
 
 class LossWeightScheduler:
     def __init__(self, config: Dict[str, Any]):
@@ -36,6 +37,24 @@ class LossWeightScheduler:
             # 線形補間
             progress = (epoch - start_epoch) / (end_epoch - start_epoch)
             return start_val + progress*(end_val - start_val)
+
+        # CLAUDE_ADDED: Sigmoid delayed schedule for progressive skip weighting
+        elif schedule_type == 'sigmoid_delayed':
+            start_epoch = schedule_config.get('start_epoch', 0)
+            end_epoch = schedule_config.get('end_epoch', 100)
+            start_val = schedule_config.get('start_val', 0.0)
+            end_val = schedule_config.get('end_val', 1.0)
+
+            if epoch < start_epoch:
+                return start_val
+
+            # シグモイド関数での段階的増加（遅延開始）
+            progress = (epoch - start_epoch) / max(end_epoch - start_epoch, 1)
+            # シグモイド曲線: ゆっくり開始→急激な変化→ゆっくり収束
+            sigmoid_progress = 1 / (1 + math.exp(-6 * (progress - 0.5)))
+
+            return start_val + sigmoid_progress * (end_val - start_val)
+
         else:
             raise ValueError(f"Unknown schedule type: {schedule_type}")
 
