@@ -9,6 +9,23 @@ from models.base_model import BaseExperimentModel
 from models.components.loss_weight_scheduler import LossWeightScheduler
 
 
+class ResidualConnection(nn.Module):
+    """残差接続付きの線形層"""
+    def __init__(self, dim, dropout=0.1):
+        super().__init__()
+        self.linear1 = nn.Linear(dim, dim * 2)
+        self.linear2 = nn.Linear(dim * 2, dim)
+        self.dropout = nn.Dropout(dropout)
+        self.norm = nn.LayerNorm(dim)
+
+    def forward(self, x):
+        residual = x
+        x = self.norm(x)
+        x = F.gelu(self.linear1(x))
+        x = self.dropout(x)
+        x = self.linear2(x)
+        return residual + x
+
 
 class ContrastiveLoss(nn.Module):
     """対比学習損失"""
@@ -189,17 +206,31 @@ class StyleSkillSeparationNetDecoder(nn.Module):
 
         # 潜在変数サンプリング層（段階的次元拡張）
         self.from_style_latent = nn.Sequential(
-            nn.Linear(style_latent_dim, intermediate_dim),
+            nn.Linear(style_latent_dim, d_model),
             nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(intermediate_dim, d_model * seq_len)
+            ResidualConnection(d_model, dropout),
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model * seq_len)
         )
         self.from_skill_latent = nn.Sequential(
-            nn.Linear(skill_latent_dim, intermediate_dim),
+            nn.Linear(skill_latent_dim, d_model),
             nn.ReLU(),
-            nn.Dropout(0.1),
-            nn.Linear(intermediate_dim, d_model * seq_len)
+            ResidualConnection(d_model, dropout),
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model * seq_len)
         )
+        # self.from_style_latent = nn.Sequential(
+        #     nn.Linear(style_latent_dim, intermediate_dim),
+        #     nn.ReLU(),
+        #     nn.Dropout(0.1),
+        #     nn.Linear(intermediate_dim, d_model * seq_len)
+        # )
+        # self.from_skill_latent = nn.Sequential(
+        #     nn.Linear(skill_latent_dim, intermediate_dim),
+        #     nn.ReLU(),
+        #     nn.Dropout(0.1),
+        #     nn.Linear(intermediate_dim, d_model * seq_len)
+        # )
 
         # スタイル・スキル合成層
         self.fusion_proj = nn.Linear(2 * d_model, d_model)
