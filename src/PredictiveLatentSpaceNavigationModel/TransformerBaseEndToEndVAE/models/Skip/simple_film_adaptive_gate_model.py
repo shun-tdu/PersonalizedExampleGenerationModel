@@ -271,7 +271,7 @@ class FilmGatedSkipDecoder(nn.Module):
                  dropout,
                  style_latent_dim,
                  skill_latent_dim,
-                 skip_layers=1):  # TODO(human): スキップ接続を適用する層数
+                 skip_layers=1):
         super().__init__()
 
         self.seq_len = seq_len
@@ -315,11 +315,17 @@ class FilmGatedSkipDecoder(nn.Module):
             ) for _ in range(self.skip_layers)
         ])
 
-        # FiLM層（各デコーダ層に対応）
-        self.film_layers = nn.ModuleList([
+        # Style空間FiLMレイヤー
+        self.style_film_layers = nn.ModuleList([
             FilmLayer(style_latent_dim, d_model)
             for _ in range(n_layers)
         ])
+        # Skill空間のFiLMレイヤー
+        self.skill_film_layers = nn.ModuleList([
+            FilmLayer(skill_latent_dim, d_model)
+            for _ in range(n_layers)
+        ])
+
 
         # 位置エンコーディング
         self.pos_encoding = PositionalEncoding(d_model, seq_len)
@@ -365,7 +371,7 @@ class FilmGatedSkipDecoder(nn.Module):
 
         else:
             # skip_layers>0: FiLM + Adaptive Gate処理
-            # 潜在変数を系列データに変換（統一）
+            # 潜在変数を系列データに変換
             style_seq = self.from_style_latent(z_style).view(batch_size, self.seq_len, self.d_model)
             skill_seq = self.from_skill_latent(z_skill).view(batch_size, self.seq_len, self.d_model)
 
@@ -377,12 +383,15 @@ class FilmGatedSkipDecoder(nn.Module):
             decoded_features = self.pos_encoding(decoded_features)
 
             # 各層でのAdaptive Gated Skip Connection + FiLM
-            for i, (layer, film) in enumerate(zip(self.decoder_layers, self.film_layers)):
-                # 1. 必ずTransformerEncoder処理を実行
+            for i, (layer, style_film, skill_film) in enumerate(zip(self.decoder_layers, self.style_film_layers, self.skill_film_layers)):
+                # 1. TransformerEncoder処理を実行
                 transformed_features = layer(decoded_features)
 
-                # 2. FiLM処理を適用
-                filmed_features = film(transformed_features, z_style)
+                # 2. Style FiLM処理
+                style_modulated_features = style_film(transformed_features, z_style)
+
+                # 3. Skill FiLM処理
+                skill_modulated_features = skill_film(style_modulated_features, z_skill)
 
                 # 3. スキップ接続適用判定（最後のskip_layers層のみ）
                 skip_layer_idx = i - (self.n_layers - self.skip_layers)
@@ -394,18 +403,18 @@ class FilmGatedSkipDecoder(nn.Module):
 
                     # Adaptive Gate計算
                     gate = self.adaptive_gates[skip_layer_idx]
-                    gate_weights = gate(filmed_features, skip)
+                    gate_weights = gate(skill_modulated_features, skip)
                     gate_weights_list.append(gate_weights.mean().item())
 
                     # ゲート適用
                     gated_skip = gate_weights * skip
 
                     # 特徴量融合
-                    combined_memory = torch.cat([filmed_features, gated_skip], dim=2)
+                    combined_memory = torch.cat([skill_modulated_features, gated_skip], dim=2)
                     decoded_features = self.skip_fusion_layers[skip_layer_idx](combined_memory)
                 else:
                     # スキップ接続なしの場合：FiLM処理結果をそのまま使用
-                    decoded_features = filmed_features
+                    decoded_features = skill_modulated_features
 
         # 共通の出力層
         output = self.output_layers(decoded_features)
