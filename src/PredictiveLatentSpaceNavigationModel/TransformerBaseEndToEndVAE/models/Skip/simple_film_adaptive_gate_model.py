@@ -326,7 +326,6 @@ class FilmGatedSkipDecoder(nn.Module):
             for _ in range(n_layers)
         ])
 
-
         # 位置エンコーディング
         self.pos_encoding = PositionalEncoding(d_model, seq_len)
 
@@ -384,14 +383,14 @@ class FilmGatedSkipDecoder(nn.Module):
 
             # 各層でのAdaptive Gated Skip Connection + FiLM
             for i, (layer, style_film, skill_film) in enumerate(zip(self.decoder_layers, self.style_film_layers, self.skill_film_layers)):
+                # 2. Skill FiLM処理
+                skill_modulated_features = skill_film(decoded_features, z_skill)
+
+                # 3. Style FiLM処理
+                style_modulated_features = style_film(skill_modulated_features, z_style)
+
                 # 1. TransformerEncoder処理を実行
-                transformed_features = layer(decoded_features)
-
-                # 2. Style FiLM処理
-                style_modulated_features = style_film(transformed_features, z_style)
-
-                # 3. Skill FiLM処理
-                skill_modulated_features = skill_film(style_modulated_features, z_skill)
+                transformed_features = layer(style_modulated_features)
 
                 # 3. スキップ接続適用判定（最後のskip_layers層のみ）
                 skip_layer_idx = i - (self.n_layers - self.skip_layers)
@@ -403,18 +402,18 @@ class FilmGatedSkipDecoder(nn.Module):
 
                     # Adaptive Gate計算
                     gate = self.adaptive_gates[skip_layer_idx]
-                    gate_weights = gate(skill_modulated_features, skip)
+                    gate_weights = gate(transformed_features, skip)
                     gate_weights_list.append(gate_weights.mean().item())
 
                     # ゲート適用
                     gated_skip = gate_weights * skip
 
                     # 特徴量融合
-                    combined_memory = torch.cat([skill_modulated_features, gated_skip], dim=2)
+                    combined_memory = torch.cat([transformed_features, gated_skip], dim=2)
                     decoded_features = self.skip_fusion_layers[skip_layer_idx](combined_memory)
                 else:
                     # スキップ接続なしの場合：FiLM処理結果をそのまま使用
-                    decoded_features = skill_modulated_features
+                    decoded_features = style_modulated_features
 
         # 共通の出力層
         output = self.output_layers(decoded_features)
@@ -597,7 +596,7 @@ class SimpleFiLMAdaptiveGateNet(BaseExperimentModel):
 
         # サブタスク損失
         if subject_ids is not None:
-            all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa']
+            all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa', 'k.shindo', 'm.kashiwagi']
             subject_to_idx = {subj: i for i, subj in enumerate(all_subjects)}
             subject_indices = torch.tensor([subject_to_idx[subj] for subj in subject_ids], device=z_style.device)
 
@@ -694,7 +693,7 @@ class SimpleFiLMAdaptiveGateNet(BaseExperimentModel):
         batch_size = style_features.size(0)
         device = style_features.device
 
-        all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa']
+        all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa', 'k.shindo', 'm.kashiwagi']
         subject_to_idx = {subj: i for i, subj in enumerate(all_subjects)}
         subject_indices = [subject_to_idx[subj] for subj in subject_ids]
 

@@ -314,7 +314,7 @@ class CrossAttentionFilmEncoder(nn.Module):
 
 
 class CrossAttentionFilmDecoder(nn.Module):
-    """Cross Attention FiLM機構付きデコーダ"""
+    """TransformerDecoderLayerベースのCross Attention FiLM機構付きデコーダ"""
     def __init__(self,
                  output_dim,
                  seq_len,
@@ -351,6 +351,20 @@ class CrossAttentionFilmDecoder(nn.Module):
         # スタイル・スキル合成層
         self.fusion_proj = nn.Linear(2 * d_model, d_model)
 
+        # 潜在変数をメモリとして使用するための射影層
+        self.style_memory_proj = nn.Sequential(
+            nn.Linear(style_latent_dim, d_model),
+            nn.LayerNorm(d_model),
+            nn.GELU(),
+            nn.Dropout(dropout)
+        )
+        self.skill_memory_proj = nn.Sequential(
+            nn.Linear(skill_latent_dim, d_model),
+            nn.LayerNorm(d_model),
+            nn.GELU(),
+            nn.Dropout(dropout)
+        )
+
         # SimpleAdaptiveGates（最後のskip_layers層のみ）
         self.adaptive_gates = nn.ModuleList([
             SimpleAdaptiveGate(d_model, dropout) for _ in range(self.skip_layers)
@@ -365,22 +379,12 @@ class CrossAttentionFilmDecoder(nn.Module):
             ) for _ in range(self.skip_layers)
         ])
 
-        # Cross Attention変調層（FiLMの代わり）
-        self.style_cross_attention_layers = nn.ModuleList([
-            CrossAttentionModulation(d_model, style_latent_dim, n_heads, dropout)
-            for _ in range(n_layers)
-        ])
-        self.skill_cross_attention_layers = nn.ModuleList([
-            CrossAttentionModulation(d_model, skill_latent_dim, n_heads, dropout)
-            for _ in range(n_layers)
-        ])
-
         # 位置エンコーディング
         self.pos_encoding = PositionalEncoding(d_model, seq_len)
 
-        # デコーダ層
+        # TransformerDecoderLayer（Cross Attentionを含む）
         self.decoder_layers = nn.ModuleList([
-            nn.TransformerEncoderLayer(
+            nn.TransformerDecoderLayer(
                 d_model=d_model,
                 nhead=n_heads,
                 dim_feedforward=d_model * 4,
@@ -400,8 +404,14 @@ class CrossAttentionFilmDecoder(nn.Module):
         batch_size = z_style.size(0)
         gate_weights_list = []
 
+        # 潜在変数をメモリとして準備
+        style_memory = self.style_memory_proj(z_style).unsqueeze(1)  # [batch, 1, d_model]
+        skill_memory = self.skill_memory_proj(z_skill).unsqueeze(1)  # [batch, 1, d_model]
+        # スタイル・スキルメモリを結合
+        latent_memory = torch.cat([style_memory, skill_memory], dim=1)  # [batch, 2, d_model]
+
         if self.skip_layers == 0:
-            # skip_layers=0: 純粋なCross Attention変調のみ
+            # skip_layers=0: 純粋なTransformerDecoderによるCross Attention
             # スタイル・スキル潜在変数を系列データに変換
             style_seq = self.from_style_latent(z_style).view(batch_size, self.seq_len, self.d_model)
             skill_seq = self.from_skill_latent(z_skill).view(batch_size, self.seq_len, self.d_model)
@@ -413,19 +423,19 @@ class CrossAttentionFilmDecoder(nn.Module):
             # 位置エンコーディング
             decoded_features = self.pos_encoding(fusion_seq)
 
-            # TransformerEncoder層を順次適用（Cross Attention変調付き）
-            for i, (layer, style_ca, skill_ca) in enumerate(zip(
-                self.decoder_layers, self.style_cross_attention_layers, self.skill_cross_attention_layers
-            )):
-                # Cross Attention変調
-                skill_modulated = skill_ca(decoded_features, z_skill)
-                style_modulated = style_ca(skill_modulated, z_style)
-
-                # TransformerEncoder処理
-                decoded_features = layer(style_modulated)
+            # TransformerDecoderLayer使用（Cross Attentionで潜在変数参照）
+            for layer in self.decoder_layers:
+                decoded_features = layer(
+                    tgt=decoded_features,           # Target: デコード中の特徴量
+                    memory=latent_memory,           # Memory: 潜在変数（Style + Skill）
+                    tgt_mask=None,                  # Self-attentionマスクなし
+                    memory_mask=None,               # Cross-attentionマスクなし
+                    tgt_key_padding_mask=None,      # パディングマスクなし
+                    memory_key_padding_mask=None    # メモリパディングマスクなし
+                )
 
         else:
-            # skip_layers>0: Cross Attention + Adaptive Gate処理
+            # skip_layers>0: TransformerDecoder + Adaptive Gate処理
             # 潜在変数を系列データに変換
             style_seq = self.from_style_latent(z_style).view(batch_size, self.seq_len, self.d_model)
             skill_seq = self.from_skill_latent(z_skill).view(batch_size, self.seq_len, self.d_model)
@@ -437,16 +447,17 @@ class CrossAttentionFilmDecoder(nn.Module):
             # 位置エンコーディング
             decoded_features = self.pos_encoding(decoded_features)
 
-            # 各層でのAdaptive Gated Skip Connection + Cross Attention
-            for i, (layer, style_ca, skill_ca) in enumerate(zip(
-                self.decoder_layers, self.style_cross_attention_layers, self.skill_cross_attention_layers
-            )):
-                # Cross Attention変調
-                skill_modulated = skill_ca(decoded_features, z_skill)
-                style_modulated = style_ca(skill_modulated, z_style)
-
-                # TransformerEncoder処理
-                transformed_features = layer(style_modulated)
+            # 各層でのAdaptive Gated Skip Connection + TransformerDecoder
+            for i, layer in enumerate(self.decoder_layers):
+                # TransformerDecoderLayer処理（Cross Attentionで潜在変数参照）
+                transformed_features = layer(
+                    tgt=decoded_features,           # Target: デコード中の特徴量
+                    memory=latent_memory,           # Memory: 潜在変数（Style + Skill）
+                    tgt_mask=None,                  # Self-attentionマスクなし
+                    memory_mask=None,               # Cross-attentionマスクなし
+                    tgt_key_padding_mask=None,      # パディングマスクなし
+                    memory_key_padding_mask=None    # メモリパディングマスクなし
+                )
 
                 # スキップ接続適用判定（最後のskip_layers層のみ）
                 skip_layer_idx = i - (self.n_layers - self.skip_layers)
@@ -468,7 +479,7 @@ class CrossAttentionFilmDecoder(nn.Module):
                     combined_memory = torch.cat([transformed_features, gated_skip], dim=2)
                     decoded_features = self.skip_fusion_layers[skip_layer_idx](combined_memory)
                 else:
-                    # スキップ接続なしの場合：Cross Attention変調結果をそのまま使用
+                    # スキップ接続なしの場合：TransformerDecoder結果をそのまま使用
                     decoded_features = transformed_features
 
         # 共通の出力層
@@ -652,7 +663,7 @@ class CrossAttentionFilmNet(BaseExperimentModel):
 
         # サブタスク損失
         if subject_ids is not None:
-            all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa']
+            all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa', 'k.shindo', 'm.kashiwagi']
             subject_to_idx = {subj: i for i, subj in enumerate(all_subjects)}
             subject_indices = torch.tensor([subject_to_idx[subj] for subj in subject_ids], device=z_style.device)
 
@@ -691,8 +702,10 @@ class CrossAttentionFilmNet(BaseExperimentModel):
         batch_size = z_skill.size(0)
         device = z_skill.device
 
-        expert_mask = skill_score > 0.0
-        novice_mask = skill_score <= 0.0
+        skill_score_threshold = 0.9
+
+        expert_mask = skill_score > skill_score_threshold
+        novice_mask = skill_score <= skill_score_threshold
 
         n_experts = expert_mask.sum()
         n_novices = novice_mask.sum()
@@ -749,7 +762,7 @@ class CrossAttentionFilmNet(BaseExperimentModel):
         batch_size = style_features.size(0)
         device = style_features.device
 
-        all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa']
+        all_subjects = ['h.nakamura', 'r.morishita', 'r.yanase', 's.miyama', 's.tahara', 't.hasegawa', 'k.shindo', 'm.kashiwagi']
         subject_to_idx = {subj: i for i, subj in enumerate(all_subjects)}
         subject_indices = [subject_to_idx[subj] for subj in subject_ids]
 
