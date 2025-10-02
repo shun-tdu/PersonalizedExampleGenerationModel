@@ -56,6 +56,21 @@ class AcademicSVGEvaluator:
         unique_subjects = sorted(list(set(subject_ids)))
         return {subj: f"Subject{i+1}" for i, subj in enumerate(unique_subjects)}
 
+    def save_figure(self, fig: plt.Figure, save_path: str = None):
+        """Save figure in both SVG and high-quality PNG formats"""
+        if save_path:
+            svg_path = Path(save_path)
+            png_path = svg_path.with_suffix('.png')
+
+            # Save SVG (vector format, scalable)
+            fig.savefig(svg_path, format='svg', bbox_inches='tight', dpi=300)
+
+            # Save PNG (raster format, 300 DPI for print quality)
+            fig.savefig(png_path, format='png', bbox_inches='tight', dpi=300,
+                       facecolor='white', edgecolor='none')
+
+            print(f"Saved: {svg_path.name} and {png_path.name}")
+
     def extract_latent_variables(self, model: torch.nn.Module, dataloader: torch.utils.data.DataLoader,
                                 device: torch.device) -> Dict[str, np.ndarray]:
         """Extract latent variables from model"""
@@ -69,9 +84,17 @@ class AcademicSVGEvaluator:
 
         with torch.no_grad():
             for batch in dataloader:
-                trajectories = batch['trajectory'].to(device)
-                subject_ids = batch['subject_id']
-                skill_scores = batch['skill_score'].to(device)
+                # Handle both tuple and dict formats
+                if isinstance(batch, (list, tuple)):
+                    # Tuple format: (trajectories, subject_ids, skill_scores)
+                    trajectories, subject_ids, skill_scores = batch
+                    trajectories = trajectories.to(device)
+                    skill_scores = skill_scores.to(device)
+                else:
+                    # Dict format
+                    trajectories = batch['trajectory'].to(device)
+                    subject_ids = batch['subject_id']
+                    skill_scores = batch['skill_score'].to(device)
 
                 # Get model outputs
                 outputs = model(trajectories, subject_ids, skill_scores)
@@ -147,8 +170,7 @@ class AcademicSVGEvaluator:
 
         plt.tight_layout()
 
-        if save_path:
-            fig.savefig(save_path, format='svg', bbox_inches='tight', dpi=300)
+        self.save_figure(fig, save_path)
 
         return fig
 
@@ -196,8 +218,7 @@ class AcademicSVGEvaluator:
 
         plt.tight_layout()
 
-        if save_path:
-            fig.savefig(save_path, format='svg', bbox_inches='tight', dpi=300)
+        self.save_figure(fig, save_path)
 
         return fig
 
@@ -287,8 +308,7 @@ class AcademicSVGEvaluator:
 
         plt.tight_layout()
 
-        if save_path:
-            fig.savefig(save_path, format='svg', bbox_inches='tight', dpi=300)
+        self.save_figure(fig, save_path)
 
         return fig, results
 
@@ -319,8 +339,7 @@ class AcademicSVGEvaluator:
 
         plt.tight_layout()
 
-        if save_path:
-            fig.savefig(save_path, format='svg', bbox_inches='tight', dpi=300)
+        self.save_figure(fig, save_path)
 
         return fig
 
@@ -370,8 +389,7 @@ class AcademicSVGEvaluator:
 
         plt.tight_layout()
 
-        if save_path:
-            fig.savefig(save_path, format='svg', bbox_inches='tight', dpi=300)
+        self.save_figure(fig, save_path)
 
         return fig
 

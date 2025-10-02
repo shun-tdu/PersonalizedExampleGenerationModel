@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 sys.path.append(str(Path(__file__).parent.parent))
 
 from datasets.dataloader_factory import DataLoaderFactory
-from .svg_evaluator import AcademicSVGEvaluator
+from .academic_comprehensive_evaluator import AcademicComprehensiveEvaluator
 
 
 class AcademicEvaluationRunner:
@@ -25,7 +25,7 @@ class AcademicEvaluationRunner:
     def __init__(self, output_dir: str = "academic_results", anonymize_subjects: bool = True):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.evaluator = AcademicSVGEvaluator(output_dir, anonymize_subjects)
+        self.evaluator = AcademicComprehensiveEvaluator(output_dir, anonymize_subjects)
 
     def load_model_from_path(self, model_path: str, model_class_name: str = None,
                            model_file_path: str = None, config: Dict[str, Any] = None) -> torch.nn.Module:
@@ -48,9 +48,26 @@ class AcademicEvaluationRunner:
         # Import model class dynamically
         model_file_path = Path(model_file_path)
         if not model_file_path.is_absolute():
-            # Convert relative path to absolute
-            base_dir = Path(__file__).parent.parent
-            model_file_path = base_dir / model_file_path
+            # Handle different path scenarios for Docker and local environments
+            if model_file_path.parts[0] == "PredictiveLatentSpaceNavigationModel":
+                # Path already starts from project root, find the actual project root
+                current_path = Path(__file__).resolve()
+                # Navigate up to find the PredictiveLatentSpaceNavigationModel directory
+                project_root = None
+                for parent in current_path.parents:
+                    if parent.name == "PredictiveLatentSpaceNavigationModel":
+                        project_root = parent.parent
+                        break
+
+                if project_root:
+                    model_file_path = project_root / model_file_path
+                else:
+                    # Fallback: use current working directory
+                    model_file_path = Path.cwd() / model_file_path
+            else:
+                # Standard relative path, use parent directory
+                base_dir = Path(__file__).parent.parent
+                model_file_path = base_dir / model_file_path
 
         spec = importlib.util.spec_from_file_location("model_module", model_file_path)
         model_module = importlib.util.module_from_spec(spec)
@@ -69,10 +86,30 @@ class AcademicEvaluationRunner:
 
         return model
 
-    def load_model_from_experiment(self, experiment_id: int, experiments_db_path: str = "experiments.db") -> torch.nn.Module:
+    def load_model_from_experiment(self, experiment_id: int, experiments_db_path: str = None) -> torch.nn.Module:
         """Load model from experiment database"""
         import sqlite3
         import json
+
+        # Auto-detect database path if not provided
+        if experiments_db_path is None:
+            # Try multiple possible locations
+            possible_paths = [
+                "experiments.db",  # Current directory
+                "../experiments.db",  # Parent directory
+                "../../experiments.db",  # Two levels up
+                str(Path(__file__).parent.parent / "experiments.db"),  # TransformerBaseEndToEndVAE directory
+            ]
+
+            experiments_db_path = None
+            for path in possible_paths:
+                if Path(path).exists():
+                    experiments_db_path = path
+                    print(f"Found database at: {experiments_db_path}")
+                    break
+
+            if experiments_db_path is None:
+                raise FileNotFoundError(f"Could not find experiments.db in any of these locations: {possible_paths}")
 
         conn = sqlite3.connect(experiments_db_path)
         cursor = conn.cursor()
@@ -102,27 +139,45 @@ class AcademicEvaluationRunner:
 
         return self.load_model_from_path(model_path, model_class_name, model_file_path, config)
 
-    def create_dataloader(self, data_config: Dict[str, Any] = None) -> DataLoader:
+    def create_dataloader(self, data_config: Dict[str, Any] = None, experiment_config: Dict[str, Any] = None) -> DataLoader:
         """Create dataloader for evaluation"""
         if data_config is None:
-            # Default configuration
-            data_config = {
-                'data_type': 'skill_metrics',
-                'data_data_path': 'PredictiveLatentSpaceNavigationModel/DataPreprocess/AnalysisResults/Dataset_Generation_Test_20250908_193217/dataset',
-                'data_val_split': 0.2,
-                'data_random_seed': 42,
-                'data_num_workers': 4,
-                'data_pin_memory': True,
-                'data_shuffle': False,  # Don't shuffle for consistent evaluation
-                'training_batch_size': 32
-            }
+            # Use experiment configuration if available
+            if experiment_config:
+                data_config = {
+                    'data': {
+                        'type': experiment_config.get('data_type', 'skill_metrics'),
+                        'data_path': experiment_config.get('data_data_path', 'PredictiveLatentSpaceNavigationModel/DataPreprocess/AnalysisResults/Dataset_Generation_Test_20250908_193217/dataset'),
+                        'val_split': experiment_config.get('data_val_split', 0.2),
+                        'random_seed': experiment_config.get('data_random_seed', 42),
+                        'num_workers': experiment_config.get('data_num_workers', 4),
+                        'pin_memory': experiment_config.get('data_pin_memory', True),
+                        'shuffle': experiment_config.get('data_shuffle', False)  # Don't shuffle for evaluation
+                    },
+                    'training': {
+                        'batch_size': experiment_config.get('training_batch_size', 32)
+                    }
+                }
+            else:
+                # Default configuration with proper structure
+                data_config = {
+                    'data': {
+                        'type': 'skill_metrics',
+                        'data_path': 'PredictiveLatentSpaceNavigationModel/DataPreprocess/AnalysisResults/Dataset_Generation_Test_20250908_193217/dataset',
+                        'val_split': 0.2,
+                        'random_seed': 42,
+                        'num_workers': 4,
+                        'pin_memory': True,
+                        'shuffle': False  # Don't shuffle for consistent evaluation
+                    },
+                    'training': {
+                        'batch_size': 32
+                    }
+                }
 
         try:
-            # Create dataloader factory
-            factory = DataLoaderFactory(data_config)
-
-            # Get test dataloader
-            _, _, test_loader = factory.create_dataloaders()
+            # Create dataloaders using static method
+            _, _, test_loader, _, _, _, _ = DataLoaderFactory.create_dataloaders(data_config)
 
             return test_loader
 
@@ -142,13 +197,61 @@ class AcademicEvaluationRunner:
         else:
             device = torch.device(device)
 
+        # Get experiment config for dataloader
+        import sqlite3
+        import json
+
+        # Auto-detect database path for Docker environment
+        if experiments_db_path == "experiments.db":
+            possible_paths = [
+                "experiments.db",  # Current directory
+                "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/experiments.db",  # From project root
+                str(Path(__file__).parent.parent / "experiments.db"),  # From evaluator directory
+                "../experiments.db",
+                "../../experiments.db",
+            ]
+
+            found_path = None
+            for path in possible_paths:
+                if Path(path).exists():
+                    found_path = path
+                    print(f"Found database at: {path}")
+                    break
+
+            if found_path:
+                experiments_db_path = found_path
+            else:
+                # List what files exist to help debug
+                print(f"Current directory: {Path.cwd()}")
+                print(f"Files in current directory: {list(Path.cwd().iterdir())}")
+                raise FileNotFoundError(f"Could not find experiments.db in any location: {possible_paths}")
+
+        print(f"Using database: {experiments_db_path}")
+
+        try:
+            conn = sqlite3.connect(experiments_db_path)
+            cursor = conn.cursor()
+            cursor.execute('SELECT config_parameters FROM transformer_base_e2e_vae_experiment WHERE id = ?', (experiment_id,))
+            result = cursor.fetchone()
+            conn.close()
+
+            if not result:
+                raise ValueError(f"No config found for experiment {experiment_id}")
+
+            experiment_config = json.loads(result[0])
+            print(f"Successfully loaded config for experiment {experiment_id}")
+
+        except Exception as e:
+            print(f"Database error: {e}")
+            experiment_config = None
+
         # Load model
         model = self.load_model_from_experiment(experiment_id, experiments_db_path)
         model.to(device)
         model.eval()
 
-        # Create dataloader
-        test_loader = self.create_dataloader(data_config)
+        # Create dataloader using experiment config
+        test_loader = self.create_dataloader(data_config, experiment_config)
 
         # Run evaluation
         results = self.evaluator.evaluate_model(
@@ -160,18 +263,23 @@ class AcademicEvaluationRunner:
         summary_path = self.output_dir / f"experiment_{experiment_id}_summary.json"
         with open(summary_path, 'w') as f:
             # Convert numpy types to native Python types for JSON serialization
-            summary = {}
-            for k, v in results['summary_metrics'].items():
-                if hasattr(v, 'item'):  # numpy scalar
-                    summary[k] = v.item()
+            def convert_numpy_types(obj):
+                if hasattr(obj, 'item'):  # numpy scalar
+                    return obj.item()
+                elif isinstance(obj, dict):
+                    return {k: convert_numpy_types(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [convert_numpy_types(v) for v in obj]
                 else:
-                    summary[k] = v
+                    return obj
 
-            json.dump({
+            serializable_data = {
                 'experiment_id': experiment_id,
-                'summary_metrics': summary,
-                'skill_regression_results': results['skill_regression_results']
-            }, f, indent=2)
+                'summary_metrics': convert_numpy_types(results['summary_metrics']),
+                'skill_regression_results': convert_numpy_types(results['skill_regression_results'])
+            }
+
+            json.dump(serializable_data, f, indent=2)
 
         print(f"Evaluation completed. Results saved to {self.output_dir}")
         return results
@@ -205,24 +313,29 @@ class AcademicEvaluationRunner:
         summary_path = self.output_dir / f"{experiment_name}_summary.json"
         with open(summary_path, 'w') as f:
             # Convert numpy types to native Python types for JSON serialization
-            summary = {}
-            for k, v in results['summary_metrics'].items():
-                if hasattr(v, 'item'):  # numpy scalar
-                    summary[k] = v.item()
+            def convert_numpy_types(obj):
+                if hasattr(obj, 'item'):  # numpy scalar
+                    return obj.item()
+                elif isinstance(obj, dict):
+                    return {k: convert_numpy_types(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [convert_numpy_types(v) for v in obj]
                 else:
-                    summary[k] = v
+                    return obj
 
-            json.dump({
+            serializable_data = {
                 'experiment_name': experiment_name,
-                'summary_metrics': summary,
-                'skill_regression_results': results['skill_regression_results']
-            }, f, indent=2)
+                'summary_metrics': convert_numpy_types(results['summary_metrics']),
+                'skill_regression_results': convert_numpy_types(results['skill_regression_results'])
+            }
+
+            json.dump(serializable_data, f, indent=2)
 
         print(f"Evaluation completed. Results saved to {self.output_dir}")
         return results
 
     def compare_experiments(self, experiment_ids: List[int],
-                          experiments_db_path: str = "experiments.db") -> Dict[str, Any]:
+                          experiments_db_path: str = None) -> Dict[str, Any]:
         """Compare multiple experiments"""
         print(f"Comparing experiments: {experiment_ids}")
 

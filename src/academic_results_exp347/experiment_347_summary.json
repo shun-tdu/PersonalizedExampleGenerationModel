@@ -1,0 +1,26 @@
+{
+  "experiment_id": 347,
+  "summary_metrics": {
+    "reconstruction_mse": 0.008898639120161533,
+    "n_subjects": 2,
+    "n_samples": 280,
+    "style_dimensions": 16,
+    "skill_dimensions": 16,
+    "trajectory_length": 100,
+    "feature_dimensions": 6,
+    "skill_regression_r2": 0.41667850789516114,
+    "best_regression_method": "SVM",
+    "style_skill_cosine_similarity": 0.18150730431079865,
+    "style_skill_max_correlation": 0.47242666661079624
+  },
+  "skill_regression_results": {
+    "linear_r2": 0.35570395453525516,
+    "linear_rmse": 1.1050933599472046,
+    "svm_r2": 0.41667850789516114,
+    "svm_rmse": 1.051502257052863,
+    "mlp_r2": 0.3866513909934687,
+    "mlp_rmse": 1.0782263278961182,
+    "best_method": "SVM",
+    "best_r2": 0.41667850789516114
+  }
+}
