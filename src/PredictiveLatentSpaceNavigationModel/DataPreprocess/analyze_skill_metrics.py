@@ -20,6 +20,43 @@ import yaml
 import datetime
 import joblib
 
+# CLAUDE_ADDED: Academic paper formatting settings
+# Set Times New Roman font for academic papers
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = ['Times New Roman', 'Times', 'Liberation Serif']
+plt.rcParams['font.size'] = 9
+plt.rcParams['axes.labelsize'] = 11
+plt.rcParams['axes.titlesize'] = 13
+plt.rcParams['xtick.labelsize'] = 9
+plt.rcParams['ytick.labelsize'] = 9
+plt.rcParams['legend.fontsize'] = 9
+plt.rcParams['figure.titlesize'] = 15
+# Set tick direction to inward for academic papers
+plt.rcParams['xtick.direction'] = 'in'
+plt.rcParams['ytick.direction'] = 'in'
+
+
+def anonymize_subjects(subject_ids):
+    """Convert subject names to anonymous labels (Subject1, Subject2, etc.)"""
+    unique_subjects = sorted(list(set(subject_ids)))
+    return {subj: f"Subject{i+1}" for i, subj in enumerate(unique_subjects)}
+
+def save_academic_figure(fig, save_path):
+    """Save figure in both PDF and PNG formats for academic use"""
+    save_path = Path(save_path)
+    pdf_path = save_path.with_suffix('.pdf')
+    png_path = save_path.with_suffix('.png')
+
+    # Save PDF (vector format, scalable, preferred for academic papers)
+    fig.savefig(pdf_path, format='pdf', bbox_inches='tight', dpi=300,
+               facecolor='white', edgecolor='none')
+
+    # Save PNG (raster format, 300 DPI for print quality)
+    fig.savefig(png_path, format='png', bbox_inches='tight', dpi=300,
+               facecolor='white', edgecolor='none')
+
+    print(f"✅ Saved: {pdf_path.name} and {png_path.name}")
+
 
 class DataPreprocessConfigLoader:
     def __init__(self, config_dir: str):
@@ -751,7 +788,8 @@ class SkillAnalyzer:
         n_cols = min(3, n_metrics)
         n_rows = (n_metrics + n_cols - 1) // n_cols
 
-        fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols, figsize = (5 * n_cols, 4 * n_rows))
+        # 8.5cm = 3.35 inches width, adjust height based on number of rows
+        fig, axes = plt.subplots(nrows=n_rows, ncols=n_cols, figsize = (3.35, 2.5 * n_rows))
 
         if n_metrics == 1:
             axes = [axes]
@@ -763,8 +801,13 @@ class SkillAnalyzer:
         for i, metric in enumerate(metrics):
             ax = axes[i]
 
+            # CLAUDE_ADDED: 被験者名を匿名化
+            data_copy = data.copy()
+            subject_mapping = anonymize_subjects(data_copy['subject_id'])
+            data_copy['subject_id'] = data_copy['subject_id'].map(subject_mapping)
+
             # 箱ひげ図の作成
-            sns.boxplot(data=data, x='subject_id', y=metric, ax=ax)
+            sns.boxplot(data=data_copy, x='subject_id', y=metric, ax=ax)
             ax.set_title(f'{metric}\n(p={anova_results[metric]["p_value"]:.3f})',
                          fontsize=12)
             ax.set_xlabel('Subject ID')
@@ -779,8 +822,8 @@ class SkillAnalyzer:
         fig.tight_layout()
 
         try:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"✅ ANOVA箱ひげ図を保存: {save_path}")
+            # CLAUDE_ADDED: Use academic figure saving function
+            save_academic_figure(fig, save_path)
         except Exception as e:
             print(f"❌ グラフ保存エラー: {e}")
 
@@ -795,7 +838,8 @@ class SkillAnalyzer:
         }
         df = pd.DataFrame(data)
 
-        fig, axes = plt.subplots(nrows=1, ncols=2, figsize = (12, 5))
+        # 8.5cm = 3.35 inches width for dual subplot
+        fig, axes = plt.subplots(nrows=1, ncols=2, figsize = (3.35, 2.0))
 
         # 効果量のプロット
         sns.barplot(data=df, x='metrics', y='eta', ax=axes[0])
@@ -813,8 +857,8 @@ class SkillAnalyzer:
         fig.tight_layout()
 
         try:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"✅ ANOVA結果効果量グラフを保存: {save_path}")
+            # CLAUDE_ADDED: Use academic figure saving function
+            save_academic_figure(fig, save_path)
         except Exception as e:
             print(f"❌ グラフ保存エラー: {e}")
 
@@ -838,6 +882,179 @@ class SkillAnalyzer:
         # 4. promax 回転の場合は因子相関行列をプロット
         self._create_factor_correlation_heatmap(factor_analysis_results, output_dir / 'factor_correlation_heatmap.png')
 
+    def analyze_block_wise_factor_analysis(self, skill_metrics_df: pd.DataFrame, rotation: str = 'promax'):
+        """ブロック毎の因子分析を実行し、2x2プロットを作成"""
+        print("ブロック毎の因子分析を実行中...")
+
+        output_dir = self.output_manager.skill_analyzer_output_dir_path
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # ブロック1-4の因子分析結果を格納
+        block_results = {}
+
+        for block in range(1, 5):
+            print(f"ブロック{block}の因子分析を実行中...")
+            block_data = skill_metrics_df[skill_metrics_df['block'] == block]
+
+            if len(block_data) < 10:
+                print(f"⚠️ ブロック{block}: データが不足しています (サンプル数: {len(block_data)})")
+                continue
+
+            # ブロック毎の因子分析を実行
+            factor_result = self._perform_factor_analysis(block_data, rotation)
+
+            if 'error' not in factor_result:
+                # ブロック情報を追加
+                factor_result['block'] = block
+                factor_result['block_data'] = block_data
+                block_results[block] = factor_result
+                print(f"✅ ブロック{block}の因子分析完了")
+            else:
+                print(f"❌ ブロック{block}の因子分析エラー: {factor_result['error']}")
+
+        if len(block_results) < 4:
+            print(f"⚠️ 4ブロック全ての因子分析が完了していません。完了数: {len(block_results)}")
+
+        # 2x2プロットを作成
+        if block_results:
+            self._create_block_wise_2x2_plots(block_results, output_dir / 'block_wise_factor_analysis.png')
+
+        return block_results
+
+    def _create_block_wise_2x2_plots(self, block_results: Dict, save_path: Path):
+        """ブロック毎の因子分析結果を2x2プロットで表示"""
+        print("ブロック毎2x2プロットを作成中...")
+
+        # 全被験者の統一マッピングを作成
+        all_subjects = set()
+        for block_data in block_results.values():
+            all_subjects.update(block_data['block_data']['subject_id'].unique())
+        global_subject_mapping = anonymize_subjects(list(all_subjects))
+
+        # 2x2サブプロット作成 (8.5cm = 3.35 inches width)
+        fig, axes = plt.subplots(2, 2, figsize=(3.35, 3.35))
+        axes = axes.flatten()
+
+        for idx, block in enumerate(range(1, 5)):
+            ax = axes[idx]
+
+            if block not in block_results:
+                ax.text(0.5, 0.5, f'Block {block}\nNo Data', ha='center', va='center',
+                       transform=ax.transAxes, fontsize=2)
+                ax.set_title(f'Block {block}', fontsize=4)
+                continue
+
+            result = block_results[block]
+            block_data = result['block_data']
+
+            # 因子得点が2因子以上ある場合のみ散布図を描画
+            if result['n_factors'] >= 2:
+                factor_scores = result['factor_scores']
+
+                # 被験者情報を取得
+                analysis_data = block_data[result['skill_columns']].dropna()
+                subject_info = block_data.loc[analysis_data.index, ['subject_id']]
+
+                # 被験者ごとに色分けして散布図を作成
+                unique_subjects = subject_info['subject_id'].unique()
+                colors = plt.cm.tab10(np.linspace(0, 1, len(unique_subjects)))
+
+                for i, subject in enumerate(unique_subjects):
+                    mask = subject_info['subject_id'] == subject
+                    if np.sum(mask) > 0:
+                        subject_scores = factor_scores[mask]
+                        ax.scatter(subject_scores[:, 0], subject_scores[:, 1],
+                                 c=[colors[i]], label=global_subject_mapping[subject],
+                                 alpha=0.7, s=1)
+
+                # 軸の設定
+                ax.set_xlabel('Factor 1 Score',fontsize=8)
+                ax.set_ylabel('Factor 2 Score',fontsize=8)
+                # ax.grid(True, alpha=0.3, linewidth=0.2)
+
+                ax.tick_params(axis='both', labelsize=6)
+
+                # 軸の交点に線を追加
+                # ax.axhline(y=0, color='k', linestyle='-', alpha=0.3)
+                # ax.axvline(x=0, color='k', linestyle='-', alpha=0.3)
+
+                # 左上の散布図（Block 1）にのみ凡例を追加
+                if block == 1:
+                    ax.legend(loc='upper left',
+                             fontsize=4, frameon=True, fancybox=True,
+                             shadow=True, framealpha=0.8, markerscale=2)
+            else:
+                ax.text(0.5, 0.5, f'Block {block}\nInsufficient Factors\n({result["n_factors"]} factor)',
+                       ha='center', va='center', transform=ax.transAxes, fontsize=1)
+                ax.set_title(f'Block {block}', fontsize=6)
+
+        plt.tight_layout()
+
+        # 学術論文用の保存
+        save_academic_figure(fig, save_path)
+        plt.close(fig)
+
+        # 追加：ブロック毎の因子負荷量ヒートマップも2x2で作成
+        self._create_block_wise_heatmaps(block_results, save_path.parent / 'block_wise_factor_loadings.png')
+
+    def _create_block_wise_heatmaps(self, block_results: Dict, save_path: Path):
+        """ブロック毎の因子負荷量ヒートマップを2x2で表示"""
+        print("ブロック毎ヒートマップを作成中...")
+
+        # 2x2サブプロット作成 (8.5cm = 3.35 inches width)
+        fig, axes = plt.subplots(2, 2, figsize=(3.35, 3.35))
+        axes = axes.flatten()
+
+        for idx, block in enumerate(range(1, 5)):
+            ax = axes[idx]
+
+            if block not in block_results:
+                ax.text(0.5, 0.5, f'Block {block}\nNo Data', ha='center', va='center',
+                       transform=ax.transAxes, fontsize=2)
+                ax.set_title(f'Block {block}', fontsize=4)
+                ax.set_xticks([])
+                ax.set_yticks([])
+                continue
+
+            result = block_results[block]
+
+            # 因子負荷量のヒートマップ作成
+            loadings = result['factor_loadings']
+            skill_columns = result['skill_columns']
+            n_factors = result['n_factors']
+
+            # DataFrameに変換
+            loading_df = pd.DataFrame(
+                loadings,
+                index=skill_columns,
+                columns=[f'F{i+1}' for i in range(n_factors)]
+            )
+
+            # ヒートマップを描画
+            heatmap = sns.heatmap(loading_df, annot=True, cmap='RdBu_r', center=0,
+                       fmt='.2f', ax=ax, cbar=True,
+                       cbar_kws={'shrink': 0.8}, annot_kws={'fontsize': 4})
+
+            # カラーバーのフォントサイズを調整
+            if heatmap.collections:
+                colorbar = heatmap.collections[0].colorbar
+                if colorbar:
+                    colorbar.ax.tick_params(labelsize=4)
+
+            ax.set_title(f'Block {block}', fontsize=6)
+            ax.set_xlabel('Factor', fontsize=6)
+            ax.set_ylabel('Skill Metrics', fontsize=6)
+            # 目盛り線を細くし、スキル指標名を斜めに回転
+            ax.tick_params(axis='both', labelsize=4, width=0.5, length=2)
+            ax.tick_params(axis='y', rotation=45)
+
+        # plt.suptitle('Block-wise Factor Analysis: Factor Loading Matrix', fontsize=18, y=0.98)
+        plt.tight_layout()
+
+        # 学術論文用の保存
+        save_academic_figure(fig, save_path)
+        plt.close(fig)
+
     def _create_factor_loading_heatmap(self, factor_analysis_results: Dict, save_path: Path):
         """因子負荷量のヒートマップ作成"""
         loadings = factor_analysis_results['factor_loadings']
@@ -851,7 +1068,8 @@ class SkillAnalyzer:
             columns=[f'Factor {i+1}' for i in range(n_factors)]
         )
 
-        fig, axes = plt.subplots(figsize = (8, 6))
+        # 8.5cm = 3.35 inches width for factor loading heatmap
+        fig, axes = plt.subplots(figsize = (3.35, 2.5))
         sns.heatmap(loading_df, annot=True, cmap='RdBu_r', center=0,
                     fmt ='.2f', ax=axes, cbar_kws={'label': 'Factor Loading'})
         axes.set_title('Factor Loading Matrix', fontsize=14)
@@ -859,8 +1077,8 @@ class SkillAnalyzer:
         axes.set_ylabel('Skill Metrics')
 
         try:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"✅ 因子負荷量ヒートマップを保存: {save_path}")
+            # CLAUDE_ADDED: Use academic figure saving function
+            save_academic_figure(fig, save_path)
         except Exception as e:
             print(f"❌ ヒートマップ保存エラー: {e}")
 
@@ -874,7 +1092,11 @@ class SkillAnalyzer:
         analysis_data = skill_metrics_df[factor_analysis_results['skill_columns']].dropna()
         subject_info = skill_metrics_df.loc[analysis_data.index, ['subject_id', 'block']]
 
-        fig, axes = plt.subplots(figsize=(10, 8))
+        # CLAUDE_ADDED: 被験者名の匿名化
+        subject_mapping = anonymize_subjects(subject_info['subject_id'])
+
+        # 8.5cm = 3.35 inches width for factor score scatter plot
+        fig, axes = plt.subplots(figsize=(3.35, 2.8))
 
         # 被験者ごとに色分けして散布図を作成
         unique_subjects = subject_info['subject_id'].unique()
@@ -884,8 +1106,9 @@ class SkillAnalyzer:
             mask = subject_info['subject_id'] == subject
             if np.sum(mask) > 0:
                 subject_scores = factor_scores[mask]
+                # CLAUDE_ADDED: 匿名化された被験者名を使用
                 axes.scatter(subject_scores[:, 0], subject_scores[:, 1],
-                           c=[colors[i]], label=f'Subject {subject}', alpha=0.7, s=50)
+                           c=[colors[i]], label=subject_mapping[subject], alpha=0.7, s=50)
 
         axes.set_xlabel('Factor 1 score')
         axes.set_ylabel('Factor 2 score')
@@ -897,12 +1120,8 @@ class SkillAnalyzer:
         axes.axhline(y=0, color='k', linestyle='-', alpha=0.3)
         axes.axvline(x=0, color='k', linestyle='-', alpha=0.3)
 
-        try:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"✅ 因子得点散布図を保存: {save_path}")
-        except Exception as e:
-            print(f"❌ 散布図保存エラー: {e}")
-
+        # CLAUDE_ADDED: 学術論文用の保存
+        save_academic_figure(fig, save_path)
         plt.close(fig)
 
     def _create_factor_variance_plot(self, factor_analysis_results: Dict, save_path: Path):
@@ -917,7 +1136,8 @@ class SkillAnalyzer:
 
         factor_names = [f'Factor {i + 1}' for i in range(n_factors)]
 
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+        # 8.5cm = 3.35 inches width for factor variance plot (dual subplot)
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(3.35, 2.5))
 
         # 寄与率棒グラフ
         bars = ax1.bar(factor_names, contribution_ratios, alpha=0.7, color='steelblue')
@@ -945,12 +1165,8 @@ class SkillAnalyzer:
         fig.suptitle('Factor Analysis：Explained Variance', fontsize=14, y=1.02)
         fig.tight_layout()
 
-        try:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"✅ 因子寄与率グラフを保存: {save_path}")
-        except Exception as e:
-            print(f"❌ 寄与率グラフ保存エラー: {e}")
-
+        # CLAUDE_ADDED: 学術論文用の保存
+        save_academic_figure(fig, save_path)
         plt.close(fig)
 
     def _create_factor_correlation_heatmap(self, factor_analysis_results: Dict, save_path: Path):
@@ -962,7 +1178,8 @@ class SkillAnalyzer:
             print("💡 因子間相関行列は斜交回転（promaxなど）の場合のみプロットされます。")
             return
 
-        plt.figure(figsize=(8, 6))
+        # 8.5cm = 3.35 inches width for factor correlation heatmap
+        fig = plt.figure(figsize=(3.35, 2.8))
         sns.heatmap(fa_correlation,
                     annot=True,
                     fmt='.2f',
@@ -973,12 +1190,8 @@ class SkillAnalyzer:
         plt.xlabel('Factor')
         plt.ylabel('Factor')
 
-        try:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
-            print(f"✅ 因子間相関行列ヒートマップを保存: {save_path}")
-        except Exception as e:
-            print(f"❌ ヒートマップ保存エラー: {e}")
-
+        # CLAUDE_ADDED: 学術論文用の保存
+        save_academic_figure(fig, save_path)
         plt.close()
 
 
@@ -1110,35 +1323,84 @@ class SkillScoreCalculator:
         """被験者ごとにスキルスコアの推移をプロットする"""
         self.output.skill_score_calculator_output_dir_path.mkdir(parents=True, exist_ok=True)
 
-        save_path = self.output.skill_score_calculator_output_dir_path / 'skill_score_transition.png'
+        save_path = self.output.skill_score_calculator_output_dir_path / 'skill_score_transition'
 
-        plt.figure(figsize=(12, 7))
+        # CLAUDE_ADDED: 被験者名の匿名化
+        anonymized_scores = skill_scores.copy()
+        subject_mapping = anonymize_subjects(skill_scores['subject_id'])
+        anonymized_scores['subject_id'] = anonymized_scores['subject_id'].map(subject_mapping)
+
+        # 12cm = 4.72 inches width for skill score plot
+        fig = plt.figure(figsize=(4.72, 2.8))
 
         # CLAUDE_ADDED: smoothed_skill_scoreが存在するかチェックして適切なカラムを選択
         y_column = 'smoothed_skill_score' if 'smoothed_skill_score' in skill_scores.columns else 'skill_score'
         plot_title = 'Smoothed Skill Score Improvement' if y_column == 'smoothed_skill_score' else 'Skill Score Improvement'
 
         sns.lineplot(
-            data =skill_scores,
+            data=anonymized_scores,
             x='trial_order',
             y=y_column,
             hue='subject_id',
         )
 
-        plt.title(plot_title + ' Over Trials per Subject')
-        plt.xlabel('Trial Order')
-        plt.ylabel('Calculated Skill Score')
-        plt.grid(True)
-        plt.legend(title='Subject ID')
+        plt.xlabel('Trial Order [-]', fontsize=9)
+        plt.ylabel('Calculated Skill Score [-]', fontsize=9)
+        plt.grid(True, alpha=0.3)
+        plt.legend(title='Subject ID', fontsize=5, title_fontsize=6, loc='best', ncol=2)
+        plt.tick_params(axis='both', labelsize=8)
 
         plt.tight_layout()
 
-        try:
-            plt.savefig(save_path, dpi=300)
-            print(f"✅ スキルスコア推移グラフを保存: {save_path}")
-        except Exception as e:
-            print(f"❌ グラフ保存エラー: {e}")
+        # CLAUDE_ADDED: 学術論文用の保存
+        save_academic_figure(fig, save_path)
+        plt.close()
 
+        # CLAUDE_ADDED: 標準化したスキルスコアのプロット
+        self._save_standardized_skill_score_plot(skill_scores, subject_mapping, y_column)
+
+    def _save_standardized_skill_score_plot(self, skill_scores: pd.DataFrame, subject_mapping: Dict, original_y_column: str):
+        """CLAUDE_ADDED: StandardScalerで標準化したスキルスコアをプロットする"""
+        # 標準化処理: StandardScaler (DatasetBuilderと同じ処理)
+        standardized_scores = skill_scores.copy()
+
+        # 使用するカラム
+        score_column = original_y_column
+
+        # StandardScalerで標準化 (全データに対して)
+        scaler = StandardScaler()
+        skill_values = standardized_scores[score_column].values.reshape(-1, 1)
+        standardized_values = scaler.fit_transform(skill_values)
+
+        standardized_column_name = f'standardized_{score_column}'
+        standardized_scores[standardized_column_name] = standardized_values.flatten()
+
+        # 被験者名を匿名化
+        standardized_scores['subject_id'] = standardized_scores['subject_id'].map(subject_mapping)
+
+        # プロットの保存パス
+        save_path = self.output.skill_score_calculator_output_dir_path / 'standardized_skill_score_transition'
+
+        # 12cm = 4.72 inches width for skill score plot
+        fig = plt.figure(figsize=(4.72, 2.8))
+
+        sns.lineplot(
+            data=standardized_scores,
+            x='trial_order',
+            y=standardized_column_name,
+            hue='subject_id',
+        )
+
+        plt.xlabel('Trial Order [-]', fontsize=9)
+        plt.ylabel('Standardized Skill Score (Z-score) [-]', fontsize=9)
+        plt.grid(True, alpha=0.3)
+        plt.legend(title='Subject ID', fontsize=5, title_fontsize=6, loc='best', ncol=2)
+        plt.tick_params(axis='both', labelsize=8)
+
+        plt.tight_layout()
+
+        # 学術論文用の保存
+        save_academic_figure(fig, save_path)
         plt.close()
 
 
@@ -1378,6 +1640,14 @@ if __name__ == '__main__':
 
         # 学習済みスケーラと因子分析オブジェクトを取得
         trained_scaler, trained_fa = skill_analyzer.factorize_artifact
+
+        print("============ 全データでブロック毎因子分析を実行 ============")
+        # 全データを取得してブロック毎の因子分析を実行
+        all_preprocess_data_for_blockwise = trajectory_loader.get_preprocessed_data(0)
+        all_skill_metrics_df_for_blockwise = skill_metrics_calculator.calculate_skill_metrics(all_preprocess_data_for_blockwise)
+
+        # ブロック毎の因子分析を実行
+        skill_analyzer.analyze_block_wise_factor_analysis(all_skill_metrics_df_for_blockwise, 'promax')
 
         print("============ 全データに対してスキルスコアを計算 (block_num = 0) ============")
         block_num = 0

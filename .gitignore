@@ -55,6 +55,7 @@ src/outputs/
 src/PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/outputs/
 src/PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/configs/
 
+
 # # Model-specific output directories
 # 各モデルの出力ディレクトリ
 src/UNet/outputs/

@@ -451,7 +451,7 @@ class ExperimentRunner:
         optimizer = self._setup_optimizer(model_wrapper.model)
         scheduler = self._setup_scheduler(optimizer)
         
-        # CLAUDE_ADDED: アーリーストッピングのセットアップ
+        # アーリーストッピングのセットアップ
         early_stopping = self._setup_early_stopping()
 
         training_config = self.config.get('training', {})
@@ -510,7 +510,7 @@ class ExperimentRunner:
                             if 'val_total_loss' in all_metrics:
                                 scheduler.step(all_metrics['val_total_loss'])
 
-                        # CLAUDE_ADDED: 学習率変更をログ出力
+                        # 学習率変更をログ出力
                         new_lr = optimizer.param_groups[0]['lr']
                         if training_config.get('scheduler_verbose', False) and new_lr != old_lr:
                             print(f"ReduceLROnPlateau: 学習率を {old_lr:.2e} から {new_lr:.2e} に変更")
@@ -520,7 +520,7 @@ class ExperimentRunner:
                 # 進捗表示
                 print(f"Epoch {epoch+1}/{num_epochs}: {epoch_metrics}")
 
-                # CLAUDE_ADDED: アーリーストッピングのチェック
+                # アーリーストッピングのチェック
                 if early_stopping is not None and val_loader is not None:
                     monitor_value = all_metrics.get(early_stopping.monitor)
                     if monitor_value is not None:

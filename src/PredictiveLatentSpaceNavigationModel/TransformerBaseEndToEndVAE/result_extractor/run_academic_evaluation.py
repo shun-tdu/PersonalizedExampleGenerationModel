@@ -35,7 +35,9 @@ def evaluate_top_experiments():
     for i, exp_id in enumerate(top_experiments, 1):
         print(f"[{i}/{len(top_experiments)}] Evaluating Experiment {exp_id}...")
         try:
-            results = runner.evaluate_experiment(exp_id, experiments_db_path=None)  # Auto-detect database
+            # Use correct database path for Docker environment
+            db_path = "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/experiments.db"
+            results = runner.evaluate_experiment(exp_id, experiments_db_path=db_path)
             metrics = results['summary_metrics']
 
             print(f"Experiment {exp_id} completed:")
@@ -70,7 +72,9 @@ def evaluate_single_experiment(experiment_id: int):
     )
 
     try:
-        results = runner.evaluate_experiment(experiment_id, experiments_db_path=None)  # Auto-detect database
+        # Use correct database path for Docker environment
+        db_path = "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/experiments.db"
+        results = runner.evaluate_experiment(experiment_id, experiments_db_path=db_path)
         metrics = results['summary_metrics']
 
         print(f"Experiment {experiment_id} evaluation completed:")
@@ -115,7 +119,9 @@ def compare_film_vs_cross_attention():
     print()
 
     all_experiments = film_experiments + cross_attention_experiments
-    comparison_results = runner.compare_experiments(all_experiments, experiments_db_path=None)
+    # Use correct database path for Docker environment
+    db_path = "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/experiments.db"
+    comparison_results = runner.compare_experiments(all_experiments, experiments_db_path=db_path)
 
     print("Comparison Summary:")
     for exp_name, metrics in comparison_results.items():

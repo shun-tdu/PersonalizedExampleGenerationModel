@@ -29,16 +29,18 @@ class AcademicComprehensiveEvaluator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.anonymize_subjects = anonymize_subjects
 
-        # Set Times New Roman font for academic papers
+        # Set Times New Roman font for academic papers (optimized for 3.5cm width)
         plt.rcParams['font.family'] = 'serif'
         plt.rcParams['font.serif'] = ['Times New Roman', 'Times', 'Liberation Serif']
-        plt.rcParams['font.size'] = 12
-        plt.rcParams['axes.labelsize'] = 14
-        plt.rcParams['axes.titlesize'] = 16
-        plt.rcParams['xtick.labelsize'] = 12
-        plt.rcParams['ytick.labelsize'] = 12
-        plt.rcParams['legend.fontsize'] = 12
-        plt.rcParams['figure.titlesize'] = 18
+        plt.rcParams['font.size'] = 8
+        plt.rcParams['axes.labelsize'] = 9
+        plt.rcParams['axes.titlesize'] = 10
+        plt.rcParams['xtick.labelsize'] = 7
+        plt.rcParams['ytick.labelsize'] = 7
+        plt.rcParams['legend.fontsize'] = 7
+        plt.rcParams['figure.titlesize'] = 11
+        plt.rcParams['xtick.direction'] = 'in'
+        plt.rcParams['ytick.direction'] = 'in'
 
         # Academic color palette
         self.colors = {
@@ -56,19 +58,20 @@ class AcademicComprehensiveEvaluator:
         return {subj: f"Subject{i+1}" for i, subj in enumerate(unique_subjects)}
 
     def save_figure(self, fig: plt.Figure, save_path: str = None):
-        """Save figure in both SVG and high-quality PNG formats"""
+        """Save figure in both PDF and high-quality PNG formats"""
         if save_path:
-            svg_path = Path(save_path)
-            png_path = svg_path.with_suffix('.png')
+            pdf_path = Path(save_path)
+            png_path = pdf_path.with_suffix('.png')
 
-            # Save SVG (vector format, scalable)
-            fig.savefig(svg_path, format='svg', bbox_inches='tight', dpi=300)
+            # Save PDF (vector format, scalable, preferred for academic papers)
+            fig.savefig(pdf_path, format='pdf', bbox_inches='tight', dpi=300,
+                       facecolor='white', edgecolor='none')
 
             # Save PNG (raster format, 300 DPI for print quality)
             fig.savefig(png_path, format='png', bbox_inches='tight', dpi=300,
                        facecolor='white', edgecolor='none')
 
-            print(f"Saved: {svg_path.name} and {png_path.name}")
+            print(f"Saved: {pdf_path.name} and {png_path.name}")
 
     def extract_latent_variables(self, model: torch.nn.Module, dataloader: torch.utils.data.DataLoader,
                                 device: torch.device) -> Dict[str, np.ndarray]:
@@ -128,7 +131,7 @@ class AcademicComprehensiveEvaluator:
         from sklearn.preprocessing import StandardScaler, LabelEncoder
         from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(6.7, 5.0))
 
         # Anonymize subject names if needed
         if self.anonymize_subjects:
@@ -279,26 +282,26 @@ class AcademicComprehensiveEvaluator:
 
     def create_skill_space_visualization(self, z_skill: np.ndarray, skill_scores: np.ndarray,
                                        subject_ids: List[str] = None, save_path: str = None) -> plt.Figure:
-        """Create skill latent space visualization using VisualizeSkillSpaceEvaluator logic"""
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        """Create skill latent space visualization using PCA only"""
+        fig, ax = plt.subplots(1, 1, figsize=(3.35, 2.8))
 
         # PCA visualization
         if z_skill.shape[1] >= 2:
             pca = PCA(n_components=2)
             z_skill_pca = pca.fit_transform(z_skill)
 
-            scatter = ax1.scatter(z_skill_pca[:, 0], z_skill_pca[:, 1],
-                                c=skill_scores, cmap='RdYlBu_r', alpha=0.7, s=50,
+            scatter = ax.scatter(z_skill_pca[:, 0], z_skill_pca[:, 1],
+                                c=skill_scores, cmap='RdYlBu_r', alpha=0.7, s=10,
                                 edgecolors='black', linewidth=0.5)
 
-            ax1.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.3f})')
-            ax1.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.3f})')
-            ax1.set_title(f'Skill Latent Space (PCA)\nExplained: {pca.explained_variance_ratio_.sum():.3f}')
+            ax.set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.3f})')
+            ax.set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.3f})')
+            # ax.set_title(f'Skill Latent Space (PCA)\nExplained: {pca.explained_variance_ratio_.sum():.3f}')
 
             # Add colorbar
-            cbar = plt.colorbar(scatter, ax=ax1)
+            cbar = plt.colorbar(scatter, ax=ax)
             cbar.set_label('Skill Score')
-            ax1.grid(True, alpha=0.3)
+            ax.grid(True, alpha=0.3)
 
             # Add statistics
             if subject_ids:
@@ -306,37 +309,8 @@ class AcademicComprehensiveEvaluator:
             else:
                 stats_text = f'Samples: {len(z_skill)}\nSkill Range: [{np.min(skill_scores):.3f}, {np.max(skill_scores):.3f}]'
 
-            ax1.text(0.02, 0.98, stats_text, transform=ax1.transAxes, verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-
-        # t-SNE visualization
-        if len(z_skill) >= 30:
-            try:
-                tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(z_skill)//4))
-                z_skill_tsne = tsne.fit_transform(z_skill)
-
-                scatter = ax2.scatter(z_skill_tsne[:, 0], z_skill_tsne[:, 1],
-                                    c=skill_scores, cmap='RdYlBu_r', alpha=0.7, s=50,
-                                    edgecolors='black', linewidth=0.5)
-
-                ax2.set_xlabel('t-SNE Component 1')
-                ax2.set_ylabel('t-SNE Component 2')
-                ax2.set_title('Skill Latent Space (t-SNE)')
-
-                # Add colorbar
-                cbar = plt.colorbar(scatter, ax=ax2)
-                cbar.set_label('Skill Score')
-                ax2.grid(True, alpha=0.3)
-
-                # Add statistics
-                stats_text = f'Samples: {len(z_skill)}\nSkill Range: [{np.min(skill_scores):.3f}, {np.max(skill_scores):.3f}]'
-                ax2.text(0.02, 0.98, stats_text, transform=ax2.transAxes, verticalalignment='top',
-                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-
-            except Exception as e:
-                ax2.text(0.5, 0.5, f't-SNE Failed: {str(e)}', transform=ax2.transAxes, ha='center')
-        else:
-            ax2.text(0.5, 0.5, 'Insufficient samples for t-SNE', transform=ax2.transAxes, ha='center')
+            ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=6)
 
         plt.tight_layout()
         self.save_figure(fig, save_path)
@@ -349,7 +323,7 @@ class AcademicComprehensiveEvaluator:
         from sklearn.model_selection import train_test_split
         from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 
-        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(6.7, 5.0))
 
         results = {}
 
@@ -482,11 +456,114 @@ class AcademicComprehensiveEvaluator:
         self.save_figure(fig, save_path)
         return fig, results
 
+    def _calculate_r2(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+        """Calculate R² score for reconstruction accuracy"""
+        y_true_flat = y_true.flatten()
+        y_pred_flat = y_pred.flatten()
+
+        # Remove any NaN values
+        valid_mask = ~(np.isnan(y_true_flat) | np.isnan(y_pred_flat))
+        y_true_clean = y_true_flat[valid_mask]
+        y_pred_clean = y_pred_flat[valid_mask]
+
+        if len(y_true_clean) == 0:
+            return 0.0
+
+        ss_res = np.sum((y_true_clean - y_pred_clean) ** 2)
+        ss_tot = np.sum((y_true_clean - np.mean(y_true_clean)) ** 2)
+
+        if ss_tot == 0:
+            return 1.0 if ss_res == 0 else 0.0
+
+        return 1 - (ss_res / ss_tot)
+
+    def _calculate_and_print_rmse(self, trajectories: np.ndarray, reconstructed: np.ndarray):
+        """Calculate and print RMSE for position, velocity, and acceleration components"""
+        print("\n" + "="*60)
+        print("TRAJECTORY RECONSTRUCTION RMSE ANALYSIS")
+        print("="*60)
+
+        # Position RMSE (X, Y components: indices 0, 1)
+        pos_x_rmse = np.sqrt(np.mean((trajectories[:, :, 0] - reconstructed[:, :, 0])**2))
+        pos_y_rmse = np.sqrt(np.mean((trajectories[:, :, 1] - reconstructed[:, :, 1])**2))
+        pos_overall_rmse = np.sqrt(np.mean((trajectories[:, :, 0:2] - reconstructed[:, :, 0:2])**2))
+
+        print(f"Position RMSE:")
+        print(f"  X-component: {pos_x_rmse:.6f} [m]")
+        print(f"  Y-component: {pos_y_rmse:.6f} [m]")
+        print(f"  Overall:     {pos_overall_rmse:.6f} [m]")
+
+        # Velocity RMSE (X, Y components: indices 2, 3)
+        vel_x_rmse = np.sqrt(np.mean((trajectories[:, :, 2] - reconstructed[:, :, 2])**2))
+        vel_y_rmse = np.sqrt(np.mean((trajectories[:, :, 3] - reconstructed[:, :, 3])**2))
+        vel_overall_rmse = np.sqrt(np.mean((trajectories[:, :, 2:4] - reconstructed[:, :, 2:4])**2))
+
+        print(f"\nVelocity RMSE:")
+        print(f"  X-component: {vel_x_rmse:.6f} [m/s]")
+        print(f"  Y-component: {vel_y_rmse:.6f} [m/s]")
+        print(f"  Overall:     {vel_overall_rmse:.6f} [m/s]")
+
+        # Acceleration RMSE (X, Y components: indices 4, 5)
+        acc_x_rmse = np.sqrt(np.mean((trajectories[:, :, 4] - reconstructed[:, :, 4])**2))
+        acc_y_rmse = np.sqrt(np.mean((trajectories[:, :, 5] - reconstructed[:, :, 5])**2))
+        acc_overall_rmse = np.sqrt(np.mean((trajectories[:, :, 4:6] - reconstructed[:, :, 4:6])**2))
+
+        print(f"\nAcceleration RMSE:")
+        print(f"  X-component: {acc_x_rmse:.6f} [m/s²]")
+        print(f"  Y-component: {acc_y_rmse:.6f} [m/s²]")
+        print(f"  Overall:     {acc_overall_rmse:.6f} [m/s²]")
+
+        # Total trajectory RMSE
+        total_rmse = np.sqrt(np.mean((trajectories - reconstructed)**2))
+        print(f"\nTotal Trajectory RMSE: {total_rmse:.6f}")
+
+        # Calculate reconstruction accuracy (R² scores)
+        print("\nRECONSTRUCTION ACCURACY (R² Score):")
+        print("-" * 40)
+
+        # Position accuracy
+        pos_r2_x = self._calculate_r2(trajectories[:, :, 0], reconstructed[:, :, 0])
+        pos_r2_y = self._calculate_r2(trajectories[:, :, 1], reconstructed[:, :, 1])
+        pos_r2_overall = self._calculate_r2(trajectories[:, :, 0:2].flatten(), reconstructed[:, :, 0:2].flatten())
+
+        print(f"Position R²:")
+        print(f"  X-component: {pos_r2_x:.6f}")
+        print(f"  Y-component: {pos_r2_y:.6f}")
+        print(f"  Overall:     {pos_r2_overall:.6f}")
+
+        # Velocity accuracy
+        vel_r2_x = self._calculate_r2(trajectories[:, :, 2], reconstructed[:, :, 2])
+        vel_r2_y = self._calculate_r2(trajectories[:, :, 3], reconstructed[:, :, 3])
+        vel_r2_overall = self._calculate_r2(trajectories[:, :, 2:4].flatten(), reconstructed[:, :, 2:4].flatten())
+
+        print(f"\nVelocity R²:")
+        print(f"  X-component: {vel_r2_x:.6f}")
+        print(f"  Y-component: {vel_r2_y:.6f}")
+        print(f"  Overall:     {vel_r2_overall:.6f}")
+
+        # Acceleration accuracy
+        acc_r2_x = self._calculate_r2(trajectories[:, :, 4], reconstructed[:, :, 4])
+        acc_r2_y = self._calculate_r2(trajectories[:, :, 5], reconstructed[:, :, 5])
+        acc_r2_overall = self._calculate_r2(trajectories[:, :, 4:6].flatten(), reconstructed[:, :, 4:6].flatten())
+
+        print(f"\nAcceleration R²:")
+        print(f"  X-component: {acc_r2_x:.6f}")
+        print(f"  Y-component: {acc_r2_y:.6f}")
+        print(f"  Overall:     {acc_r2_overall:.6f}")
+
+        # Total trajectory accuracy
+        total_r2 = self._calculate_r2(trajectories.flatten(), reconstructed.flatten())
+        print(f"\nTotal Trajectory R²: {total_r2:.6f}")
+        print("="*60 + "\n")
+
     def create_trajectory_overlay_analysis(self, trajectories: np.ndarray, reconstructed: np.ndarray,
                                          subject_ids: List[str] = None, n_samples: int = 6,
                                          save_path: str = None) -> plt.Figure:
         """Create trajectory overlay analysis using TrajectoryOverlayEvaluator logic"""
         from matplotlib.gridspec import GridSpec
+
+        # Calculate RMSE for position, velocity, and acceleration components
+        self._calculate_and_print_rmse(trajectories, reconstructed)
 
         # Components to plot: 2D position, position time series, velocity time series, acceleration time series
         components = ['position_2d', 'position_time_series', 'velocity', 'acceleration']
@@ -498,7 +575,7 @@ class AcademicComprehensiveEvaluator:
         indices = np.random.choice(len(trajectories), n_samples, replace=False)
 
         # Create figure with GridSpec layout
-        fig = plt.figure(figsize=(12, 18))
+        fig = plt.figure(figsize=(3.35, 10.0))
         gs = GridSpec(n_components, 1, figure=fig, hspace=0.3)
 
         # Anonymize subject names if needed
@@ -562,29 +639,29 @@ class AcademicComprehensiveEvaluator:
 
                     # X component
                     ax.plot(time_steps, trajectories[idx, :, comp_indices[0]],
-                           color=color, alpha=0.7, linewidth=2,
-                           label=f'Original {subject_label} (X)' if i < 2 else '',
+                           color=color, alpha=0.7, linewidth=1,
+                           label=f'Original {subject_label} (X)',
                            linestyle='-')
                     ax.plot(time_steps, reconstructed[idx, :, comp_indices[0]],
-                           color=color, alpha=0.7, linewidth=2,
-                           label=f'Reconstructed {subject_label} (X)' if i < 2 else '',
+                           color=color, alpha=0.7, linewidth=1,
+                           label=f'Reconstructed {subject_label} (X)',
                            linestyle='--')
 
                     # Y component (different color tone)
                     darker_color = distinct_colors[(i + 6) % len(distinct_colors)]
                     ax.plot(time_steps, trajectories[idx, :, comp_indices[1]],
-                           color=darker_color, alpha=0.7, linewidth=2,
-                           label=f'Original {subject_label} (Y)' if i < 2 else '',
+                           color=darker_color, alpha=0.7, linewidth=1,
+                           label=f'Original {subject_label} (Y)',
                            linestyle='-')
                     ax.plot(time_steps, reconstructed[idx, :, comp_indices[1]],
-                           color=darker_color, alpha=0.7, linewidth=2,
-                           label=f'Reconstructed {subject_label} (Y)' if i < 2 else '',
+                           color=darker_color, alpha=0.7, linewidth=1,
+                           label=f'Reconstructed {subject_label} (Y)',
                            linestyle='--')
 
                 # Time series plot settings
                 ax.set_xlabel('Time Steps [-]')
                 ax.set_ylabel(y_label)
-                ax.set_title(f'{component_name} Time Series')
+                # ax.set_title(f'{component_name} Time Series')
                 ax.grid(True, alpha=0.3)
 
             else:
@@ -596,37 +673,38 @@ class AcademicComprehensiveEvaluator:
                     # Original trajectory (solid line)
                     ax.plot(trajectories[idx, :, comp_indices[0]],
                            trajectories[idx, :, comp_indices[1]],
-                           color=color, alpha=0.7, linewidth=2,
-                           label=f'Original {subject_label}' if i < 3 else '',
+                           color=color, alpha=0.7, linewidth=1,
+                           label=f'Original {subject_label}',
                            linestyle='-')
 
                     # Reconstructed trajectory (dashed line)
                     ax.plot(reconstructed[idx, :, comp_indices[0]],
                            reconstructed[idx, :, comp_indices[1]],
-                           color=color, alpha=0.7, linewidth=2,
-                           label=f'Reconstructed {subject_label}' if i < 3 else '',
+                           color=color, alpha=0.7, linewidth=1,
+                           label=f'Reconstructed {subject_label}',
                            linestyle='--')
 
                     # Mark start and end points
                     ax.scatter(trajectories[idx, 0, comp_indices[0]],
                               trajectories[idx, 0, comp_indices[1]],
-                              color=color, s=100, marker='o', edgecolor='black', linewidth=1,
+                              color=color, s=30, marker='o', edgecolor='black', linewidth=1,
                               zorder=10)
                     ax.scatter(trajectories[idx, -1, comp_indices[0]],
                               trajectories[idx, -1, comp_indices[1]],
-                              color=color, s=100, marker='s', edgecolor='black', linewidth=1,
+                              color=color, s=30, marker='s', edgecolor='black', linewidth=1,
                               zorder=10)
 
                 # 2D plot settings
                 ax.set_xlabel(comp_labels[0])
                 ax.set_ylabel(comp_labels[1])
-                ax.set_title(f'{component_name}')
+                # ax.set_title(f'{component_name}')
                 ax.grid(True, alpha=0.3)
                 ax.axis('equal')
 
             # Legend (only for first subplot)
             if comp_idx == 0:
-                ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=8)
+                # ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=6)
+                pass
 
         # Overall title
         # fig.suptitle('Trajectory Overlay Comparison: Original (solid) vs Reconstructed (dashed)',
@@ -643,7 +721,7 @@ class AcademicComprehensiveEvaluator:
                                      save_path: str = None) -> Tuple[plt.Figure, Dict[str, float]]:
         """Create orthogonality analysis using OrthogonalityEvaluator logic"""
         # Single plot for correlation heatmap only
-        fig, ax = plt.subplots(1, 1, figsize=(10, 8))
+        fig, ax = plt.subplots(1, 1, figsize=(3.35, 2.8))
 
         results = {}
 
@@ -673,12 +751,16 @@ class AcademicComprehensiveEvaluator:
         # Extract cross-correlation between style and skill
         cross_correlation = correlation_matrix.loc[style_cols, skill_cols]
 
-        # Create heatmap
+        # Create heatmap with compact formatting
         sns.heatmap(cross_correlation, annot=True, cmap='RdBu_r', center=0, fmt='.2f', ax=ax,
-                   annot_kws={"size": 10}, cbar_kws={'label': 'Correlation'})
+                   annot_kws={"size": 6}, cbar_kws={'label': 'Correlation'})
+
+        # Fine-tune tick marks and labels for compact size
+        ax.tick_params(axis='both', labelsize=6, width=0.5, length=2)
+        ax.tick_params(axis='y', rotation=45)
         # ax.set_title(f'Style-Skill Cross-Correlation\n(Dimensions: {z_style.shape[1]}×{z_skill.shape[1]})', fontsize=16)
-        ax.set_xlabel('Skill Dimensions', fontsize=14)
-        ax.set_ylabel('Style Dimensions', fontsize=14)
+        ax.set_xlabel('Skill Dimensions')
+        ax.set_ylabel('Style Dimensions')
 
         # Calculate additional metrics
         max_cross_corr = np.max(np.abs(cross_correlation.values))
@@ -711,35 +793,35 @@ class AcademicComprehensiveEvaluator:
         print("Creating style space visualization...")
         style_fig, style_results = self.create_style_space_visualization(
             data['z_style'], data['subject_ids'],
-            save_path=str(self.output_dir / f"{experiment_name}_style_space.svg")
+            save_path=str(self.output_dir / f"{experiment_name}_style_space.pdf")
         )
 
         # 2. Skill space analysis
         print("Creating skill space visualization...")
         skill_fig = self.create_skill_space_visualization(
             data['z_skill'], data['skill_scores'], data['subject_ids'],
-            save_path=str(self.output_dir / f"{experiment_name}_skill_space.svg")
+            save_path=str(self.output_dir / f"{experiment_name}_skill_space.pdf")
         )
 
         # 3. Skill regression analysis
         print("Creating skill regression analysis...")
         regression_fig, regression_results = self.create_skill_regression_analysis(
             data['z_skill'], data['skill_scores'],
-            save_path=str(self.output_dir / f"{experiment_name}_skill_regression.svg")
+            save_path=str(self.output_dir / f"{experiment_name}_skill_regression.pdf")
         )
 
         # 4. Trajectory analysis
         print("Creating trajectory analysis...")
         trajectory_fig = self.create_trajectory_overlay_analysis(
             data['trajectories'], data['reconstructed'], data['subject_ids'], n_samples=6,
-            save_path=str(self.output_dir / f"{experiment_name}_trajectory_overlay.svg")
+            save_path=str(self.output_dir / f"{experiment_name}_trajectory_overlay.pdf")
         )
 
         # 5. Orthogonality analysis
         print("Creating orthogonality analysis...")
         orthogonality_fig, orthogonality_results = self.create_orthogonality_analysis(
             data['z_style'], data['z_skill'],
-            save_path=str(self.output_dir / f"{experiment_name}_orthogonality.svg")
+            save_path=str(self.output_dir / f"{experiment_name}_orthogonality.pdf")
         )
 
         # Calculate comprehensive summary metrics
@@ -772,10 +854,10 @@ class AcademicComprehensiveEvaluator:
 
         print(f"Comprehensive evaluation complete. Results saved to {self.output_dir}")
         print(f"Generated files:")
-        print(f"  - {experiment_name}_style_space.svg/.png")
-        print(f"  - {experiment_name}_skill_space.svg/.png")
-        print(f"  - {experiment_name}_skill_regression.svg/.png")
-        print(f"  - {experiment_name}_trajectory_overlay.svg/.png")
-        print(f"  - {experiment_name}_orthogonality.svg/.png")
+        print(f"  - {experiment_name}_style_space.pdf/.png")
+        print(f"  - {experiment_name}_skill_space.pdf/.png")
+        print(f"  - {experiment_name}_skill_regression.pdf/.png")
+        print(f"  - {experiment_name}_trajectory_overlay.pdf/.png")
+        print(f"  - {experiment_name}_orthogonality.pdf/.png")
 
         return results

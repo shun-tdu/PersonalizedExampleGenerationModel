@@ -93,12 +93,14 @@ class AcademicEvaluationRunner:
 
         # Auto-detect database path if not provided
         if experiments_db_path is None:
-            # Try multiple possible locations
+            # Try multiple possible locations for Docker environment
             possible_paths = [
+                "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/experiments.db",  # Docker app directory
+                "src/PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/experiments.db",  # From project root
+                str(Path(__file__).parent.parent / "experiments.db"),  # TransformerBaseEndToEndVAE directory
                 "experiments.db",  # Current directory
                 "../experiments.db",  # Parent directory
                 "../../experiments.db",  # Two levels up
-                str(Path(__file__).parent.parent / "experiments.db"),  # TransformerBaseEndToEndVAE directory
             ]
 
             experiments_db_path = None
@@ -204,9 +206,10 @@ class AcademicEvaluationRunner:
         # Auto-detect database path for Docker environment
         if experiments_db_path == "experiments.db":
             possible_paths = [
-                "experiments.db",  # Current directory
-                "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/experiments.db",  # From project root
+                "PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/experiments.db",  # Docker app directory
+                "src/PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/experiments.db",  # From project root
                 str(Path(__file__).parent.parent / "experiments.db"),  # From evaluator directory
+                "experiments.db",  # Current directory
                 "../experiments.db",
                 "../../experiments.db",
             ]

@@ -1,0 +1,17 @@
+{
+  "train_samples": 84000,
+  "test_samples": 28000,
+  "train_subjects": 6,
+  "test_subjects": 2,
+  "feature_columns": [
+    "HandlePosX",
+    "HandlePosY",
+    "HandleVelX",
+    "HandleVelY",
+    "HandleAccX",
+    "HandleAccY",
+    "skill_score"
+  ],
+  "target_seq_len": 100,
+  "created_at": "2025-10-06T17:55:22.430297"
+}
