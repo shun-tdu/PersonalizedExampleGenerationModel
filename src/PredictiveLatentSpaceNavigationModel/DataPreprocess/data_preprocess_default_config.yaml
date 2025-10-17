@@ -10,6 +10,7 @@ analysis:
   anova_skill_metrics: true
   factorize_skill_metrics: true
   standardize_metrics: true
+  use_factor_scores: true  # CLAUDE_ADDED: データセットに因子スコアを含めるかどうか（falseの場合はskill_scoreのみ）
 
 data:
   raw_data_dir: "../../data/RawDatas"

@@ -58,8 +58,18 @@ class VisualizeSkillSpaceEvaluator(BaseEvaluator):
         """包括的可視化生成 - スキルスコアによる色分け。2Dの場合はMatplotlib、3Dの場合はPlotly Figureオブジェクトを返す"""
         print(f"\n🎯 スキル空間可視化生成中...")
 
-        # スキルスコア正規化（カラーマップ用）
-        # skill_scores_normalized = (skill_scores - np.min(skill_scores)) / (np.max(skill_scores) - np.min(skill_scores) + 1e-8)
+        # CLAUDE_ADDED: スキルスコアをnumpy配列に変換し、NaNやInfをチェック
+        skill_scores = np.array(skill_scores, dtype=np.float64)
+
+        # NaNやInfがある場合は中央値で置換
+        if np.any(np.isnan(skill_scores)) or np.any(np.isinf(skill_scores)):
+            print(f"  ⚠️ スキルスコアにNaN/Infが含まれています。中央値で置換します。")
+            valid_mask = ~(np.isnan(skill_scores) | np.isinf(skill_scores))
+            if np.any(valid_mask):
+                median_score = np.median(skill_scores[valid_mask])
+            else:
+                median_score = 0.0
+            skill_scores = np.where(np.isnan(skill_scores) | np.isinf(skill_scores), median_score, skill_scores)
 
         # 2次元の場合（matplotlib）
         if n_components == 2:
@@ -1054,6 +1064,14 @@ class SkillManifoldAnalysisEvaluator(BaseEvaluator):
         print("スキル空間熟達多様体分析評価実行")
         print("=" * 60)
 
+        # CLAUDE_ADDED: データの形状を確認してnumpy配列に変換
+        z_skill = np.array(z_skill)
+        skill_scores = np.array(skill_scores)
+
+        # CLAUDE_ADDED: z_skillの形状チェック
+        print(f"  z_skill shape: {z_skill.shape}")
+        print(f"  skill_scores shape: {skill_scores.shape}")
+
         if len(skill_scores) < self.min_samples:
             print(f"⚠️ サンプル数不足: {len(skill_scores)} < {self.min_samples}")
             result.add_metric("manifold_analysis_status", 0, "サンプル数不足", "skill_manifold")
@@ -1062,6 +1080,17 @@ class SkillManifoldAnalysisEvaluator(BaseEvaluator):
         # 1. 熟達者・非熟達者の分類
         skilled_threshold = np.percentile(skill_scores, self.skilled_threshold_percentile)
         skilled_mask = skill_scores >= skilled_threshold
+
+        # CLAUDE_ADDED: skill_scoresが1次元であることを確認し、z_skillの行数と一致することを確認
+        if skill_scores.ndim != 1:
+            print(f"⚠️ skill_scoresが1次元ではありません: {skill_scores.shape}")
+            skill_scores = skill_scores.flatten()
+
+        # CLAUDE_ADDED: z_skillの最初の次元がskill_scoresの長さと一致するかチェック
+        if z_skill.shape[0] != len(skill_scores):
+            print(f"⚠️ z_skill[{z_skill.shape}]とskill_scores[{len(skill_scores)}]のサンプル数が一致しません")
+            result.add_metric("manifold_analysis_status", 0, "データ形状不一致", "skill_manifold")
+            return
 
         z_skilled = z_skill[skilled_mask]
         z_unskilled = z_skill[~skilled_mask]

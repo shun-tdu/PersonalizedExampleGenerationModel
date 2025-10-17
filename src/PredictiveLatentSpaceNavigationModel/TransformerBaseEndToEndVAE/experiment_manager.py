@@ -368,7 +368,7 @@ class ExperimentRunner:
                     scheduler_type = training_config.get('scheduler', None)
 
                     # CLAUDE_ADDED: 複数schedulerの場合はリストで処理
-                    if isinstance(schedulers, list):
+                    if len(schedulers) >= 2:
                         # 複数schedulerの場合は各schedulerに対してstep()を呼ぶ
                         for sched in schedulers:
                             if scheduler_type == 'ReduceLROnPlateau':
