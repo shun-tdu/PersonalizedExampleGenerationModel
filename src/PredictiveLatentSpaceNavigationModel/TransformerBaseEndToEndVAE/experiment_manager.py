@@ -130,7 +130,7 @@ class ModelWrapper:
         self.config = config
 
         # CLAUDE_ADDED: 汎用的なprerequisites処理
-        self._handle_prerequisites()
+        # self._handle_prerequisites()
 
     def compute_losses(self, batch_data) -> Dict[str, Any]:
         """損失を計算して辞書で返す"""
@@ -173,153 +173,20 @@ class ModelWrapper:
         else:
             return {}
 
-    # CLAUDE_ADDED: 汎用的なprerequisites処理機能
-    def _handle_prerequisites(self):
-        """設定ファイルのprerequisitesセクションを処理"""
-        prerequisites = self.config.get('prerequisites', {})
-        if not prerequisites:
-            return
-
-        print("Prerequisites処理開始...")
-
-        # BaseExperimentModelのload_pretrained_weightsメソッドを使用
-        if hasattr(self.model, 'load_pretrained_weights'):
-            checkpoint_configs = self._build_checkpoint_configs(prerequisites)
-            if checkpoint_configs:
-                self.model.load_pretrained_weights(checkpoint_configs)
-                print("✓ Prerequisites処理完了")
-        else:
-            # フォールバック：旧式の個別処理
-            self._handle_legacy_prerequisites(prerequisites)
-
-    def _build_checkpoint_configs(self, prerequisites: Dict[str, Any]) -> Dict[str, Any]:
-        """prerequisitesから汎用的なチェックポイント設定を構築"""
-        checkpoint_configs = {}
-
-        output_base_dir = self.config.get('output', {}).get('base_dir', 'outputs')
-
-        for key, value in prerequisites.items():
-            if key.endswith('_checkpoint') and value:
-                # パス解決
-                checkpoint_path = self._resolve_checkpoint_path(value, output_base_dir)
-
-                if checkpoint_path:
-                    if isinstance(value, str):
-                        # 単純なパス指定
-                        checkpoint_configs[key] = checkpoint_path
-                    elif isinstance(value, dict):
-                        # 詳細設定
-                        config = value.copy()
-                        config['path'] = checkpoint_path
-                        checkpoint_configs[key] = config
-
-        return checkpoint_configs
-
-    def _resolve_checkpoint_path(self, checkpoint_spec: Any, base_dir: str) -> Optional[str]:
-        """チェックポイントパスを解決（Docker環境対応）"""
-        if isinstance(checkpoint_spec, str):
-            checkpoint_path = checkpoint_spec
-        elif isinstance(checkpoint_spec, dict):
-            checkpoint_path = checkpoint_spec.get('path')
-        else:
-            return None
-
-        if not checkpoint_path:
-            return None
-
-        # 絶対パスの場合はそのまま返す
-        if os.path.isabs(checkpoint_path):
-            return checkpoint_path if os.path.exists(checkpoint_path) else None
-
-        # CLAUDE_ADDED: Docker環境対応の相対パス解決
-        # 複数の候補パスを試行して最初に見つかったものを使用
-        candidate_paths = [
-            # 1. base_dirからの相対パス
-            os.path.join(base_dir, checkpoint_path),
-
-            # 2. 現在の作業ディレクトリからの相対パス
-            os.path.join(os.getcwd(), checkpoint_path),
-
-            # 3. base_dirを現在のディレクトリからの相対パスとして解決
-            os.path.join(os.getcwd(), base_dir, checkpoint_path),
-
-            # 4. Docker環境での典型的なパス（プロジェクトルートから）
-            os.path.join(os.getcwd(), 'PredictiveLatentSpaceNavigationModel', 'TransformerBaseEndToEndVAE', base_dir, checkpoint_path),
-
-            # 5. プロジェクトルートを推測して解決
-            self._resolve_from_project_root(checkpoint_path, base_dir),
-        ]
-
-        for candidate in candidate_paths:
-            if candidate and os.path.exists(candidate):
-                print(f"✓ Checkpoint resolved: {checkpoint_path} -> {candidate}")
-                return candidate
-
-        # すべて失敗した場合は候補を表示
-        print(f"Warning: Checkpoint not found: {checkpoint_path}")
-        print(f"Tried paths: {[p for p in candidate_paths if p]}")
-        return None
-
-    def _resolve_from_project_root(self, checkpoint_path: str, base_dir: str) -> Optional[str]:
-        """プロジェクトルートから相対パスを解決"""
-        # 現在のディレクトリからプロジェクトルートを探す
-        current_dir = os.getcwd()
-
-        # 典型的なプロジェクトの構造を想定
-        # PersonalizedExampleGeneration/src/PredictiveLatentSpaceNavigationModel/...
-        possible_roots = [
-            current_dir,
-            os.path.dirname(current_dir),
-            os.path.dirname(os.path.dirname(current_dir)),
-        ]
-
-        for root in possible_roots:
-            # プロジェクトルートの特徴的なディレクトリをチェック
-            if any(os.path.exists(os.path.join(root, marker)) for marker in [
-                'src', 'PredictiveLatentSpaceNavigationModel', 'TransformerBaseEndToEndVAE'
-            ]):
-                candidate = os.path.join(root, 'src', 'PredictiveLatentSpaceNavigationModel',
-                                       'TransformerBaseEndToEndVAE', base_dir, checkpoint_path)
-                if os.path.exists(candidate):
-                    return candidate
-
-        return None
-
-    def _handle_legacy_prerequisites(self, prerequisites: Dict[str, Any]):
-        """旧式のprerequisites処理（BaseExperimentModelを継承していないモデル用）"""
-        print("Warning: モデルがload_pretrained_weightsメソッドを持たないため、レガシー処理を使用")
-
-        # HierarchicalMotionVAE固有の処理例
-        if hasattr(self.model, '_load_skill_checkpoint'):
-            skill_checkpoint = prerequisites.get('skill_vae_checkpoint')
-            if skill_checkpoint and prerequisites.get('load_skill_vae_weights', False):
-                output_base_dir = self.config.get('output', {}).get('base_dir', 'outputs')
-                checkpoint_path = self._resolve_checkpoint_path(skill_checkpoint, output_base_dir)
-
-                if checkpoint_path:
-                    try:
-                        self.model._load_skill_checkpoint(checkpoint_path)
-                        if hasattr(self.model, '_freeze_skill_vae'):
-                            self.model._freeze_skill_vae()
-                        print(f"✓ Legacy SkillVAE checkpoint loaded: {checkpoint_path}")
-                    except Exception as e:
-                        print(f"Warning: Legacy SkillVAE checkpoint loading failed: {e}")
-                else:
-                    print(f"Warning: SkillVAE checkpoint not found: {skill_checkpoint}")
-
-        # 他のモデル固有の処理もここに追加可能
-        # elif hasattr(self.model, 'other_checkpoint_method'):
-        #     ...
-
-        print("✓ Legacy prerequisites処理完了")
-
 
 class EarlyStopping:
     """アーリーストッピング機能"""
     
-    def __init__(self, patience: int = 10, min_delta: float = 0.0, monitor: str = 'val_total_loss',
-                 mode: str = 'min', restore_best_weights: bool = True, verbose: bool = True,
-                 save_best_model: bool = False, best_model_path: Optional[str] = None):
+    def __init__(self,
+                 patience: int = 10,
+                 min_delta: float = 0.0,
+                 monitor: str = 'val_total_loss',
+                 mode: str = 'min',
+                 restore_best_weights: bool = True,
+                 verbose: bool = True,
+                 save_best_model: bool = False,
+                 best_model_path: Optional[str] = None
+                 ):
         """
         Args:
             patience: 改善が見られないエポック数の閾値
@@ -448,9 +315,15 @@ class ExperimentRunner:
         model_wrapper.model.to(device)
 
         # オプティマイザ等のセットアップ
+        # CLAUDE_ADDED: 複数optimizerに対応
         optimizer = self._setup_optimizer(model_wrapper.model)
-        scheduler = self._setup_scheduler(optimizer)
-        
+
+        # CLAUDE_ADDED: 複数optimizerの場合はschedulerもリストで管理
+        if isinstance(optimizer, (tuple, list)):
+            scheduler = [self._setup_scheduler(opt) for opt in optimizer]
+        else:
+            scheduler = self._setup_scheduler(optimizer)
+
         # アーリーストッピングのセットアップ
         early_stopping = self._setup_early_stopping()
 
@@ -476,9 +349,15 @@ class ExperimentRunner:
                 )
 
                 # 全指標を統合
+                # CLAUDE_ADDED: 複数optimizerの場合は最初のoptimizerのlrを取得
+                if isinstance(optimizer, (tuple, list)):
+                    current_lr = optimizer[0].param_groups[0]['lr']
+                else:
+                    current_lr = optimizer.param_groups[0]['lr']
+
                 all_metrics = {
                     'epoch': epoch,
-                    'lr': optimizer.param_groups[0]['lr'],
+                    'lr': current_lr,
                     **{f'train_{k}': v for k, v in epoch_metrics.items()},
                     **{f'val_{k}': v for k, v in val_metrics.items()}
                 }
@@ -498,24 +377,48 @@ class ExperimentRunner:
                     training_config = self.config.get('training', {})
                     scheduler_type = training_config.get('scheduler', None)
 
-                    if scheduler_type == 'ReduceLROnPlateau':
-                        # 監視する指標を取得（デフォルトは検証損失）
-                        monitor_metric = training_config.get('scheduler_monitor', 'val_total_loss')
-                        old_lr = optimizer.param_groups[0]['lr']
-
-                        if monitor_metric in all_metrics:
-                            scheduler.step(all_metrics[monitor_metric])
-                        else:
-                            # フォールバック：検証損失が使用可能な場合
-                            if 'val_total_loss' in all_metrics:
-                                scheduler.step(all_metrics['val_total_loss'])
-
-                        # 学習率変更をログ出力
-                        new_lr = optimizer.param_groups[0]['lr']
-                        if training_config.get('scheduler_verbose', False) and new_lr != old_lr:
-                            print(f"ReduceLROnPlateau: 学習率を {old_lr:.2e} から {new_lr:.2e} に変更")
+                    # CLAUDE_ADDED: 複数schedulerの場合はリストで処理
+                    if isinstance(scheduler, list):
+                        # 複数schedulerの場合は各schedulerに対してstep()を呼ぶ
+                        for sched in scheduler:
+                            if scheduler_type == 'ReduceLROnPlateau':
+                                monitor_metric = training_config.get('scheduler_monitor', 'val_total_loss')
+                                if monitor_metric in all_metrics:
+                                    sched.step(all_metrics[monitor_metric])
+                                elif 'val_total_loss' in all_metrics:
+                                    sched.step(all_metrics['val_total_loss'])
+                            else:
+                                sched.step()
                     else:
-                        scheduler.step()
+                        # 単一schedulerの場合
+                        if scheduler_type == 'ReduceLROnPlateau':
+                            # 監視する指標を取得（デフォルトは検証損失）
+                            monitor_metric = training_config.get('scheduler_monitor', 'val_total_loss')
+
+                            # CLAUDE_ADDED: 複数optimizerの場合は最初のoptimizerのlrを使用
+                            if isinstance(optimizer, (tuple, list)):
+                                old_lr = optimizer[0].param_groups[0]['lr']
+                            else:
+                                old_lr = optimizer.param_groups[0]['lr']
+
+                            if monitor_metric in all_metrics:
+                                scheduler.step(all_metrics[monitor_metric])
+                            else:
+                                # フォールバック：検証損失が使用可能な場合
+                                if 'val_total_loss' in all_metrics:
+                                    scheduler.step(all_metrics['val_total_loss'])
+
+                            # 学習率変更をログ出力
+                            # CLAUDE_ADDED: 複数optimizerの場合は最初のoptimizerのlrを使用
+                            if isinstance(optimizer, (tuple, list)):
+                                new_lr = optimizer[0].param_groups[0]['lr']
+                            else:
+                                new_lr = optimizer.param_groups[0]['lr']
+
+                            if training_config.get('scheduler_verbose', False) and new_lr != old_lr:
+                                print(f"ReduceLROnPlateau: 学習率を {old_lr:.2e} から {new_lr:.2e} に変更")
+                        else:
+                            scheduler.step()
 
                 # 進捗表示
                 print(f"Epoch {epoch+1}/{num_epochs}: {epoch_metrics}")
@@ -566,40 +469,71 @@ class ExperimentRunner:
             raise
 
     def _train_epoch(self, model_wrapper: ModelWrapper, train_loader, optimizer, device):
-        """1エポックの訓練"""
+        """
+        1エポックの訓練
+        CLAUDE_ADDED: モデルがtraining_stepメソッドを持っている場合は、
+        そのメソッドを使って学習を実行する (交互最適化などに対応)
+        """
         model_wrapper.model.train()
         epoch_losses = {}
 
-        for batch_data in train_loader:
-            # デバイスに移動
-            batch_data = [data.to(device) if torch.is_tensor(data) else data
-                          for data in batch_data]
+        # CLAUDE_ADDED: モデルがtraining_stepを持つ場合はそれを使用
+        if hasattr(model_wrapper.model, 'training_step'):
+            for batch_data in train_loader:
+                # training_stepメソッドがデバイス移動と最適化を内部で処理
+                losses = model_wrapper.model.training_step(batch_data, optimizer, device)
 
-            optimizer.zero_grad()
+                # 損失を蓄積
+                for key, value in losses.items():
+                    if key not in epoch_losses:
+                        epoch_losses[key] = []
+                    # テンソルの場合はitemを使用、そうでなければそのまま
+                    if torch.is_tensor(value):
+                        epoch_losses[key].append(value.item())
+                    else:
+                        epoch_losses[key].append(float(value))
+        else:
+            # デフォルトの学習ロジック
+            for batch_data in train_loader:
+                # デバイスに移動
+                batch_data = [data.to(device) if torch.is_tensor(data) else data
+                              for data in batch_data]
 
-            # 損失計算
-            losses = model_wrapper.compute_losses(batch_data)
-            total_loss = losses.get('total_loss', 0)
-
-            total_loss.backward()
-
-            # CLAUDE_ADDED: 勾配クリッピング
-            training_config = self.config.get('training', {})
-            gradient_clip_norm = training_config.get('gradient_clip_norm', None)
-            if gradient_clip_norm is not None:
-                torch.nn.utils.clip_grad_norm_(model_wrapper.model.parameters(), gradient_clip_norm)
-
-            optimizer.step()
-
-            # 損失を蓄積
-            for key, value in losses.items():
-                if key not in epoch_losses:
-                    epoch_losses[key] = []
-                # テンソルの場合はitemを使用、そうでなければそのまま
-                if torch.is_tensor(value):
-                    epoch_losses[key].append(value.item())
+                # CLAUDE_ADDED: 複数optimizerの場合は全てzero_grad
+                if isinstance(optimizer, (tuple, list)):
+                    for opt in optimizer:
+                        opt.zero_grad()
                 else:
-                    epoch_losses[key].append(float(value))
+                    optimizer.zero_grad()
+
+                # 損失計算
+                losses = model_wrapper.compute_losses(batch_data)
+                total_loss = losses.get('total_loss', 0)
+
+                total_loss.backward()
+
+                # CLAUDE_ADDED: 勾配クリッピング
+                training_config = self.config.get('training', {})
+                gradient_clip_norm = training_config.get('gradient_clip_norm', None)
+                if gradient_clip_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(model_wrapper.model.parameters(), gradient_clip_norm)
+
+                # CLAUDE_ADDED: 複数optimizerの場合は全てstep
+                if isinstance(optimizer, (tuple, list)):
+                    for opt in optimizer:
+                        opt.step()
+                else:
+                    optimizer.step()
+
+                # 損失を蓄積
+                for key, value in losses.items():
+                    if key not in epoch_losses:
+                        epoch_losses[key] = []
+                    # テンソルの場合はitemを使用、そうでなければそのまま
+                    if torch.is_tensor(value):
+                        epoch_losses[key].append(value.item())
+                    else:
+                        epoch_losses[key].append(float(value))
 
         # 平均を計算
         return {k: sum(v) / len(v) for k, v in epoch_losses.items()}
@@ -627,9 +561,21 @@ class ExperimentRunner:
 
         return {k: sum(v) / len(v) for k, v in epoch_losses.items()}
 
+    # CLAUDE_ADDED: 単一または複数optimizerをセットアップ
     def _setup_optimizer(self, model):
-        """オプティマイザをセットアップ"""
+        """
+        オプティマイザをセットアップ
+        モデルがconfigure_optimizersメソッドを持っている場合はそれを使用し、
+        単一または複数のoptimizerを返す
+        """
         training_config = self.config.get('training', {})
+
+        # モデルがconfigure_optimizersメソッドを持っている場合
+        if hasattr(model, 'configure_optimizers'):
+            model.configure_optimizers(training_config)
+            return model.configure_optimizers(training_config)
+
+        # デフォルトの単一optimizer処理
         optimizer_type = training_config.get('optimizer', 'AdamW')
         lr = training_config.get('learning_rate', training_config.get('lr', 1e-3))
         weight_decay = training_config.get('weight_decay', 1e-5)
