@@ -1226,12 +1226,12 @@ class SkillScoreCalculator:
                 try:
                     # CLAUDE_ADDED: 1トライアル分のスキル指標をDataFrameとして抽出（特徴量名を保持）
                     trial_metrics_df = trial_row[skill_columns].to_frame().T
-                    
+
                     # CLAUDE_ADDED: データ型をチェックして数値型に変換
                     # 非数値データが含まれている場合の対処
                     for col in skill_columns:
                         trial_metrics_df[col] = pd.to_numeric(trial_metrics_df[col], errors='coerce')
-                    
+
                     # 欠損値確認
                     if trial_metrics_df.isna().any().any():
                         continue
@@ -1262,6 +1262,70 @@ class SkillScoreCalculator:
         if skill_score_df is not None:
             self._save_skill_score_plots(skill_score_df)
 
+        return skill_score_df
+
+    # CLAUDE_ADDED: 因子スコアを含むスキルスコア計算メソッド
+    def calc_skill_score_with_factors(self, skill_metrics_df: pd.DataFrame, expert_scaler: StandardScaler, expert_fa) -> pd.DataFrame:
+        """スキルスコアと因子スコアを計算する"""
+        plot_data_list = []
+
+        skill_columns = ['curvature', 'velocity_smoothness', 'acceleration_smoothness',
+                         'jerk_score', 'control_stability', 'temporal_consistency',
+                         'trial_time', 'endpoint_error']
+
+        n_factors = expert_fa.n_factors
+
+        for subject_id, subject_df in skill_metrics_df.groupby('subject_id'):
+            sorted_trials = subject_df.sort_values(by=['block', 'trial_num']).reset_index()
+
+            for i, trial_row in sorted_trials.iterrows():
+                try:
+                    # 1トライアル分のスキル指標をDataFrameとして抽出（特徴量名を保持）
+                    trial_metrics_df = trial_row[skill_columns].to_frame().T
+
+                    # データ型をチェックして数値型に変換
+                    for col in skill_columns:
+                        trial_metrics_df[col] = pd.to_numeric(trial_metrics_df[col], errors='coerce')
+
+                    # 欠損値確認
+                    if trial_metrics_df.isna().any().any():
+                        continue
+
+                    # 学習済みスケーラで標準化（DataFrame形式で渡して特徴量名を保持）
+                    scaled_metrics = expert_scaler.transform(trial_metrics_df)
+
+                    # 学習済みFAモデルで因子得点を計算
+                    factor_scores = expert_fa.transform(scaled_metrics)
+
+                    # 因子得点を重み付けして単一のスキルスコアに合算
+                    skill_score = np.dot(factor_scores[0], self.factor_weights)
+
+                    # CLAUDE_ADDED: 因子スコアを個別に保存
+                    data_dict = {
+                        'subject_id': subject_id,
+                        'trial_order': i + 1,
+                        'block': trial_row['block'],
+                        'trial_num_in_block': trial_row['trial_num'],
+                        'skill_score': skill_score
+                    }
+
+                    # 各因子スコアを個別のカラムとして追加
+                    for f_idx in range(n_factors):
+                        data_dict[f'factor_{f_idx+1}_score'] = factor_scores[0][f_idx]
+
+                    plot_data_list.append(data_dict)
+
+                except Exception as e:
+                    print(f"スコア計算エラー: 被験者 {subject_id}, trial_index {i}: {e}")
+
+        # リストから最終的なDataFrameを作成
+        skill_score_df = pd.DataFrame(plot_data_list)
+
+        # スキルスコアの推移をプロット
+        if skill_score_df is not None:
+            self._save_skill_score_plots(skill_score_df)
+
+        print(f"✅ 計算完了: skill_score + {n_factors}個の因子スコア")
         return skill_score_df
 
     def calculate_stable_skill_score(self, skill_metrics_df: pd.DataFrame,expert_scaler: StandardScaler, expert_fa, window_size=10):
@@ -1412,94 +1476,114 @@ class DatasetBuilder:
         self.output_manager = output_manager
         self.target_seq_len = config['pre_process']['target_seq_len']
         
-    def build_skill_trajectory_dataset(self, 
-                                     skill_metrics_df: pd.DataFrame, 
+    def build_skill_trajectory_dataset(self,
+                                     skill_metrics_df: pd.DataFrame,
                                      preprocessed_trajectory_df: pd.DataFrame,
                                      trained_scaler: StandardScaler,
                                      trained_fa) -> str:
         """スキルスコア付き軌道データセットを構築し、保存する"""
-        
+
         print("スキルスコア付き軌道データセットを構築中...")
-        
+
         # CLAUDE_ADDED: 出力ディレクトリの作成
         dataset_output_dir = self.output_manager.dataset_builder_output_dir_path
         dataset_output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 1. スキルスコアを計算
+
+        # 1. スキルスコアと因子スコアを計算
         skill_score_calculator = SkillScoreCalculator(self.config, self.output_manager)
-        skill_score_df = skill_score_calculator.calc_skill_score(
-            skill_metrics_df, trained_scaler, trained_fa
-        )
-        
+        # CLAUDE_ADDED: コンフィグに基づいて因子スコアを含めるかどうかを切り替え
+        use_factor_scores = self.config.get('analysis', {}).get('use_factor_scores', True)
+
+        if use_factor_scores:
+            print("💡 因子スコアを含めてデータセットを作成します")
+            skill_score_df = skill_score_calculator.calc_skill_score_with_factors(
+                skill_metrics_df, trained_scaler, trained_fa
+            )
+        else:
+            print("💡 skill_scoreのみでデータセットを作成します")
+            skill_score_df = skill_score_calculator.calc_skill_score(
+                skill_metrics_df, trained_scaler, trained_fa
+            )
+
         # 2. 軌道データとスキルスコアを結合
         merged_df = self._merge_trajectory_and_skill_data(
             preprocessed_trajectory_df, skill_score_df
         )
-        
+
         # 3. トレーニング/テストデータに分割
         train_df, test_df = self._split_train_test(merged_df)
-        
+
         # 4. 特徴量のスケーリング
         scaled_train_df, scaled_test_df, scalers, feature_config = self._scale_features(
             train_df, test_df
         )
-        
+
         # 5. データとメタデータを保存
         self._save_dataset_files(
             scaled_train_df, scaled_test_df, scalers, feature_config, dataset_output_dir
         )
-        
+
         print(f"✅ データセットが保存されました: {dataset_output_dir}")
         return str(dataset_output_dir)
     
-    def _merge_trajectory_and_skill_data(self, trajectory_df: pd.DataFrame, 
+    def _merge_trajectory_and_skill_data(self, trajectory_df: pd.DataFrame,
                                        skill_score_df: pd.DataFrame) -> pd.DataFrame:
         """軌道データとスキルスコアデータを結合"""
-        
+
         # CLAUDE_ADDED: デバッグ情報を追加
         print(f"CLAUDE_DEBUG: Trajectory data shape: {trajectory_df.shape}")
         print(f"CLAUDE_DEBUG: Skill score data shape: {skill_score_df.shape}")
-        
+        print(f"CLAUDE_DEBUG: Skill score data columns: {skill_score_df.columns.tolist()}")
+
         # CLAUDE_ADDED: 各試行のデータ長を確認
         if 'time_step' in trajectory_df.columns:
             trial_lengths = trajectory_df.groupby(['subject_id', 'trial_num', 'block']).size()
             print(f"CLAUDE_DEBUG: Sample trajectory lengths: {trial_lengths.head(5)}")
             print(f"CLAUDE_DEBUG: Min length: {trial_lengths.min()}, Max length: {trial_lengths.max()}")
-        
+
+        # CLAUDE_ADDED: スコアカラムを検出（skill_score + factor_i_score）
+        score_columns = ['skill_score']
+        factor_score_cols = [col for col in skill_score_df.columns if col.startswith('factor_') and col.endswith('_score')]
+        score_columns.extend(factor_score_cols)
+        print(f"CLAUDE_DEBUG: Detected score columns to merge: {score_columns}")
+
         # CLAUDE_ADDED: スキルスコアデータをトライアル単位で結合
         merged_data = []
         successful_merges = 0
         failed_merges = 0
-        
+
         for _, skill_row in skill_score_df.iterrows():
-            subject_id = skill_row['subject_id'] 
+            subject_id = skill_row['subject_id']
             block = skill_row['block']
             trial_num = skill_row['trial_num_in_block']
-            skill_score = skill_row['skill_score']
-            
+
             # 該当する軌道データを取得
             trajectory_subset = trajectory_df[
-                (trajectory_df['subject_id'] == subject_id) & 
-                (trajectory_df['block'] == block) & 
+                (trajectory_df['subject_id'] == subject_id) &
+                (trajectory_df['block'] == block) &
                 (trajectory_df['trial_num'] == trial_num)
             ].copy()
-            
+
             if not trajectory_subset.empty:
                 # CLAUDE_ADDED: 結合前に軌道データの長さをチェック
                 print(f"CLAUDE_DEBUG: Merging {subject_id} trial {trial_num} block {block}: length = {len(trajectory_subset)}")
-                
-                # スキルスコアを全タイムステップに追加
-                trajectory_subset['skill_score'] = skill_score
+
+                # CLAUDE_ADDED: 全スコアカラムを全タイムステップに追加
+                for score_col in score_columns:
+                    if score_col in skill_row:
+                        trajectory_subset[score_col] = skill_row[score_col]
+
                 merged_data.append(trajectory_subset)
                 successful_merges += 1
             else:
                 failed_merges += 1
-        
+
         print(f"CLAUDE_DEBUG: Successful merges: {successful_merges}, Failed merges: {failed_merges}")
-        
+
         if merged_data:
             merged_df = pd.concat(merged_data, ignore_index=True)
             print(f"CLAUDE_DEBUG: Final merged data shape: {merged_df.shape}")
+            print(f"CLAUDE_DEBUG: Final merged data columns: {merged_df.columns.tolist()}")
             return merged_df
         else:
             return pd.DataFrame()
@@ -1526,50 +1610,70 @@ class DatasetBuilder:
     def _scale_features(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> Tuple[
         pd.DataFrame, pd.DataFrame, Dict, Dict]:
         """特徴量のスケーリング"""
-        
+
         # CLAUDE_ADDED: スケーリング対象の特徴量を定義
-        trajectory_features = ['HandlePosX', 'HandlePosY', 'HandleVelX', 
+        trajectory_features = ['HandlePosX', 'HandlePosY', 'HandleVelX',
                              'HandleVelY', 'HandleAccX', 'HandleAccY']
-        
+
         scalers = {}
         scaled_train_df = train_df.copy()
         scaled_test_df = test_df.copy()
-        
+
         # 特徴量ごとにスケーリング
         for feature in trajectory_features:
             if feature in train_df.columns:
                 scaler = StandardScaler()
-                
+
                 # 学習データでフィット
                 train_values = train_df[feature].values.reshape(-1, 1)
                 scaled_train_values = scaler.fit_transform(train_values)
                 scaled_train_df[feature] = scaled_train_values.flatten()
-                
+
                 # テストデータに適用
                 test_values = test_df[feature].values.reshape(-1, 1)
                 scaled_test_values = scaler.transform(test_values)
                 scaled_test_df[feature] = scaled_test_values.flatten()
-                
+
                 scalers[feature] = scaler
-        
+
+        # CLAUDE_ADDED: スコアカラム（skill_score + factor_i_score）を検出してスケーリング
+        score_columns = []
+
         # スキルスコアも正規化
         if 'skill_score' in train_df.columns:
             skill_scaler = StandardScaler()
             train_skill = train_df['skill_score'].values.reshape(-1, 1)
             scaled_train_df['skill_score'] = skill_scaler.fit_transform(train_skill).flatten()
-            
-            test_skill = test_df['skill_score'].values.reshape(-1, 1) 
+
+            test_skill = test_df['skill_score'].values.reshape(-1, 1)
             scaled_test_df['skill_score'] = skill_scaler.transform(test_skill).flatten()
-            
+
             scalers['skill_score'] = skill_scaler
-        
-        # 特徴量設定
+            score_columns.append('skill_score')
+
+        # CLAUDE_ADDED: 因子スコアも正規化
+        factor_score_cols = [col for col in train_df.columns if col.startswith('factor_') and col.endswith('_score')]
+        for factor_col in factor_score_cols:
+            factor_scaler = StandardScaler()
+            train_factor = train_df[factor_col].values.reshape(-1, 1)
+            scaled_train_df[factor_col] = factor_scaler.fit_transform(train_factor).flatten()
+
+            test_factor = test_df[factor_col].values.reshape(-1, 1)
+            scaled_test_df[factor_col] = factor_scaler.transform(test_factor).flatten()
+
+            scalers[factor_col] = factor_scaler
+            score_columns.append(factor_col)
+
+        print(f"CLAUDE_DEBUG: Scaled score columns: {score_columns}")
+
+        # CLAUDE_ADDED: 特徴量設定（因子スコアも含める）
         feature_config = {
-            'feature_cols': trajectory_features + ['skill_score'],
+            'feature_cols': trajectory_features + score_columns,
             'trajectory_features': trajectory_features,
+            'score_columns': score_columns,  # CLAUDE_ADDED: スコアカラムのリストも保存
             'target_seq_len': self.target_seq_len
         }
-        
+
         return scaled_train_df, scaled_test_df, scalers, feature_config
     
     def _save_dataset_files(self, train_df: pd.DataFrame, test_df: pd.DataFrame, 
