@@ -40,23 +40,34 @@ class SkillMetricsDataset(BaseExperimentDataset):
         (subject_id, trial_num, block), trial_df = self.trials[idx]
 
         # CLAUDE_ADDED: 軌道特徴量（6次元：位置、速度、加速度のx,y）
-        trajectory_features = ['HandlePosX', 'HandlePosY', 'HandleVelX', 
+        trajectory_features = ['HandlePosX', 'HandlePosY', 'HandleVelX',
                              'HandleVelY', 'HandleAccX', 'HandleAccY']
-        
+
         # 2. 軌道データを時系列として取得 (seq_len, num_features)
         trajectory_data = trial_df[trajectory_features].values
-        
-        # 3. スキルスコアを取得（全タイムステップで同じ値）
-        skill_score = trial_df['skill_score'].iloc[0] if len(trial_df) > 0 else 0.0
+
+        # CLAUDE_ADDED: 因子スコアを取得（データセットに含まれている場合）
+        factor_score_cols = [col for col in trial_df.columns if col.startswith('factor_') and col.endswith('_score')]
+
+        if factor_score_cols:
+            # 因子スコアが存在する場合、ベクトルとして返す
+            skill_factors = []
+            for col in sorted(factor_score_cols):  # factor_1_score, factor_2_score, ...の順にソート
+                skill_factors.append(trial_df[col].iloc[0] if len(trial_df) > 0 else 0.0)
+            skill_factor_tensor = torch.tensor(skill_factors, dtype=torch.float32)  # [factor_num]
+        else:
+            # 因子スコアが存在しない場合、skill_scoreのみ（スカラー）
+            skill_score = trial_df['skill_score'].iloc[0] if len(trial_df) > 0 else 0.0
+            skill_factor_tensor = torch.tensor(skill_score, dtype=torch.float32)  # scalar
 
         # 4. テンソルに変換して返す
         # trajectory: [seq_len, 6] -> モデルが期待する形状
         # subject_id: 文字列
-        # skill_score: スカラー値
+        # skill_factor: [factor_num] または scalar
         return (
             torch.tensor(trajectory_data, dtype=torch.float32),  # [seq_len, 6]
             subject_id,                                           # string
-            torch.tensor(skill_score, dtype=torch.float32)       # scalar
+            skill_factor_tensor                                   # [factor_num] or scalar
         )
 
     def get_info(self) -> Dict[str, Any]:
