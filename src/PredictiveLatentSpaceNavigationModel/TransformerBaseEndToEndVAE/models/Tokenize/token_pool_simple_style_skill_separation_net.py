@@ -140,7 +140,6 @@ class TokenPoolSeparationDecoder(nn.Module):
 
         # TransformerDecoderを定義
         decoder_layers = nn.TransformerDecoderLayer(
-
             d_model=d_model,
             nhead=n_heads,
             batch_first=True,
@@ -400,7 +399,17 @@ class TokenPoolSeparationNet(BaseExperimentModel):
 
         optimizer.step()
 
-        return outputs
+        # CLAUDE_ADDED: 損失辞書を数値に変換して返す
+        loss_dict = {}
+        for key, value in outputs.items():
+            if 'loss' in key.lower():
+                if torch.is_tensor(value):
+                    # スカラーテンソルの場合のみ.item()、それ以外は.mean().item()
+                    loss_dict[key] = value.item() if value.numel() == 1 else value.mean().item()
+                else:
+                    loss_dict[key] = float(value)
+
+        return loss_dict
 
     def validation_step(self, batch, device: torch.device) -> Dict[str, torch.Tensor]:
         """1バッチ分の検証処理"""
@@ -413,7 +422,17 @@ class TokenPoolSeparationNet(BaseExperimentModel):
         with torch.no_grad():
             outputs = self.forward(trajectory, subject_ids, skill_factors)
 
-        return outputs
+        # CLAUDE_ADDED: 損失辞書を数値に変換して返す
+        loss_dict = {}
+        for key, value in outputs.items():
+            if 'loss' in key.lower():
+                if torch.is_tensor(value):
+                    # スカラーテンソルの場合のみ.item()、それ以外は.mean().item()
+                    loss_dict[key] = value.item() if value.numel() == 1 else value.mean().item()
+                else:
+                    loss_dict[key] = float(value)
+
+        return loss_dict
 
     def encode(self, x):
         """エンコードのみ"""
