@@ -2,7 +2,7 @@
 - BERTライクに潜在変数の平均と分散を表すトークンを系列データの先頭に付加して学習するモデル
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -88,16 +88,18 @@ class TokenPoolSeparationEncoder(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=n_layers)
 
     def forward(self, x):
-        batch_size, _, _ = x.sha    
-        
+        # CLAUDE_ADDED: 修正 - .sha -> .shape
+        batch_size, _, _ = x.shape
+
         # 入力射影
         encoded = self.input_proj(x)
-        
+
         # 分布トークンをバッチサイズ分に拡張してシーケンスに連結
+        # CLAUDE_ADDED: 修正 - .expand()メソッドのみを使用（トークンはパラメータであり呼び出し可能ではない）
         style_mu_token = self.style_mu_token.expand(batch_size, -1, -1)
-        style_logvar_token = self.style_logvar_token(batch_size, -1, -1)
+        style_logvar_token = self.style_logvar_token.expand(batch_size, -1, -1)
         skill_mu_token = self.skill_mu_token.expand(batch_size, -1, -1)
-        skill_logvar_token = self.skill_logvar_token(batch_size, -1, -1)
+        skill_logvar_token = self.skill_logvar_token.expand(batch_size, -1, -1)
 
         full_sequence = torch.cat([
             style_mu_token,
@@ -280,16 +282,13 @@ class TokenPoolSeparationNet(BaseExperimentModel):
         self.loss_scheduler.step(epoch)
         self.current_epoch = epoch
 
-        # ゲート統計をログ出力
-        if epoch % 10 == 0:
-            self._log_gate_statistics()
-
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def forward(self, x: torch.Tensor, skill_factor: torch.Tensor = None) -> Dict[str, torch.Tensor]:
+    def forward(self, x: torch.Tensor, subject_ids: torch.Tensor = None, skill_factor: torch.Tensor = None) -> Dict[str, torch.Tensor]:
+        """CLAUDE_ADDED: subject_idsを追加してデータローダーとの互換性を確保"""
         batch_size = x.shape[0]
 
         # エンコード
@@ -300,7 +299,8 @@ class TokenPoolSeparationNet(BaseExperimentModel):
         z_skill = self.reparameterize(encoded['skill_mu'], encoded['skill_logvar'])
 
         # デコード
-        reconstructed, decoder_info = self.decoder(z_style, z_skill)
+        # CLAUDE_ADDED: skip_connections引数を削除
+        reconstructed = self.decoder(z_style, z_skill, None)
 
         # Discriminatorでスタイルからスキル因子を予測
         predicted_skill_factor_from_style = self.discriminator(z_style)
@@ -348,18 +348,20 @@ class TokenPoolSeparationNet(BaseExperimentModel):
         if skill_factor is not None and self.calc_factor_subtask:
             # 1. Discriminator自身の損失
             # エンコーダに勾配が流れないようにブロック
-            loss_discriminator = F.mse_loss(self.discriminator(z_style.detach()).squeeze(), skill_factor)
+            # CLAUDE_ADDED: .squeeze()を削除 - 既に[batch_size, factor_num]の形状
+            loss_discriminator = F.mse_loss(self.discriminator(z_style.detach()), skill_factor)
             losses['discriminator_loss'] = loss_discriminator
 
             # 2. エンコーダのための敵体性損失
-            loss_adversarial = -F.mse_loss(predicted_skill_factor_from_style.squeeze(), skill_factor)
+            # CLAUDE_ADDED: .squeeze()を削除 - 既に[batch_size, factor_num]の形状
+            loss_adversarial = -F.mse_loss(predicted_skill_factor_from_style, skill_factor)
             losses['adversarial_loss'] = loss_adversarial
 
         # サブタスク損失
         if skill_factor is not None:
             if self.calc_factor_subtask and skill_factor_pred is not None:
-                skill_score_pred_flat = skill_factor_pred.squeeze(-1)
-                losses['factor_regression_loss'] = F.mse_loss(skill_score_pred_flat, skill_factor)
+                # CLAUDE_ADDED: .squeeze(-1)を削除 - 既に[batch_size, factor_num]の形状
+                losses['factor_regression_loss'] = F.mse_loss(skill_factor_pred, skill_factor)
 
         # 総合損失計算
         total_loss = (losses['reconstruction_loss']
@@ -387,4 +389,119 @@ class TokenPoolSeparationNet(BaseExperimentModel):
             skip_connections = [dummy_skip.clone() for _ in range(self.decoder.n_layers)]
 
         trajectory, _ = self.decoder(z_style, z_skill, skip_connections)
+        return {'trajectory': trajectory}
+
+    def configure_optimizers(self, training_config: Dict[str, Any]) -> Any:
+        super().configure_optimizers(training_config)
+
+        # setup for optimizers
+        params_g = list(self.encoder.parameters()) + list(self.decoder.parameters())
+        if self.calc_factor_subtask:
+            params_g += list(self.factor_regressor.parameters())
+        params_d = self.discriminator.parameters()
+
+        opt_g = self._create_optimizer(params_g)
+        opt_d = self._create_optimizer(params_d)
+
+        sched_g = self._create_scheduler(opt_g)
+        sched_d = self._create_scheduler(opt_d)
+
+        return (opt_g, opt_d), (sched_g, sched_d)
+
+    # CLAUDE_ADDED: 交互最適化の実装
+    def training_step(self, batch:Any, optimizers:Tuple[torch.optim.Optimizer, torch.optim.Optimizer], device:torch.device, max_norm=None) -> Dict[str, torch.Tensor]:
+        """
+        Discriminatorを使った交互最適化を行う計算ステップ
+        1. Discriminatorの学習: エンコーダを固定してDiscriminatorを更新
+        2. Generator(Encoder/Decoder)の学習: Discriminatorを固定してGeneratorを更新
+        """
+        opt_g, opt_d = optimizers
+        batch_data = [data.to(device) if torch.is_tensor(data) else data for data in batch]
+
+        # データの取得
+        x, subject_ids, skill_factor = batch_data[0], batch_data[1], batch_data[2]
+
+
+        # 1. Discriminatorの学習
+        if skill_factor is not None and self.adversarial_loss:
+            opt_d.zero_grad()
+
+            # エンコーダで潜在変数を取得（勾配は流さない）
+            with torch.no_grad():
+                encoded = self.encoder(x)
+                z_style = self.reparameterize(encoded['style_mu'], encoded['style_logvar'])
+
+            # Discriminatorの損失計算
+            predicted_skill_factor_from_style = self.discriminator(z_style)
+            # CLAUDE_ADDED: .squeeze()を削除 - 既に[batch_size, factor_num]の形状
+            loss_d = F.mse_loss(predicted_skill_factor_from_style, skill_factor)
+
+            loss_d.backward()
+            opt_d.step()
+        else:
+            loss_d = torch.tensor(0.0, device=device)
+
+        # 2. Generator (Encoder/Decoder)の学習
+        opt_g.zero_grad()
+
+        # 順伝播
+        outputs = self.forward(x, subject_ids, skill_factor)
+        total_loss = outputs['total_loss']
+
+        total_loss.backward()
+        opt_g.step()
+
+        # 損失辞書を返す（数値に変換）
+        loss_dict = {}
+        for key, value in outputs.items():
+            if 'loss' in key.lower():
+                loss_dict[key] = value.item() if torch.is_tensor(value) else value
+
+        # Discriminator損失も追加
+        loss_dict['discriminator_step_loss'] = loss_d.item() if torch.is_tensor(loss_d) else float(loss_d)
+
+        return loss_dict
+
+    # CLAUDE_ADDED: 検証ステップの実装
+    def validation_step(self, batch:Any, device:torch.device) -> Dict[str, torch.Tensor]:
+        """
+        1バッチ分の検証処理を行い、ログ用の損失辞書を返す
+        """
+        batch_data = [data.to(device) if torch.is_tensor(data) else data for data in batch]
+
+        # データの取得
+        if len(batch_data) >= 3:
+            x, subject_ids, skill_factor = batch_data[0], batch_data[1], batch_data[2]
+        elif len(batch_data) == 2:
+            x, subject_ids = batch_data[0], batch_data[1]
+            skill_factor = None
+        else:
+            x = batch_data[0]
+            subject_ids = None
+            skill_factor = None
+
+        # 順伝播
+        with torch.no_grad():
+            outputs = self.forward(x, subject_ids, skill_factor)
+
+        # 損失辞書を返す（数値に変換）
+        loss_dict = {}
+        for key, value in outputs.items():
+            if 'loss' in key.lower():
+                loss_dict[key] = value.item() if torch.is_tensor(value) else value
+
+        return loss_dict
+
+    # CLAUDE_ADDED: encodeメソッドの修正 - skip_connectionsは存在しない
+    def encode(self, x):
+        """エンコードのみ"""
+        encoded = self.encoder(x)
+        z_style = self.reparameterize(encoded['style_mu'], encoded['style_logvar'])
+        z_skill = self.reparameterize(encoded['skill_mu'], encoded['skill_logvar'])
+        return {'z_style': z_style, 'z_skill': z_skill}
+
+    # CLAUDE_ADDED: decodeメソッドの修正 - skip_connectionsを削除
+    def decode(self, z_style, z_skill):
+        """デコードのみ"""
+        trajectory = self.decoder(z_style, z_skill, None)
         return {'trajectory': trajectory}
