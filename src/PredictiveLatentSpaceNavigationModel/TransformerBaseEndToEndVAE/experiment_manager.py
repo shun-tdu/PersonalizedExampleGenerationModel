@@ -315,20 +315,11 @@ class ExperimentRunner:
         model_wrapper.model.to(device)
 
         # オプティマイザ等のセットアップ
-        # CLAUDE_ADDED: 複数optimizerに対応
-        optimizer = self._setup_optimizer(model_wrapper.model)
-
-        # CLAUDE_ADDED: 複数optimizerの場合はschedulerもリストで管理
-        if isinstance(optimizer, (tuple, list)):
-            scheduler = [self._setup_scheduler(opt) for opt in optimizer]
-        else:
-            scheduler = self._setup_scheduler(optimizer)
+        optimizers, schedulers = self._setup_optimizers(model_wrapper.model)
 
         # アーリーストッピングのセットアップ
         early_stopping = self._setup_early_stopping()
-
-        training_config = self.config.get('training', {})
-        num_epochs = training_config.get('num_epochs', 100)
+        num_epochs = self.config.get('training', {}).get('num_epochs', 100)
 
         try:
             self.tracker.update_status('running', start_time=datetime.now().isoformat())
@@ -340,7 +331,7 @@ class ExperimentRunner:
                 
                 # 訓練フェーズ
                 epoch_metrics = self._train_epoch(
-                    model_wrapper, train_loader, optimizer, device
+                    model_wrapper, train_loader, optimizers, device
                 )
 
                 # 検証フェーズ
@@ -349,11 +340,10 @@ class ExperimentRunner:
                 )
 
                 # 全指標を統合
-                # CLAUDE_ADDED: 複数optimizerの場合は最初のoptimizerのlrを取得
-                if isinstance(optimizer, (tuple, list)):
-                    current_lr = optimizer[0].param_groups[0]['lr']
+                if isinstance(optimizers, (tuple, list)):
+                    current_lr = optimizers[0].param_groups[0]['lr']
                 else:
-                    current_lr = optimizer.param_groups[0]['lr']
+                    current_lr = optimizers.param_groups[0]['lr']
 
                 all_metrics = {
                     'epoch': epoch,
@@ -372,15 +362,15 @@ class ExperimentRunner:
                 self.tracker.log_epoch_metrics(epoch, all_metrics)
 
                 # 学習率を更新
-                if scheduler:
+                if schedulers:
                     # CLAUDE_ADDED: ReduceLROnPlateauの場合は検証損失を渡す
                     training_config = self.config.get('training', {})
                     scheduler_type = training_config.get('scheduler', None)
 
                     # CLAUDE_ADDED: 複数schedulerの場合はリストで処理
-                    if isinstance(scheduler, list):
+                    if isinstance(schedulers, list):
                         # 複数schedulerの場合は各schedulerに対してstep()を呼ぶ
-                        for sched in scheduler:
+                        for sched in schedulers:
                             if scheduler_type == 'ReduceLROnPlateau':
                                 monitor_metric = training_config.get('scheduler_monitor', 'val_total_loss')
                                 if monitor_metric in all_metrics:
@@ -396,29 +386,29 @@ class ExperimentRunner:
                             monitor_metric = training_config.get('scheduler_monitor', 'val_total_loss')
 
                             # CLAUDE_ADDED: 複数optimizerの場合は最初のoptimizerのlrを使用
-                            if isinstance(optimizer, (tuple, list)):
-                                old_lr = optimizer[0].param_groups[0]['lr']
+                            if isinstance(optimizers, (tuple, list)):
+                                old_lr = optimizers[0].param_groups[0]['lr']
                             else:
-                                old_lr = optimizer.param_groups[0]['lr']
+                                old_lr = optimizers.param_groups[0]['lr']
 
                             if monitor_metric in all_metrics:
-                                scheduler.step(all_metrics[monitor_metric])
+                                schedulers.step(all_metrics[monitor_metric])
                             else:
                                 # フォールバック：検証損失が使用可能な場合
                                 if 'val_total_loss' in all_metrics:
-                                    scheduler.step(all_metrics['val_total_loss'])
+                                    schedulers.step(all_metrics['val_total_loss'])
 
                             # 学習率変更をログ出力
                             # CLAUDE_ADDED: 複数optimizerの場合は最初のoptimizerのlrを使用
-                            if isinstance(optimizer, (tuple, list)):
-                                new_lr = optimizer[0].param_groups[0]['lr']
+                            if isinstance(optimizers, (tuple, list)):
+                                new_lr = optimizers[0].param_groups[0]['lr']
                             else:
-                                new_lr = optimizer.param_groups[0]['lr']
+                                new_lr = optimizers.param_groups[0]['lr']
 
                             if training_config.get('scheduler_verbose', False) and new_lr != old_lr:
                                 print(f"ReduceLROnPlateau: 学習率を {old_lr:.2e} から {new_lr:.2e} に変更")
                         else:
-                            scheduler.step()
+                            schedulers.step()
 
                 # 進捗表示
                 print(f"Epoch {epoch+1}/{num_epochs}: {epoch_metrics}")
@@ -468,7 +458,7 @@ class ExperimentRunner:
             self.tracker.log_final_results(error_metrics)
             raise
 
-    def _train_epoch(self, model_wrapper: ModelWrapper, train_loader, optimizer, device):
+    def _train_epoch(self, model_wrapper: ModelWrapper, train_loader, optimizers, device):
         """
         1エポックの訓練
         CLAUDE_ADDED: モデルがtraining_stepメソッドを持っている場合は、
@@ -476,67 +466,19 @@ class ExperimentRunner:
         """
         model_wrapper.model.train()
         epoch_losses = {}
+        gradient_clip_norm = self.config.get('training', {}).get('gradient_clip_norm', None)
 
-        # CLAUDE_ADDED: モデルがtraining_stepを持つ場合はそれを使用
-        if hasattr(model_wrapper.model, 'training_step'):
-            for batch_data in train_loader:
-                # training_stepメソッドがデバイス移動と最適化を内部で処理
-                losses = model_wrapper.model.training_step(batch_data, optimizer, device)
+        for batch_data in train_loader:
+            losses = model_wrapper.model.training_step(batch_data, optimizers, device, gradient_clip_norm)
 
-                # 損失を蓄積
-                for key, value in losses.items():
-                    if key not in epoch_losses:
-                        epoch_losses[key] = []
-                    # テンソルの場合はitemを使用、そうでなければそのまま
-                    if torch.is_tensor(value):
-                        epoch_losses[key].append(value.item())
-                    else:
-                        epoch_losses[key].append(float(value))
-        else:
-            # デフォルトの学習ロジック
-            for batch_data in train_loader:
-                # デバイスに移動
-                batch_data = [data.to(device) if torch.is_tensor(data) else data
-                              for data in batch_data]
+            # 損失を蓄積
+            for key, value in losses.items():
+                if key not in epoch_losses:
+                    epoch_losses[key] = []
+                epoch_losses[key].append(float(value))
 
-                # CLAUDE_ADDED: 複数optimizerの場合は全てzero_grad
-                if isinstance(optimizer, (tuple, list)):
-                    for opt in optimizer:
-                        opt.zero_grad()
-                else:
-                    optimizer.zero_grad()
-
-                # 損失計算
-                losses = model_wrapper.compute_losses(batch_data)
-                total_loss = losses.get('total_loss', 0)
-
-                total_loss.backward()
-
-                # CLAUDE_ADDED: 勾配クリッピング
-                training_config = self.config.get('training', {})
-                gradient_clip_norm = training_config.get('gradient_clip_norm', None)
-                if gradient_clip_norm is not None:
-                    torch.nn.utils.clip_grad_norm_(model_wrapper.model.parameters(), gradient_clip_norm)
-
-                # CLAUDE_ADDED: 複数optimizerの場合は全てstep
-                if isinstance(optimizer, (tuple, list)):
-                    for opt in optimizer:
-                        opt.step()
-                else:
-                    optimizer.step()
-
-                # 損失を蓄積
-                for key, value in losses.items():
-                    if key not in epoch_losses:
-                        epoch_losses[key] = []
-                    # テンソルの場合はitemを使用、そうでなければそのまま
-                    if torch.is_tensor(value):
-                        epoch_losses[key].append(value.item())
-                    else:
-                        epoch_losses[key].append(float(value))
-
-        # 平均を計算
         return {k: sum(v) / len(v) for k, v in epoch_losses.items()}
+
 
     def _validate_epoch(self, model_wrapper: ModelWrapper, val_loader, device):
         """1エポックの検証"""
@@ -545,24 +487,16 @@ class ExperimentRunner:
 
         with torch.no_grad():
             for batch_data in val_loader:
-                batch_data = [data.to(device) if torch.is_tensor(data) else data
-                              for data in batch_data]
-
-                losses = model_wrapper.compute_losses(batch_data)
+                losses = model_wrapper.model.validation_step(batch_data, device)
 
                 for key, value in losses.items():
                     if key not in epoch_losses:
                         epoch_losses[key] = []
-                    # テンソルの場合はitemを使用、そうでなければそのまま  
-                    if torch.is_tensor(value):
-                        epoch_losses[key].append(value.item())
-                    else:
-                        epoch_losses[key].append(float(value))
+                    epoch_losses[key].append(float(value))
 
-        return {k: sum(v) / len(v) for k, v in epoch_losses.items()}
+            return {k: sum(v) / len(v) for k, v in epoch_losses.items()}
 
-    # CLAUDE_ADDED: 単一または複数optimizerをセットアップ
-    def _setup_optimizer(self, model):
+    def _setup_optimizers(self, model):
         """
         オプティマイザをセットアップ
         モデルがconfigure_optimizersメソッドを持っている場合はそれを使用し、
@@ -570,63 +504,8 @@ class ExperimentRunner:
         """
         training_config = self.config.get('training', {})
 
-        # モデルがconfigure_optimizersメソッドを持っている場合
-        if hasattr(model, 'configure_optimizers'):
-            model.configure_optimizers(training_config)
-            return model.configure_optimizers(training_config)
+        return model.configure_optimizers(training_config)
 
-        # デフォルトの単一optimizer処理
-        optimizer_type = training_config.get('optimizer', 'AdamW')
-        lr = training_config.get('learning_rate', training_config.get('lr', 1e-3))
-        weight_decay = training_config.get('weight_decay', 1e-5)
-
-        if optimizer_type == 'AdamW':
-            return torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-        elif optimizer_type == 'Adam':
-            return torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-        else:
-            return torch.optim.SGD(model.parameters(), lr=lr, weight_decay=weight_decay)
-
-    def _setup_scheduler(self, optimizer):
-        """スケジューラをセットアップ"""
-        training_config = self.config.get('training', {})
-        scheduler_type = training_config.get('scheduler', None)
-
-        if scheduler_type == 'CosineAnnealingWarmRestarts':
-            return torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-                optimizer,
-                T_0=training_config.get('scheduler_T_0', 15),
-                T_mult=training_config.get('scheduler_T_mult', 2),
-                eta_min=training_config.get('scheduler_eta_min', 1e-6)
-            )
-        elif scheduler_type == 'StepLR':
-            return torch.optim.lr_scheduler.StepLR(
-                optimizer,
-                step_size=training_config.get('scheduler_step_size', 50),
-                gamma=training_config.get('scheduler_gamma', 0.5)
-            )
-        elif scheduler_type == 'ReduceLROnPlateau':
-            # CLAUDE_ADDED: verboseパラメータを除外（PyTorchバージョン互換性）
-            # CLAUDE_ADDED: 数値パラメータの型変換を確実に行う
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode=training_config.get('scheduler_mode', 'min'),
-                factor=float(training_config.get('scheduler_factor', 0.5)),
-                patience=int(training_config.get('scheduler_patience', 10)),
-                threshold=float(training_config.get('scheduler_threshold', 1e-4)),
-                threshold_mode=training_config.get('scheduler_threshold_mode', 'rel'),
-                cooldown=int(training_config.get('scheduler_cooldown', 0)),
-                min_lr=float(training_config.get('scheduler_min_lr', 0)),
-                eps=float(training_config.get('scheduler_eps', 1e-8))
-            )
-            # verboseの代替：手動でログ出力を設定
-            if training_config.get('scheduler_verbose', False):
-                scheduler._verbose = True  # 内部フラグを設定（非公式）
-            return scheduler
-
-        return None
-
-    # CLAUDE_ADDED: アーリーストッピングのセットアップメソッド
     def _setup_early_stopping(self) -> Optional[EarlyStopping]:
         """アーリーストッピングをセットアップ"""
         training_config = self.config.get('training', {})
