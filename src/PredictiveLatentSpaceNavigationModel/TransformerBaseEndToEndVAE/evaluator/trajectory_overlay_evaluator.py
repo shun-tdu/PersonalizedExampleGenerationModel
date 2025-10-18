@@ -192,9 +192,43 @@ class TrajectoryOverlayEvaluator(BaseEvaluator):
         # モデルで再構成
         model.eval()
         with torch.no_grad():
-            # モデルのforward関数を呼び出し
-            if hasattr(model, 'forward'):
-                outputs = model(trajectories_tensor)
+            # CLAUDE_ADDED: 拡散モデルの場合は encode -> sample で再構成
+            is_diffusion_model = hasattr(model, 'sample') and hasattr(model, 'num_timesteps')
+
+            if is_diffusion_model:
+                # 拡散モデル専用処理: encode -> sample
+                print("拡散モデル検出: encode -> sample で軌道再構成")
+                encoded = model.encode(trajectories_tensor)
+                z_style = encoded['z_style']
+                z_skill = encoded['z_skill']
+
+                # 1000ステップの逆拡散サンプリング
+                reconstructed = model.sample(z_style, z_skill)
+
+            elif hasattr(model, 'forward'):
+                # 通常のVAEモデル: forwardで再構成を取得
+                import inspect
+                forward_signature = inspect.signature(model.forward)
+                forward_params = list(forward_signature.parameters.keys())
+
+                # subject_idsとskill_factorsが必要な場合は準備
+                if 'subject_ids' in forward_params or 'skill_factors' in forward_params:
+                    # subject_idsをテンソルに変換（文字列 -> インデックス）
+                    subject_ids_tensor = torch.tensor([int(sid.split('_')[-1]) if isinstance(sid, str) and '_' in sid else 0
+                                                       for sid in selected_subject_ids], dtype=torch.long).to(device)
+
+                    # skill_scoresをテンソルに変換
+                    if isinstance(selected_skill_scores[0], np.ndarray):
+                        skill_factors_tensor = torch.tensor(np.array(selected_skill_scores), dtype=torch.float32).to(device)
+                    else:
+                        # スカラー値の場合は3次元に拡張（因子数3と仮定）
+                        skill_factors_tensor = torch.tensor([[score, score, score] for score in selected_skill_scores],
+                                                            dtype=torch.float32).to(device)
+
+                    outputs = model(trajectories_tensor, subject_ids_tensor, skill_factors_tensor)
+                else:
+                    outputs = model(trajectories_tensor)
+
                 reconstructed = outputs.get('reconstructed', outputs.get('trajectory', trajectories_tensor))
             else:
                 reconstructed = trajectories_tensor

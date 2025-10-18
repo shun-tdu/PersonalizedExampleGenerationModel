@@ -323,6 +323,12 @@ class LatentSpaceEvaluator(BaseEvaluator):
         all_reconstructions = []
         all_originals = []
 
+        # CLAUDE_ADDED: 拡散モデル検出 - sample()メソッドを持つモデルは拡散モデルと判定
+        is_diffusion_model = hasattr(model, 'sample') and hasattr(model, 'num_timesteps')
+
+        if is_diffusion_model:
+            print("拡散モデル検出: 再構成スキップ（潜在変数のみ抽出）")
+
         with torch.no_grad():
             for batch_data in test_loader:
                 trajectories = batch_data[0].to(device)
@@ -333,26 +339,38 @@ class LatentSpaceEvaluator(BaseEvaluator):
                 z_style = encoded['z_style']
                 z_skill = encoded['z_skill']
 
-                # デコード（動的にスキップ接続対応を判断）
-                decoded = self._safe_decode(model, z_style, z_skill, encoded)
-                reconstructed = decoded['trajectory']
+                # CLAUDE_ADDED: 拡散モデルの場合は再構成をスキップ（1000ステップかかるため）
+                if not is_diffusion_model:
+                    # デコード（動的にスキップ接続対応を判断）
+                    decoded = self._safe_decode(model, z_style, z_skill, encoded)
+                    reconstructed = decoded['trajectory']
+                    all_reconstructions.append(reconstructed.cpu().numpy())
 
+                all_originals.append(trajectories.cpu().numpy())
                 all_z_style.append(z_style.cpu().numpy())
                 all_z_skill.append(z_skill.cpu().numpy())
                 all_subject_ids.extend(subject_ids)
-                all_reconstructions.append(reconstructed.cpu().numpy())
-                all_originals.append(trajectories.cpu().numpy())
 
-        return {
+        result = {
             'z_style': np.vstack(all_z_style),
             'z_skill': np.vstack(all_z_skill),
             'subject_ids': all_subject_ids,
-            'reconstructions': np.vstack(all_reconstructions),
             'originals': np.vstack(all_originals)
         }
 
+        # CLAUDE_ADDED: 拡散モデルでない場合のみ再構成データを追加
+        if not is_diffusion_model:
+            result['reconstructions'] = np.vstack(all_reconstructions)
+
+        return result
+
     def _evaluate_reconstruction(self, latent_data: Dict[str, np.ndarray]) -> Dict[str, float]:
         """再構成性能評価"""
+        # CLAUDE_ADDED: 拡散モデルでは再構成データがないためスキップ
+        if 'reconstructions' not in latent_data:
+            print("再構成データなし（拡散モデル）: 再構成性能評価スキップ")
+            return {}
+
         mse = np.mean((latent_data['originals'] - latent_data['reconstructions']) ** 2)
         return {'mse': mse}
 

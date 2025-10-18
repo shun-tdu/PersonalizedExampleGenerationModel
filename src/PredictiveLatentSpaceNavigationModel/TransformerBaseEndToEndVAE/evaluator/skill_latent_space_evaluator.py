@@ -918,13 +918,18 @@ class SkillLatentDimensionVSScoreEvaluator(BaseEvaluator):
     def _create_linearity_visualization(self, z_skill: np.ndarray, skill_scores: np.ndarray, pca_results: Dict[str, Any], correlation_results: Dict[str, Any], regression_results: Dict[str, Any]) -> plt.Figure:
         """線形関係の可視化"""
         fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-        
+
         # 1. 主成分とスキルスコアの散布図
         if pca_results and 'z_skill_pca' in pca_results:
             best_pc = pca_results['best_pc_idx']
             pc_data = pca_results['z_skill_pca'][:, best_pc]
-            
-            axes[0, 0].scatter(pc_data, skill_scores, alpha=0.6, s=30)
+
+            # CLAUDE_ADDED: データサイズの確認と調整
+            min_len = min(len(pc_data), len(skill_scores))
+            pc_data = pc_data[:min_len]
+            skill_scores_plot = skill_scores[:min_len]
+
+            axes[0, 0].scatter(pc_data, skill_scores_plot, alpha=0.6, s=30)
             axes[0, 0].set_xlabel(f'PC{best_pc+1}')
             axes[0, 0].set_ylabel('Skill Score')
             axes[0, 0].set_title(f'PC{best_pc+1} vs Skill Score\n(r={pca_results["best_correlation"]:.3f})')

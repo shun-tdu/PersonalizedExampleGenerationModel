@@ -49,8 +49,37 @@ class TrajectoryGenerationEvaluator(BaseEvaluator):
         originals = test_data.get('originals')
         reconstructed = test_data.get('reconstructed')
 
+        # CLAUDE_ADDED: 拡散モデルの場合は軌道を生成する
+        if reconstructed is None:
+            print("再構成データなし: 拡散モデル用に軌道を生成します")
+            is_diffusion_model = hasattr(model, 'sample') and hasattr(model, 'num_timesteps')
+
+            if is_diffusion_model:
+                # 潜在変数から軌道を生成
+                z_style = test_data.get('z_style')
+                z_skill = test_data.get('z_skill')
+
+                if z_style is not None and z_skill is not None:
+                    model.eval()
+                    with torch.no_grad():
+                        # numpy -> torch tensor
+                        z_style_tensor = torch.tensor(z_style, dtype=torch.float32).to(device)
+                        z_skill_tensor = torch.tensor(z_skill, dtype=torch.float32).to(device)
+
+                        # 拡散サンプリング
+                        print(f"拡散サンプリング実行: {len(z_style)} サンプル")
+                        reconstructed_tensor = model.sample(z_style_tensor, z_skill_tensor)
+                        reconstructed = reconstructed_tensor.cpu().numpy()
+                        print(f"サンプリング完了: shape={reconstructed.shape}")
+                else:
+                    print("警告: z_style または z_skill がありません。評価をスキップします。")
+                    return
+            else:
+                print("警告: reconstructed データがありません。評価をスキップします。")
+                return
+
         print("=" * 60)
-        print("再構築軌道誤差評価完了")
+        print("再構築軌道誤差評価実行")
         print("=" * 60)
 
         reconstructed_trajectory_rmser = self._evaluate_reconstruction_rmse(originals, reconstructed)
@@ -149,7 +178,8 @@ class TrajectoryGenerationEvaluator(BaseEvaluator):
         return all_skill_metrics_array  # 標準化なしで返す
 
     def get_required_data(self) -> List[str]:
-        return ['originals', 'reconstructions']
+        # CLAUDE_ADDED: 拡散モデル対応 - reconstructionsまたはz_style/z_skillが必要
+        return ['originals', 'z_style', 'z_skill']
 
 class OrthogonalityEvaluator(BaseEvaluator):
     """潜在空間の直交性評価"""
