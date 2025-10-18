@@ -222,6 +222,8 @@ class TokenPoolSeparationDiffusionNet(BaseExperimentModel):
                  skill_latent_dim=256,
                  factor_num=3,
                  n_subjects=6,
+                 ddim_sampling_eta: float = 0.0,
+                 ddim_steps: int = 50,
                  loss_schedule_config: Dict[str, Any] = None,
                  **kwargs):
         super().__init__(input_dim=input_dim,
@@ -235,6 +237,8 @@ class TokenPoolSeparationDiffusionNet(BaseExperimentModel):
                          skill_latent_dim=skill_latent_dim,
                          factor_num=factor_num,
                          n_subjects=n_subjects,
+                         ddim_sampling_eta=ddim_sampling_eta,
+                         ddim_steps=ddim_steps,
                          loss_schedule_config=loss_schedule_config,
                          **kwargs)
 
@@ -248,12 +252,16 @@ class TokenPoolSeparationDiffusionNet(BaseExperimentModel):
         # CLAUDE_ADDED: input_dimを保存（sample()メソッドで使用）
         self.input_dim = input_dim
 
+        # CLAUDE_ADDED: DDIM parameters
+        self.ddim_sampling_eta = ddim_sampling_eta
+        self.ddim_steps = ddim_steps
+
         # CLAUDE_ADDED: 正しいクラス名に修正
         print(f"TokenPoolSeparationDiffusionNet instantiated:")
         print(f"  d_model: {d_model}, n_heads: {n_heads}")
         print(f"  encoder_layers: {n_encoder_layers}, decoder_layers: {n_decoder_layers}")
         print(f"  latent_dims: style={style_latent_dim}, skill={skill_latent_dim}")
-        print(f"  diffusion_timesteps: {1000}")
+        print(f"  diffusion_timesteps: {1000}, DDIM_steps: {ddim_steps}, DDIM_eta: {ddim_sampling_eta}")
 
         # CLAUDE_ADDED: 損失スケジューラ初期化 - 相関行列ベースの直交性損失を使用
         if loss_schedule_config is None:
@@ -404,37 +412,86 @@ class TokenPoolSeparationDiffusionNet(BaseExperimentModel):
         return losses
 
     @torch.no_grad()
-    def sample(self, z_style, z_skill):
-        """zを条件に、ノイズから新しい軌道を生成 (p(x_{t-1} | x_t))"""
+    def ddim_sample(self, z_style, z_skill, ddim_steps=None, eta=None):
+        """CLAUDE_ADDED: DDIM sampling - faster and deterministic sampling
+
+        Args:
+            z_style: Style latent variable [batch, style_dim]
+            z_skill: Skill latent variable [batch, skill_dim]
+            ddim_steps: Number of sampling steps (default: self.ddim_steps)
+            eta: Stochasticity parameter (0.0=deterministic, 1.0=stochastic like DDPM)
+
+        Returns:
+            trajectory: Generated trajectory [batch, seq_len, input_dim]
+        """
         device = z_style.device
         batch_size = z_style.shape[0]
-        # CLAUDE_ADDED: self.hparams -> self に修正（hparamsは未定義）
         seq_len = self.seq_len
         input_dim = self.input_dim
 
+        # Use default values if not provided
+        if ddim_steps is None:
+            ddim_steps = self.ddim_steps
+        if eta is None:
+            eta = self.ddim_sampling_eta
+
+        # Create subsequence of timesteps for DDIM
+        # Uniformly sample ddim_steps indices from [0, num_timesteps-1]
+        c = self.num_timesteps // ddim_steps
+        ddim_timesteps = torch.arange(0, self.num_timesteps, c, device=device).long()
+
+        # Start from pure noise
         trajectory = torch.randn(batch_size, seq_len, input_dim, device=device)
 
-        for t in reversed(range(0, self.num_timesteps)):
+        # Reverse diffusion process
+        timesteps_iter = reversed(ddim_timesteps)
+        for i, t in enumerate(timesteps_iter):
+            # Current and previous timestep
             time = torch.full((batch_size,), t, device=device, dtype=torch.long)
+
+            # Get previous timestep
+            t_prev = ddim_timesteps[-(i+2)] if i < len(ddim_timesteps) - 1 else torch.tensor(-1, device=device)
+
+            # Predict noise
             predicted_noise = self.decoder(trajectory, time, z_style, z_skill)
 
-            # DDPMのサンプリング式
-            alpha_t = 1. - self._extract(self.betas, time, trajectory.shape)
-            alpha_t_cumprod = self._extract(self.alphas_cumprod, time, trajectory.shape)
+            # Get alpha values
+            alpha_t = self._extract(self.alphas_cumprod, time, trajectory.shape)
 
-            term1 = 1 / torch.sqrt(alpha_t)
-            term2 = (1 - alpha_t) / self._extract(self.sqrt_one_minus_alphas_cumprod, time, trajectory.shape)
-
-            mean = term1 * (trajectory - term2 * predicted_noise)
-
-            if t == 0:
-                trajectory = mean
+            if t_prev >= 0:
+                time_prev = torch.full((batch_size,), t_prev, device=device, dtype=torch.long)
+                alpha_t_prev = self._extract(self.alphas_cumprod, time_prev, trajectory.shape)
             else:
-                variance = self._extract(self.posterior_variance, time, trajectory.shape)
-                noise = torch.randn_like(trajectory)
-                trajectory = mean + torch.sqrt(variance) * noise
+                alpha_t_prev = torch.ones_like(alpha_t)
+
+            # Predict x0 from xt and predicted noise
+            # x0 = (xt - sqrt(1 - alpha_t) * noise) / sqrt(alpha_t)
+            sqrt_alpha_t = torch.sqrt(alpha_t)
+            sqrt_one_minus_alpha_t = torch.sqrt(1. - alpha_t)
+            pred_x0 = (trajectory - sqrt_one_minus_alpha_t * predicted_noise) / sqrt_alpha_t
+
+            # DDIM direction pointing to xt
+            # Direction from x0 to xt at timestep t_prev
+            sqrt_alpha_t_prev = torch.sqrt(alpha_t_prev)
+
+            # Compute variance (controlled by eta)
+            sigma_t = eta * torch.sqrt((1 - alpha_t_prev) / (1 - alpha_t) * (1 - alpha_t / alpha_t_prev))
+
+            # Compute direction component
+            dir_xt = torch.sqrt(1. - alpha_t_prev - sigma_t**2) * predicted_noise
+
+            # Random noise
+            noise = torch.randn_like(trajectory) if eta > 0 else torch.zeros_like(trajectory)
+
+            # DDIM update step
+            trajectory = sqrt_alpha_t_prev * pred_x0 + dir_xt + sigma_t * noise
 
         return trajectory
+
+    @torch.no_grad()
+    def sample(self, z_style, z_skill):
+        """CLAUDE_ADDED: Default sampling method - uses DDIM for faster generation"""
+        return self.ddim_sample(z_style, z_skill)
 
     def training_step(self, batch, optimizers, device, max_norm=None) -> Dict[str, torch.Tensor]:
         trajectory, _, skill_factors = batch
