@@ -37,7 +37,8 @@ class TrainingVisualizer:
                 'kl_skill': 'Skill Space KL',
                 'manifold': 'Manifold Formation',
                 'style_classification': 'Style Classification',
-                'skill_regression': 'Skill Regression'
+                'skill_regression': 'Skill Regression',
+                'diffusion':'Diffusion Loss'
             }
 
             for key in keys_to_plot:
@@ -96,6 +97,7 @@ class TrainingVisualizer:
             'orthogonal', 'contrastive', 'adversarial',
             'manifold',  # manifold_loss追加
             'style_classification', 'skill_regression'
+            'diffusion'
         ]
 
         # lossの開始
