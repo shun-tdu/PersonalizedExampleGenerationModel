@@ -1,10 +1,12 @@
 information:
-  name: "Dataset Generation Test"
+  name: "None Interpolate Dataset Test"
   description: "データセット作成のテスト"
 
 pre_process:
   target_seq_len: 100
-  interpolate_method: linear # linear, spline
+  interpolate_method: none # linear, spline
+  normalization_method: 'minmax'  # or 'standard' (default)
+
 
 analysis:
   anova_skill_metrics: true

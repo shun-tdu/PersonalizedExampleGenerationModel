@@ -14,7 +14,7 @@ except ImportError:
     FACTOR_ANALYZER_AVAILABLE = False
     FactorAnalyzer = None
 
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler  # CLAUDE_ADDED: MinMaxScaler for -1 to 1 normalization
 
 import yaml
 import datetime
@@ -125,8 +125,14 @@ class DataPreprocessConfigLoader:
             errors.append("設定ファイルに必須セクション 'interpolate_method' がありません")
             return errors
         else:
-            if interpolate_method_section not in ['linear', 'spline']:
-                errors.append("interpolate_methodの値が不適切です。['linear', 'spline'] から選択してください")
+            if interpolate_method_section not in ['linear', 'spline', 'none']:
+                errors.append("interpolate_methodの値が不適切です。['linear', 'spline', 'none'] から選択してください")
+
+        # CLAUDE_ADDED: normalization_method の検証 (オプション)
+        normalization_method_section = pre_process_section.get('normalization_method')
+        if normalization_method_section is not None:
+            if normalization_method_section not in ['standard', 'minmax']:
+                errors.append("normalization_methodの値が不適切です。['standard', 'minmax'] から選択してください")
 
         return errors
 
@@ -269,19 +275,36 @@ class TrajectoryDataLoader:
         target_seq_len = self.config['pre_process']['target_seq_len']
         method = self.config['pre_process']['interpolate_method']
 
-        print(f"CLAUDE_DEBUG: Starting preprocessing with target_seq_len={target_seq_len}")
-        
+        if method == 'none':
+            print("💡 時間補間なしで、元の時系列データをそのまま使用します。")
+        else:
+            target_seq_len = self.config['pre_process']['target_seq_len']
+
         processed_trajectories = [] #全トライアルを蓄積するリスト
-        
-        # CLAUDE_ADDED: 前処理前の統計確認
-        print(f"CLAUDE_DEBUG: Input data shape: {data.shape}")
-        print(f"CLAUDE_DEBUG: Available columns: {data.columns.tolist()}")
+
+        print(f"Input data shape: {data.shape}")
+        print(f"Available columns: {data.columns.tolist()}")
         
         for subject_id, subject_df in data.groupby('subject_id'):
-            print(f"CLAUDE_DEBUG: Processing subject {subject_id}, trials: {len(subject_df.groupby(['trial_num', 'block']))}")
-            
-            for (trial_num, block_num), trial_df in subject_df.groupby(['trial_num', 'block']): # CLAUDE_ADDED: blockもグループ化に含める
+            for (trial_num, block_num), trial_df in subject_df.groupby(['trial_num', 'block']):
                 try:
+                    original_length = len(trial_df)
+
+                    # 最小データポイント検証
+                    if original_length < 2:
+                        print(f"データ不足: 被験者{subject_id}, トライアル{trial_num} ({original_length}点)")
+                        continue
+
+                    # 補完処理なしの場合
+                    if method == 'none':
+                        trajectory_df = trial_df.copy()
+                        trajectory_df['time_step'] = range(original_length)
+                        trajectory_df['original_length'] = original_length
+
+                        processed_trajectories.append(trajectory_df)
+                        continue
+
+                    # 補完方法に応じた処理
                     traj_positions = trial_df[['HandlePosX','HandlePosY']].values
                     traj_velocities = trial_df[['HandleVelX','HandleVelY']].values
                     traj_acceleration = trial_df[['HandleAccX','HandleAccY']].values
@@ -290,14 +313,6 @@ class TrajectoryDataLoader:
                     original_length = len(traj_positions)
                     original_time = np.linspace(0, 1, original_length)
                     target_time = np.linspace(0,1, target_seq_len)
-                    
-                    # CLAUDE_ADDED: 詳細ログ
-                    print(f"CLAUDE_DEBUG: Subject {subject_id}, Trial {trial_num}, Block {block_num}: {original_length} -> {target_seq_len}")
-
-                    # 最小データポイント検証
-                    if original_length < 2:
-                        print(f"データ不足: 被験者{subject_id}, トライアル{trial_num} ({original_length}点)")
-                        continue
 
                     interp_pos_x = None
                     interp_pos_y = None
@@ -809,10 +824,10 @@ class SkillAnalyzer:
             # 箱ひげ図の作成
             sns.boxplot(data=data_copy, x='subject_id', y=metric, ax=ax)
             ax.set_title(f'{metric}\n(p={anova_results[metric]["p_value"]:.3f})',
-                         fontsize=12)
-            ax.set_xlabel('Subject ID')
-            ax.set_ylabel('Skill Metrics')
-            ax.tick_params(axis='x', rotation=45)
+                         fontsize=6)
+            ax.set_xlabel('Subject ID', fontsize=6)
+            ax.set_ylabel('Skill Metrics', fontsize=6)
+            ax.tick_params(axis='x', rotation=45, labelsize=4)
 
             # 余った軸を非表示
         for j in range(i + 1, len(axes)):
@@ -843,17 +858,23 @@ class SkillAnalyzer:
 
         # 効果量のプロット
         sns.barplot(data=df, x='metrics', y='eta', ax=axes[0])
-        axes[0].set_title('Effectiveness')
-        axes[0].tick_params(axis='x', rotation=45, labelsize=6)
+        axes[0].set_title('Effectiveness', fontsize=8)
+        axes[0].set_xlabel('Metrics', fontsize=6)
+        axes[0].set_ylabel('Eta Squared', fontsize=6)
+        axes[0].tick_params(axis='x', rotation=45, labelsize=4)
+        axes[0].tick_params(axis='y', labelsize=6)
 
         # p値のプロット
         sns.barplot(data=df, x='metrics', y='p_value', ax=axes[1])
-        axes[1].set_title('p-value')
+        axes[1].set_title('p-value', fontsize=8)
+        axes[1].set_xlabel('Metrics', fontsize=6)
+        axes[1].set_ylabel('p-value', fontsize=6)
         axes[1].axhline(y=0.05, color='red', linestyle='--', alpha=0.7, label='α=0.05')
-        axes[1].legend()
-        axes[1].tick_params(axis='x', rotation=45, labelsize=6)
+        axes[1].legend(fontsize=5)
+        axes[1].tick_params(axis='x', rotation=45, labelsize=4)
+        axes[1].tick_params(axis='y', labelsize=6)
 
-        fig.suptitle(title, fontsize=16, y=1.02)
+        fig.suptitle(title, fontsize=10, y=1.02)
         fig.tight_layout()
 
         try:
@@ -1070,11 +1091,20 @@ class SkillAnalyzer:
 
         # 8.5cm = 3.35 inches width for factor loading heatmap
         fig, axes = plt.subplots(figsize = (3.35, 2.5))
-        sns.heatmap(loading_df, annot=True, cmap='RdBu_r', center=0,
-                    fmt ='.2f', ax=axes, cbar_kws={'label': 'Factor Loading'})
-        axes.set_title('Factor Loading Matrix', fontsize=14)
-        axes.set_xlabel('Factor')
-        axes.set_ylabel('Skill Metrics')
+        heatmap = sns.heatmap(loading_df, annot=True, cmap='RdBu_r', center=0,
+                    fmt ='.2f', ax=axes, cbar_kws={'label': 'Factor Loading'}, annot_kws={'fontsize': 6})
+
+        # カラーバーのフォントサイズを調整
+        if heatmap.collections:
+            colorbar = heatmap.collections[0].colorbar
+            if colorbar:
+                colorbar.ax.tick_params(labelsize=6)
+                colorbar.set_label('Factor Loading', fontsize=8)
+
+        axes.set_title('Factor Loading Matrix', fontsize=10)
+        axes.set_xlabel('Factor', fontsize=8)
+        axes.set_ylabel('Skill Metrics', fontsize=8)
+        axes.tick_params(axis='both', labelsize=6)
 
         try:
             # CLAUDE_ADDED: Use academic figure saving function
@@ -1110,11 +1140,12 @@ class SkillAnalyzer:
                 axes.scatter(subject_scores[:, 0], subject_scores[:, 1],
                            c=[colors[i]], label=subject_mapping[subject], alpha=0.7, s=50)
 
-        axes.set_xlabel('Factor 1 score')
-        axes.set_ylabel('Factor 2 score')
-        axes.set_title('Factor Scatter Plot（Per subjects）', fontsize=14)
+        axes.set_xlabel('Factor 1 score', fontsize=8)
+        axes.set_ylabel('Factor 2 score', fontsize=8)
+        axes.set_title('Factor Scatter Plot（Per subjects）', fontsize=10)
         axes.grid(True, alpha=0.3)
-        axes.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        axes.legend(bbox_to_anchor=(1.05, 1), loc='upper left', fontsize=6)
+        axes.tick_params(axis='both', labelsize=6)
 
         # 軸の交点に線を追加
         axes.axhline(y=0, color='k', linestyle='-', alpha=0.3)
@@ -1141,28 +1172,30 @@ class SkillAnalyzer:
 
         # 寄与率棒グラフ
         bars = ax1.bar(factor_names, contribution_ratios, alpha=0.7, color='steelblue')
-        ax1.set_title('Explained Variance', fontsize=12)
-        ax1.set_ylabel('Explained Variance (%)')
-        ax1.set_xlabel('Factor')
+        ax1.set_title('Explained Variance', fontsize=8)
+        ax1.set_ylabel('Explained Variance (%)', fontsize=6)
+        ax1.set_xlabel('Factor', fontsize=6)
+        ax1.tick_params(axis='both', labelsize=6)
 
         # 値をバーの上に表示
         for bar, ratio in zip(bars, contribution_ratios):
             height = bar.get_height()
             ax1.text(bar.get_x() + bar.get_width() / 2., height,
-                     f'{ratio:.1f}%', ha='center', va='bottom')
+                     f'{ratio:.1f}%', ha='center', va='bottom', fontsize=5)
 
         # 累積寄与率折れ線グラフ
         ax2.plot(factor_names, cumulative_ratios, marker='o', color='red', linewidth=2)
-        ax2.set_title(' Cumulative Explained Variance ', fontsize=12)
-        ax2.set_ylabel(' Cumulative Explained Variance  (%)')
-        ax2.set_xlabel('Factor')
+        ax2.set_title(' Cumulative Explained Variance ', fontsize=8)
+        ax2.set_ylabel(' Cumulative Explained Variance  (%)', fontsize=6)
+        ax2.set_xlabel('Factor', fontsize=6)
         ax2.grid(True, alpha=0.3)
+        ax2.tick_params(axis='both', labelsize=6)
 
         # 値を点の上に表示
         for i, ratio in enumerate(cumulative_ratios):
-            ax2.text(i, ratio + 2, f'{ratio:.1f}%', ha='center', va='bottom')
+            ax2.text(i, ratio + 2, f'{ratio:.1f}%', ha='center', va='bottom', fontsize=5)
 
-        fig.suptitle('Factor Analysis：Explained Variance', fontsize=14, y=1.02)
+        fig.suptitle('Factor Analysis：Explained Variance', fontsize=10, y=1.02)
         fig.tight_layout()
 
         # CLAUDE_ADDED: 学術論文用の保存
@@ -1180,15 +1213,24 @@ class SkillAnalyzer:
 
         # 8.5cm = 3.35 inches width for factor correlation heatmap
         fig = plt.figure(figsize=(3.35, 2.8))
-        sns.heatmap(fa_correlation,
+        heatmap = sns.heatmap(fa_correlation,
                     annot=True,
                     fmt='.2f',
                     cmap='RdBu_r',
                     vmin=-1,
-                    vmax=1)
-        plt.title('Factor Correlation Matrix')
-        plt.xlabel('Factor')
-        plt.ylabel('Factor')
+                    vmax=1,
+                    annot_kws={'fontsize': 6})
+
+        # カラーバーのフォントサイズを調整
+        if heatmap.collections:
+            colorbar = heatmap.collections[0].colorbar
+            if colorbar:
+                colorbar.ax.tick_params(labelsize=6)
+
+        plt.title('Factor Correlation Matrix', fontsize=10)
+        plt.xlabel('Factor', fontsize=8)
+        plt.ylabel('Factor', fontsize=8)
+        plt.tick_params(axis='both', labelsize=6)
 
         # CLAUDE_ADDED: 学術論文用の保存
         save_academic_figure(fig, save_path)
@@ -1203,13 +1245,49 @@ class SkillAnalyzer:
             print("学習済みStandard ScalerとFactor Analysisオブジェクトが存在しません")
             return None
 
+    # CLAUDE_ADDED: 因子寄与率を取得するプロパティ
+    @property
+    def factor_contribution_ratios(self):
+        """因子分析結果から因子寄与率を計算して返す"""
+        if hasattr(self, 'used_factor_analysis') and self.used_factor_analysis is not None:
+            # 因子分析オブジェクトから固有値を取得
+            # FactorAnalyzerの場合、get_eigenvalues()メソッドで固有値を取得
+            try:
+                eigenvalues, _ = self.used_factor_analysis.get_eigenvalues()
+                n_factors = self.used_factor_analysis.n_factors
+
+                # 使用している因子数分の固有値を取得
+                factor_eigenvalues = eigenvalues[:n_factors]
+
+                # 寄与率の計算: 各固有値 / 全固有値の合計
+                total_variance = np.sum(eigenvalues)
+                contribution_ratios = factor_eigenvalues / total_variance
+
+                print(f"💡 因子寄与率を自動計算しました:")
+                for i, ratio in enumerate(contribution_ratios):
+                    print(f"   Factor {i+1}: {ratio:.4f} ({ratio*100:.2f}%)")
+
+                return contribution_ratios
+            except Exception as e:
+                print(f"⚠️ 因子寄与率の計算エラー: {e}")
+                return None
+        else:
+            print("⚠️ 因子分析オブジェクトが存在しないため、寄与率を計算できません")
+            return None
+
 
 class SkillScoreCalculator:
     """スキルスコアを計算する"""
-    def __init__(self, config: Dict, output_manager: OutputManager):
+    def __init__(self, config: Dict, output_manager: OutputManager, factor_weights: Optional[np.ndarray] = None):
         self.config = config
         self.output = output_manager
-        self.factor_weights = np.array([-0.565, 0.245, -0.19])
+        # CLAUDE_ADDED: factor_weightsが指定されていない場合はデフォルト値を使用
+        if factor_weights is not None:
+            self.factor_weights = factor_weights
+            print(f"💡 指定された因子重みを使用: {self.factor_weights}")
+        else:
+            self.factor_weights = np.array([-0.565, 0.245, -0.19])
+            print(f"⚠️ デフォルトの因子重みを使用: {self.factor_weights}")
 
     def calc_skill_score(self, skill_metrics_df: pd.DataFrame, expert_scaler: StandardScaler, expert_fa) -> pd.DataFrame:
         """スキルスコアを計算する"""
@@ -1490,8 +1568,18 @@ class DatasetBuilder:
         dataset_output_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. スキルスコアと因子スコアを計算
-        skill_score_calculator = SkillScoreCalculator(self.config, self.output_manager)
-        # CLAUDE_ADDED: コンフィグに基づいて因子スコアを含めるかどうかを切り替え
+        try:
+            eigenvalues, _ = trained_fa.get_eigenvalues()
+            n_factors = trained_fa.n_factors
+            factor_eigenvalues = eigenvalues[:n_factors]
+            total_variance = np.sum(eigenvalues)
+            factor_weights = factor_eigenvalues / total_variance
+            print(f"💡 DatasetBuilder: 因子寄与率を自動取得しました: {factor_weights}")
+        except Exception as e:
+            print(f"⚠️ DatasetBuilder: 因子寄与率の取得に失敗。デフォルト値を使用します。エラー: {e}")
+            factor_weights = None
+
+        skill_score_calculator = SkillScoreCalculator(self.config, self.output_manager, factor_weights)
         use_factor_scores = self.config.get('analysis', {}).get('use_factor_scores', True)
 
         if use_factor_scores:
@@ -1611,6 +1699,10 @@ class DatasetBuilder:
         pd.DataFrame, pd.DataFrame, Dict, Dict]:
         """特徴量のスケーリング"""
 
+        # CLAUDE_ADDED: コンフィグから正規化方法を取得 (デフォルト: 'standard')
+        normalization_method = self.config.get('pre_process', {}).get('normalization_method', 'standard')
+        print(f"CLAUDE_DEBUG: Using normalization method: {normalization_method}")
+
         # CLAUDE_ADDED: スケーリング対象の特徴量を定義
         trajectory_features = ['HandlePosX', 'HandlePosY', 'HandleVelX',
                              'HandleVelY', 'HandleAccX', 'HandleAccY']
@@ -1619,10 +1711,18 @@ class DatasetBuilder:
         scaled_train_df = train_df.copy()
         scaled_test_df = test_df.copy()
 
+        # CLAUDE_ADDED: 正規化方法に応じてスケーラーを作成する関数
+        def create_scaler(method: str):
+            """正規化方法に応じたスケーラーを返す"""
+            if method == 'minmax':
+                return MinMaxScaler(feature_range=(-1, 1))
+            else:  # default: 'standard'
+                return StandardScaler()
+
         # 特徴量ごとにスケーリング
         for feature in trajectory_features:
             if feature in train_df.columns:
-                scaler = StandardScaler()
+                scaler = create_scaler(normalization_method)
 
                 # 学習データでフィット
                 train_values = train_df[feature].values.reshape(-1, 1)
@@ -1641,7 +1741,7 @@ class DatasetBuilder:
 
         # スキルスコアも正規化
         if 'skill_score' in train_df.columns:
-            skill_scaler = StandardScaler()
+            skill_scaler = create_scaler(normalization_method)
             train_skill = train_df['skill_score'].values.reshape(-1, 1)
             scaled_train_df['skill_score'] = skill_scaler.fit_transform(train_skill).flatten()
 
@@ -1654,7 +1754,7 @@ class DatasetBuilder:
         # CLAUDE_ADDED: 因子スコアも正規化
         factor_score_cols = [col for col in train_df.columns if col.startswith('factor_') and col.endswith('_score')]
         for factor_col in factor_score_cols:
-            factor_scaler = StandardScaler()
+            factor_scaler = create_scaler(normalization_method)
             train_factor = train_df[factor_col].values.reshape(-1, 1)
             scaled_train_df[factor_col] = factor_scaler.fit_transform(train_factor).flatten()
 
@@ -1745,6 +1845,11 @@ if __name__ == '__main__':
         # 学習済みスケーラと因子分析オブジェクトを取得
         trained_scaler, trained_fa = skill_analyzer.factorize_artifact
 
+        # CLAUDE_ADDED: 因子寄与率を自動取得
+        factor_weights = skill_analyzer.factor_contribution_ratios
+        if factor_weights is None:
+            print("⚠️ 因子寄与率の取得に失敗しました。デフォルト値を使用します。")
+
         print("============ 全データでブロック毎因子分析を実行 ============")
         # 全データを取得してブロック毎の因子分析を実行
         all_preprocess_data_for_blockwise = trajectory_loader.get_preprocessed_data(0)
@@ -1776,7 +1881,8 @@ if __name__ == '__main__':
             print(f"🎉 データセット作成完了: {dataset_path}")
 
         # オプション: スキルスコア推移も別途計算・保存
-        skill_score_calculator = SkillScoreCalculator(validated_config, output_manager)
+        # CLAUDE_ADDED: 因子寄与率を渡してスキルスコア計算
+        skill_score_calculator = SkillScoreCalculator(validated_config, output_manager, factor_weights)
         skill_score_calculator.calculate_stable_skill_score(all_skill_metrics_df, trained_scaler, trained_fa, 5)
 
     except Exception as e:
