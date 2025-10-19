@@ -48,6 +48,7 @@ class TrajectoryGenerationEvaluator(BaseEvaluator):
     def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult):
         originals = test_data.get('originals')
         reconstructed = test_data.get('reconstructed')
+        scalers = test_data.get('scalers')  # CLAUDE_ADDED: スケーラー情報を取得
 
         # CLAUDE_ADDED: 拡散モデルの場合は軌道を生成する
         if reconstructed is None:
@@ -82,15 +83,47 @@ class TrajectoryGenerationEvaluator(BaseEvaluator):
         print("再構築軌道誤差評価実行")
         print("=" * 60)
 
-        reconstructed_trajectory_rmser = self._evaluate_reconstruction_rmse(originals, reconstructed)
-        reconstructed_trajectory_skill_metrics_rmse = self._evaluate_skill_metric_rmse(originals, reconstructed)
+        # CLAUDE_ADDED: 逆正規化して物理単位で評価
+        if scalers is not None:
+            print("💡 データを逆正規化して物理単位で評価します")
+            originals_denorm = self._denormalize_trajectory(originals, scalers)
+            reconstructed_denorm = self._denormalize_trajectory(reconstructed, scalers)
 
+            # 正規化空間でのRMSE（学習時の損失と対応）
+            reconstructed_trajectory_rmse_normalized = self._evaluate_reconstruction_rmse(originals, reconstructed)
 
-        result.add_metric(name='reconstructed_trajectory_rmse',
-                          value=reconstructed_trajectory_rmser,
-                          description='元軌道と再構築軌道のRMSE',
-                          category='baseline')
+            # 物理空間でのRMSE（実際の誤差）
+            reconstructed_trajectory_rmse_physical = self._evaluate_reconstruction_rmse(originals_denorm, reconstructed_denorm)
 
+            # スキル指標のRMSE（物理空間で計算）
+            reconstructed_trajectory_skill_metrics_rmse = self._evaluate_skill_metric_rmse(originals_denorm, reconstructed_denorm)
+
+            # 両方の指標を保存
+            result.add_metric(name='reconstructed_trajectory_rmse_normalized',
+                            value=reconstructed_trajectory_rmse_normalized,
+                            description='元軌道と再構築軌道のRMSE（正規化空間）',
+                            category='baseline')
+
+            result.add_metric(name='reconstructed_trajectory_rmse_physical',
+                            value=reconstructed_trajectory_rmse_physical,
+                            description='元軌道と再構築軌道のRMSE（物理空間）',
+                            category='baseline')
+        else:
+            print("⚠️ スケーラー情報がないため、正規化空間で評価します（物理単位ではありません）")
+            reconstructed_trajectory_rmser = self._evaluate_reconstruction_rmse(originals, reconstructed)
+            reconstructed_trajectory_skill_metrics_rmse = self._evaluate_skill_metric_rmse(originals, reconstructed)
+
+            result.add_metric(name='reconstructed_trajectory_rmse',
+                            value=reconstructed_trajectory_rmser,
+                            description='元軌道と再構築軌道のRMSE',
+                            category='baseline')
+
+            result.add_metric(name='reconstructed_trajectory_skill_metrics_rmse',
+                            value=reconstructed_trajectory_skill_metrics_rmse,
+                            description='元軌道と再構築軌道のスキル指標のRMSE',
+                            category='baseline')
+
+        # スキル指標のRMSEを保存
         result.add_metric(name='reconstructed_trajectory_skill_metrics_rmse',
                           value=reconstructed_trajectory_skill_metrics_rmse,
                           description='元軌道と再構築軌道のスキル指標のRMSE',
@@ -130,6 +163,37 @@ class TrajectoryGenerationEvaluator(BaseEvaluator):
         mean_rmse = np.mean(rmse_per_batch)
 
         return mean_rmse
+
+    def _denormalize_trajectory(self, trajectory: np.ndarray, scalers: Dict) -> np.ndarray:
+        """
+        CLAUDE_ADDED: 正規化された軌道データを元のスケールに戻す
+        :param trajectory: 正規化された軌道データ [batch, seq_len, dim]
+        :param scalers: 特徴量ごとのスケーラー辞書
+        :return: 逆正規化された軌道データ [batch, seq_len, dim]
+        """
+        trajectory_features = ['HandlePosX', 'HandlePosY', 'HandleVelX',
+                              'HandleVelY', 'HandleAccX', 'HandleAccY']
+
+        batch_size, seq_len, n_features = trajectory.shape
+        denormalized = trajectory.copy()
+
+        # 各特徴量を逆変換
+        for feat_idx, feat_name in enumerate(trajectory_features):
+            if feat_name in scalers:
+                scaler = scalers[feat_name]
+
+                # [batch, seq_len] -> [batch*seq_len, 1] に reshape
+                feature_data = trajectory[:, :, feat_idx].reshape(-1, 1)
+
+                # 逆変換
+                denorm_feature = scaler.inverse_transform(feature_data)
+
+                # 元の形状に戻す
+                denormalized[:, :, feat_idx] = denorm_feature.reshape(batch_size, seq_len)
+            else:
+                print(f"Warning: Scaler for '{feat_name}' not found. Skipping denormalization.")
+
+        return denormalized
 
     def _calculate_skill_metrics_raw(self, trajectory: np.ndarray) -> np.ndarray:
         """
@@ -179,7 +243,8 @@ class TrajectoryGenerationEvaluator(BaseEvaluator):
 
     def get_required_data(self) -> List[str]:
         # CLAUDE_ADDED: 拡散モデル対応 - reconstructionsまたはz_style/z_skillが必要
-        return ['originals', 'z_style', 'z_skill']
+        # CLAUDE_ADDED: スケーラー情報も必要（逆正規化のため）
+        return ['originals', 'z_style', 'z_skill', 'scalers']
 
 class OrthogonalityEvaluator(BaseEvaluator):
     """潜在空間の直交性評価"""
