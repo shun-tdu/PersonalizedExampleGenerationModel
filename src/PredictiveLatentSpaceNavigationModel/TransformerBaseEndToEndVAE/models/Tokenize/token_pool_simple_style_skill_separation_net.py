@@ -252,8 +252,6 @@ class TokenPoolSeparationNet(BaseExperimentModel):
             skill_latent_dim=skill_latent_dim,
         )
 
-        # CLAUDE_ADDED: Discriminatorは削除
-
         # サブタスクネットワーク
         if self.calc_factor_subtask:
             self.factor_regressor = nn.Sequential(
@@ -399,7 +397,6 @@ class TokenPoolSeparationNet(BaseExperimentModel):
 
         optimizer.step()
 
-        # CLAUDE_ADDED: 損失辞書を数値に変換して返す
         loss_dict = {}
         for key, value in outputs.items():
             if 'loss' in key.lower():

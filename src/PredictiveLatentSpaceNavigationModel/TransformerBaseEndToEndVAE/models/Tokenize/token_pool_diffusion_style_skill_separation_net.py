@@ -128,13 +128,19 @@ class DiffusionDecoderBlock(nn.Module):
     def __init__(self, d_model, n_heads):
         super().__init__()
 
+        # 時間埋め込みをAdaptive Layer Normで埋め込み
+        self.adaLN_modulation = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(d_model, d_model * 6)
+        )
+
         # Pre LayerNorm + self attention
         self.self_attn = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
-        self.norm1 = nn.LayerNorm(d_model)
+        self.norm1 = nn.LayerNorm(d_model, elementwise_affine=False)
 
         # Pre LayerNorm + Cross attention
         self.cross_attn = nn.MultiheadAttention(d_model, n_heads, batch_first=True)
-        self.norm2 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model, elementwise_affine=False)
 
         # Pre LayerNorm + FeedForward
         self.ffn = nn.Sequential(
@@ -142,23 +148,27 @@ class DiffusionDecoderBlock(nn.Module):
             nn.GELU(),
             nn.Linear(d_model*4, d_model)
         )
-        self.norm3 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model, elementwise_affine=False)
 
         # 時間埋め込みを射影する層
-        self.time_proj = nn.Linear(d_model, d_model)  # CLAUDE_ADDED: スペース修正
+        # self.time_proj = nn.Linear(d_model, d_model)  # CLAUDE_ADDED: スペース修正
 
     def forward(self, x, time_emb, context):
         # 時間埋め込みを加算
-        x = x + self.time_proj(time_emb).unsqueeze(1)
+        # x = x + self.time_proj(time_emb).unsqueeze(1)
+        s1, b1, s2, b2, s3, b3 = self.adaLN_modulation(time_emb).chunk(6, dim=1)
 
         # Self Attention
-        x = x + self.self_attn(self.norm1(x), self.norm1(x), self.norm1(x))[0]
+        normed_x1 = self.norm1(x) * (1 + s1.unsqueeze(1)) + b1.unsqueeze(1)
+        x = x + self.self_attn(normed_x1, normed_x1, normed_x1)[0]
 
         # Cross-Attention (z_style, z_skillがコンテキストとして機能)
-        x = x + self.cross_attn(query=self.norm2(x), key=context, value=context)[0]
+        normed_x2 = self.norm2(x) * (1 + s2.unsqueeze(1)) + b2.unsqueeze(1)
+        x = x + self.cross_attn(query=normed_x2, key=context, value=context)[0]
 
         # FeedForward
-        x = x + self.ffn(self.norm3(x))
+        normed_x3 = self.norm3(x) * (1 + s3.unsqueeze(1)) + b3.unsqueeze(1)
+        x = x + self.ffn(normed_x3)
         return x
 
 class ConditionalDiffusionDecoder(nn.Module):
@@ -469,6 +479,7 @@ class TokenPoolSeparationDiffusionNet(BaseExperimentModel):
             sqrt_alpha_t = torch.sqrt(alpha_t)
             sqrt_one_minus_alpha_t = torch.sqrt(1. - alpha_t)
             pred_x0 = (trajectory - sqrt_one_minus_alpha_t * predicted_noise) / sqrt_alpha_t
+            pred_x0 = torch.clamp(pred_x0, -1., 1.)
 
             # DDIM direction pointing to xt
             # Direction from x0 to xt at timestep t_prev
