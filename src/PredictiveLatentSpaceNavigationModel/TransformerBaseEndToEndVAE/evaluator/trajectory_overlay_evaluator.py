@@ -211,9 +211,19 @@ class TrajectoryOverlayEvaluator(BaseEvaluator):
                 z_style = encoded['z_style']
                 z_skill = encoded['z_skill']
 
+                # CLAUDE_ADDED: attention_maskと元のシーケンス長を取得
+                attention_mask = encoded.get('attention_mask', None)
+                original_seq_len = encoded.get('original_seq_len', None)
+
                 # Decode (skips for diffusion models by default)
                 if not self.model_adapter.is_diffusion_model():
-                    reconstructed = self.model_adapter.decode(z_style, z_skill, metadata=None)
+                    # CLAUDE_ADDED: 元の軌道形状とシーケンス長をメタデータとして渡す
+                    decode_metadata = {
+                        'original_shape': trajectories_tensor.shape,
+                        'attention_mask': attention_mask,
+                        'original_seq_len': original_seq_len  # CLAUDE_ADDED: encode時に記録された元の長さ
+                    }
+                    reconstructed = self.model_adapter.decode(z_style, z_skill, metadata=decode_metadata)
                 else:
                     # Diffusion model: sampling is time-consuming
                     print("拡散モデル検出: サンプリングスキップ（時間がかかるため）")

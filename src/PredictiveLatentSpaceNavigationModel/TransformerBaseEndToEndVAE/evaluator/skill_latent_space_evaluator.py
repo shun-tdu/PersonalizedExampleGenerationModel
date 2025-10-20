@@ -61,6 +61,11 @@ class VisualizeSkillSpaceEvaluator(BaseEvaluator):
         # CLAUDE_ADDED: スキルスコアをnumpy配列に変換し、NaNやInfをチェック
         skill_scores = np.array(skill_scores, dtype=np.float64)
 
+        # CLAUDE_ADDED: 多次元（因子スコア）の場合は平均値でスカラー化
+        if len(skill_scores.shape) > 1 and skill_scores.shape[1] > 1:
+            print(f"  💡 skill_scoresが多次元 {skill_scores.shape} → 平均値でスカラー化（可視化用）")
+            skill_scores = np.mean(skill_scores, axis=1)
+
         # NaNやInfがある場合は中央値で置換
         if np.any(np.isnan(skill_scores)) or np.any(np.isinf(skill_scores)):
             print(f"  ⚠️ スキルスコアにNaN/Infが含まれています。中央値で置換します。")
@@ -277,23 +282,30 @@ class SkillScoreRegressionEvaluator(BaseEvaluator):
     def _preprocess_data(self, z_skill: np.ndarray, skill_scores: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """データ前処理"""
         from sklearn.preprocessing import StandardScaler
-        
+
         print(f"\n📋 データ前処理...")
         print(f"  入力次元: {z_skill.shape[1]}")
         print(f"  サンプル数: {len(skill_scores)}")
+
+        # CLAUDE_ADDED: 多次元（因子スコア）の場合は平均値でスカラー化
+        skill_scores = np.array(skill_scores)
+        if len(skill_scores.shape) > 1 and skill_scores.shape[1] > 1:
+            print(f"  💡 skill_scoresが多次元 {skill_scores.shape} → 平均値でスカラー化")
+            skill_scores = np.mean(skill_scores, axis=1)
+
         print(f"  スキルスコア範囲: [{np.min(skill_scores):.3f}, {np.max(skill_scores):.3f}]")
-        
+
         # 特徴量の標準化
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(z_skill)
-        
+
         # NaN除去
         valid_indices = ~(np.isnan(X_scaled).any(axis=1) | np.isnan(skill_scores))
         X_clean = X_scaled[valid_indices]
         y_clean = np.array(skill_scores)[valid_indices]
-        
+
         print(f"  前処理後サンプル数: {len(y_clean)}")
-        
+
         return X_clean, y_clean
 
     def _evaluate_mlp_regression(self, X: np.ndarray, y: np.ndarray) -> Dict[str, Any]:
@@ -733,17 +745,23 @@ class SkillLatentDimensionVSScoreEvaluator(BaseEvaluator):
         """PCA分析でスキル潜在空間の主次元を特定"""
         from sklearn.decomposition import PCA
         from scipy.stats import pearsonr
-        
+
         print(f"\n🔍 PCA分析実行...")
-        
+
+        # CLAUDE_ADDED: 多次元（因子スコア）の場合は平均値でスカラー化
+        skill_scores = np.array(skill_scores)
+        if len(skill_scores.shape) > 1 and skill_scores.shape[1] > 1:
+            print(f"  💡 skill_scoresが多次元 {skill_scores.shape} → 平均値でスカラー化")
+            skill_scores = np.mean(skill_scores, axis=1)
+
         # PCA実行
         pca = PCA()
         z_skill_pca = pca.fit_transform(z_skill)
-        
+
         # 各主成分とスキルスコアの相関
         pc_correlations = []
         pc_p_values = []
-        
+
         n_components = min(z_skill.shape[1], len(skill_scores))
         
         for i in range(n_components):
