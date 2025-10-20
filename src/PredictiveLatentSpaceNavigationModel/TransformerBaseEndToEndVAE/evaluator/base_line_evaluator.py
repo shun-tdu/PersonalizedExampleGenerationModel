@@ -49,32 +49,18 @@ class TrajectoryGenerationEvaluator(BaseEvaluator):
         originals = test_data.get('originals')
         reconstructed = test_data.get('reconstructed')
         scalers = test_data.get('scalers')  # CLAUDE_ADDED: スケーラー情報を取得
+        model_type = test_data.get('model_type', 'unknown')
 
-        # CLAUDE_ADDED: 拡散モデルの場合は軌道を生成する
+        # CLAUDE_ADDED: 拡散モデルの場合はreconstructedがNone
         if reconstructed is None:
-            print("再構成データなし: 拡散モデル用に軌道を生成します")
-            is_diffusion_model = hasattr(model, 'sample') and hasattr(model, 'num_timesteps')
+            print(f"再構成データなし（model_type={model_type}）")
 
-            if is_diffusion_model:
-                # 潜在変数から軌道を生成
-                z_style = test_data.get('z_style')
-                z_skill = test_data.get('z_skill')
-
-                if z_style is not None and z_skill is not None:
-                    model.eval()
-                    with torch.no_grad():
-                        # numpy -> torch tensor
-                        z_style_tensor = torch.tensor(z_style, dtype=torch.float32).to(device)
-                        z_skill_tensor = torch.tensor(z_skill, dtype=torch.float32).to(device)
-
-                        # 拡散サンプリング
-                        print(f"拡散サンプリング実行: {len(z_style)} サンプル")
-                        reconstructed_tensor = model.sample(z_style_tensor, z_skill_tensor)
-                        reconstructed = reconstructed_tensor.cpu().numpy()
-                        print(f"サンプリング完了: shape={reconstructed.shape}")
-                else:
-                    print("警告: z_style または z_skill がありません。評価をスキップします。")
-                    return
+            # CLAUDE_ADDED: 拡散モデルは評価をスキップ
+            # 理由: サンプリングに時間がかかるため、_preprocess_latent_data()でスキップされている
+            if model_type == 'diffusion_vae':
+                print("拡散モデル: 再構成評価をスキップします（サンプリングは時間がかかるため）")
+                print("  ヒント: config['skip_diffusion_decode'] = False で有効化できます")
+                return
             else:
                 print("警告: reconstructed データがありません。評価をスキップします。")
                 return

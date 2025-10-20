@@ -1082,14 +1082,24 @@ class SkillManifoldAnalysisEvaluator(BaseEvaluator):
             result.add_metric("manifold_analysis_status", 0, "サンプル数不足", "skill_manifold")
             return
 
-        # 1. 熟達者・非熟達者の分類
-        skilled_threshold = np.percentile(skill_scores, self.skilled_threshold_percentile)
-        skilled_mask = skill_scores >= skilled_threshold
-
-        # CLAUDE_ADDED: skill_scoresが1次元であることを確認し、z_skillの行数と一致することを確認
+        # CLAUDE_ADDED: Handle multi-dimensional skill factors
+        # If skill_scores is multi-dimensional [B, num_factors], convert to scalar per sample
         if skill_scores.ndim != 1:
-            print(f"⚠️ skill_scoresが1次元ではありません: {skill_scores.shape}")
-            skill_scores = skill_scores.flatten()
+            print(f"⚠️ skill_scoresが多次元です: {skill_scores.shape}")
+            if skill_scores.shape[0] == z_skill.shape[0]:
+                # Multi-dimensional skill factors: use mean or first factor as representative
+                print(f"  → 各サンプルの平均値を使用してスカラー化します")
+                skill_scores_scalar = np.mean(skill_scores, axis=1)  # [B, num_factors] → [B]
+            else:
+                print(f"  → エラー: サンプル数が一致しません")
+                result.add_metric("manifold_analysis_status", 0, "データ形状不一致", "skill_manifold")
+                return
+        else:
+            skill_scores_scalar = skill_scores
+
+        # 1. 熟達者・非熟達者の分類
+        skilled_threshold = np.percentile(skill_scores_scalar, self.skilled_threshold_percentile)
+        skilled_mask = skill_scores_scalar >= skilled_threshold
 
         # CLAUDE_ADDED: z_skillの最初の次元がskill_scoresの長さと一致するかチェック
         if z_skill.shape[0] != len(skill_scores):

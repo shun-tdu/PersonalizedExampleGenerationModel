@@ -173,9 +173,17 @@ class EvaluationPipeline:
         # EnhancedEvaluationResultの初期化
         experiment_id = test_data.get('experiment_id', 0)
         output_dir = test_data.get('output_dir', 'outputs')
-        
+
         shared_result = EnhancedEvaluationResult(experiment_id, output_dir)
-        
+
+        # CLAUDE_ADDED: Preprocess - Extract latent variables for all evaluators
+        # This runs regardless of whether LatentSpaceEvaluator is enabled
+        if 'test_loader' in test_data and 'z_style' not in test_data:
+            print("\n" + "=" * 60)
+            print("Preprocessing: Extracting latent variables for all evaluators")
+            print("=" * 60)
+            self._preprocess_latent_data(model, test_data, device)
+
         successful_evaluations = 0
         total_evaluations = len(self.evaluators)
 
@@ -267,25 +275,146 @@ class EvaluationPipeline:
 
         return result
 
+    def _preprocess_latent_data(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device):
+        """CLAUDE_ADDED: Preprocess to extract latent variables for all evaluators
+
+        This method runs regardless of whether LatentSpaceEvaluator is enabled,
+        ensuring that all evaluators have access to latent variables.
+        """
+        test_loader = test_data['test_loader']
+        config = test_data.get('config', self.config)
+
+        # Auto-detect adapters
+        from .adapters import AdapterFactory
+        data_adapter, model_adapter = AdapterFactory.auto_detect_adapters(
+            model, test_loader, config
+        )
+
+        # Extract latent variables
+        model.eval()
+        all_z_style = []
+        all_z_skill = []
+        all_subject_ids = []
+        all_reconstructions = []
+        all_originals = []
+        skill_metric_list = []
+
+        with torch.no_grad():
+            for batch_data in test_loader:
+                # Use DataAdapter to extract batch
+                batch = data_adapter.extract_batch(batch_data)
+
+                trajectories = batch['trajectory'].to(device)
+                subject_ids = batch['subject_id']
+                attention_mask = batch.get('attention_mask')
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(device)
+                metadata = batch.get('metadata', {})
+
+                # Prepare metadata for decode
+                metadata['attention_mask'] = attention_mask
+                metadata['num_patches'] = trajectories.shape[1] if len(trajectories.shape) == 4 else None
+                metadata['batch_id'] = id(trajectories)
+
+                # Use ModelAdapter to encode
+                encoded = model_adapter.encode(trajectories, attention_mask)
+                z_style = encoded['z_style']
+                z_skill = encoded['z_skill']
+
+                # Use ModelAdapter to decode (skip for diffusion models)
+                if not model_adapter.is_diffusion_model():
+                    reconstructed = model_adapter.decode(z_style, z_skill, metadata)
+                    if reconstructed is not None:
+                        all_reconstructions.append(reconstructed.cpu().numpy())
+
+                # Convert patched data to continuous trajectory for originals
+                if metadata.get('is_patched'):
+                    from .adapters import PatchedVAEAdapter
+                    if isinstance(model_adapter, PatchedVAEAdapter):
+                        trajectories_continuous = model_adapter._patches_to_trajectory(
+                            trajectories, attention_mask
+                        )
+                        all_originals.append(trajectories_continuous.cpu().numpy())
+                    else:
+                        # Fallback: flatten patches
+                        B, S, P, F = trajectories.shape
+                        trajectories_flat = trajectories.reshape(B, S * P, F)
+                        all_originals.append(trajectories_flat.cpu().numpy())
+                else:
+                    all_originals.append(trajectories.cpu().numpy())
+
+                all_z_style.append(z_style.cpu().numpy())
+                all_z_skill.append(z_skill.cpu().numpy())
+                all_subject_ids.extend(subject_ids)
+                skill_metric_list.append(batch['skill_metric'].cpu().numpy())
+
+        # Populate test_data with extracted latent variables
+        test_data['z_style'] = np.vstack(all_z_style)
+        test_data['z_skill'] = np.vstack(all_z_skill)
+        test_data['subject_ids'] = all_subject_ids
+        test_data['originals'] = np.vstack(all_originals)
+        test_data['skill_metric_names'] = data_adapter.get_skill_metric_names()
+        test_data['model_type'] = model_adapter.get_model_type()
+        test_data['skill_scores'] = np.vstack(skill_metric_list)
+
+        if not model_adapter.is_diffusion_model() and all_reconstructions:
+            test_data['reconstructed'] = np.vstack(all_reconstructions)
+
+        print(f"  Extracted: z_style{test_data['z_style'].shape}, z_skill{test_data['z_skill'].shape}")
+        print(f"  Model type: {test_data['model_type']}")
+        print(f"  Skill metric names: {test_data['skill_metric_names']}")
+        print("=" * 60 + "\n")
+
 
 class LatentSpaceEvaluator(BaseEvaluator):
-    """潜在空間分析評価器"""
+    """CLAUDE_ADDED: Adapter-enabled latent space evaluator"""
+
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.data_adapter = None
+        self.model_adapter = None
 
     def get_required_data(self) -> List[str]:
         return ['test_loader', 'output_dir']
 
     def evaluate(self, model: torch.nn.Module, test_data: Dict[str, Any], device: torch.device, result: EnhancedEvaluationResult):
-        """潜在空間の包括評価"""
+        """CLAUDE_ADDED: Adapter-enabled comprehensive latent space evaluation"""
         experiment_id = test_data.get('experiment_id', 0)
         output_dir = test_data['output_dir']
         test_loader = test_data['test_loader']
+        config = test_data.get('config', self.config)
 
-        # 共有結果オブジェクトが渡されない場合は新規作成
+        # Shared result object
         if result is None:
             result = EnhancedEvaluationResult(experiment_id, output_dir)
 
-        # 潜在変数抽出
+        # CLAUDE_ADDED: Auto-detect adapters
+        from .adapters import AdapterFactory
+        self.data_adapter, self.model_adapter = AdapterFactory.auto_detect_adapters(
+            model, test_loader, config
+        )
+
+        # Extract latent variables (Adapter-enabled)
         latent_data = self._extract_latent_variables(model, test_loader, device)
+
+        # CLAUDE_ADDED: Share latent data with other evaluators via test_data
+        test_data['z_style'] = latent_data['z_style']
+        test_data['z_skill'] = latent_data['z_skill']
+        test_data['subject_ids'] = latent_data['subject_ids']
+        test_data['originals'] = latent_data['originals']
+        test_data['skill_metric_names'] = latent_data['skill_metric_names']
+        test_data['model_type'] = latent_data['model_type']
+
+        # CLAUDE_ADDED: Add skill_scores for backward compatibility
+        # Extract skill metric from batch data for other evaluators
+        skill_metric_list = []
+        for batch_data in test_loader:
+            batch = self.data_adapter.extract_batch(batch_data)
+            skill_metric_list.append(batch['skill_metric'].cpu().numpy())
+        test_data['skill_scores'] = np.vstack(skill_metric_list)
+
+        if 'reconstructions' in latent_data:
+            test_data['reconstructed'] = latent_data['reconstructions']
 
         # 1. 再構成性能評価
         recon_metrics = self._evaluate_reconstruction(latent_data)
@@ -315,7 +444,7 @@ class LatentSpaceEvaluator(BaseEvaluator):
 
 
     def _extract_latent_variables(self, model: torch.nn.Module, test_loader: torch.utils.data.DataLoader, device: torch.device) -> Dict[str, Any]:
-        """潜在変数を抽出"""
+        """CLAUDE_ADDED: Adapter-enabled latent variable extraction"""
         model.eval()
         all_z_style = []
         all_z_skill = []
@@ -323,30 +452,51 @@ class LatentSpaceEvaluator(BaseEvaluator):
         all_reconstructions = []
         all_originals = []
 
-        # CLAUDE_ADDED: 拡散モデル検出 - sample()メソッドを持つモデルは拡散モデルと判定
-        is_diffusion_model = hasattr(model, 'sample') and hasattr(model, 'num_timesteps')
-
-        if is_diffusion_model:
-            print("拡散モデル検出: 再構成スキップ（潜在変数のみ抽出）")
-
         with torch.no_grad():
             for batch_data in test_loader:
-                trajectories = batch_data[0].to(device)
-                subject_ids = batch_data[1]
+                # CLAUDE_ADDED: Use DataAdapter to extract batch
+                batch = self.data_adapter.extract_batch(batch_data)
 
-                # エンコード
-                encoded = model.encode(trajectories)
+                trajectories = batch['trajectory'].to(device)
+                subject_ids = batch['subject_id']
+                attention_mask = batch.get('attention_mask')
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(device)
+                metadata = batch.get('metadata', {})
+
+                # Prepare metadata for decode
+                metadata['attention_mask'] = attention_mask
+                metadata['num_patches'] = trajectories.shape[1] if len(trajectories.shape) == 4 else None
+                metadata['batch_id'] = id(trajectories)
+
+                # CLAUDE_ADDED: Use ModelAdapter to encode
+                encoded = self.model_adapter.encode(trajectories, attention_mask)
                 z_style = encoded['z_style']
                 z_skill = encoded['z_skill']
 
-                # CLAUDE_ADDED: 拡散モデルの場合は再構成をスキップ（1000ステップかかるため）
-                if not is_diffusion_model:
-                    # デコード（動的にスキップ接続対応を判断）
-                    decoded = self._safe_decode(model, z_style, z_skill, encoded)
-                    reconstructed = decoded['trajectory']
-                    all_reconstructions.append(reconstructed.cpu().numpy())
+                # CLAUDE_ADDED: Use ModelAdapter to decode (skip for diffusion models)
+                if not self.model_adapter.is_diffusion_model():
+                    reconstructed = self.model_adapter.decode(z_style, z_skill, metadata)
+                    if reconstructed is not None:
+                        all_reconstructions.append(reconstructed.cpu().numpy())
 
-                all_originals.append(trajectories.cpu().numpy())
+                # CLAUDE_ADDED: Convert patched data to continuous trajectory for originals
+                if metadata.get('is_patched'):
+                    # Use PatchedVAEAdapter's conversion logic
+                    from .adapters import PatchedVAEAdapter
+                    if isinstance(self.model_adapter, PatchedVAEAdapter):
+                        trajectories_continuous = self.model_adapter._patches_to_trajectory(
+                            trajectories, attention_mask
+                        )
+                        all_originals.append(trajectories_continuous.cpu().numpy())
+                    else:
+                        # Fallback: flatten patches
+                        B, S, P, F = trajectories.shape
+                        trajectories_flat = trajectories.reshape(B, S * P, F)
+                        all_originals.append(trajectories_flat.cpu().numpy())
+                else:
+                    all_originals.append(trajectories.cpu().numpy())
+
                 all_z_style.append(z_style.cpu().numpy())
                 all_z_skill.append(z_skill.cpu().numpy())
                 all_subject_ids.extend(subject_ids)
@@ -355,11 +505,13 @@ class LatentSpaceEvaluator(BaseEvaluator):
             'z_style': np.vstack(all_z_style),
             'z_skill': np.vstack(all_z_skill),
             'subject_ids': all_subject_ids,
-            'originals': np.vstack(all_originals)
+            'originals': np.vstack(all_originals),
+            'skill_metric_names': self.data_adapter.get_skill_metric_names(),
+            'model_type': self.model_adapter.get_model_type()
         }
 
-        # CLAUDE_ADDED: 拡散モデルでない場合のみ再構成データを追加
-        if not is_diffusion_model:
+        # Add reconstructions if available
+        if not self.model_adapter.is_diffusion_model() and all_reconstructions:
             result['reconstructions'] = np.vstack(all_reconstructions)
 
         return result

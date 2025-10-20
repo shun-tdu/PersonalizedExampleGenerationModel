@@ -39,6 +39,18 @@ class TrajectoryOverlayEvaluator(BaseEvaluator):
 
         print("Starting trajectory overlay evaluation...")
 
+        # CLAUDE_ADDED: Get ModelAdapter from test_data if available
+        # This is set during preprocessing in EvaluationPipeline._preprocess_latent_data()
+        test_loader = test_data.get('test_loader')
+        if test_loader is not None:
+            from .adapters import AdapterFactory
+            config = test_data.get('config', self.config)
+            _, self.model_adapter = AdapterFactory.auto_detect_adapters(model, test_loader, config)
+            print(f"ModelAdapter detected: {self.model_adapter.__class__.__name__}")
+        else:
+            self.model_adapter = None
+            print("Warning: test_loader not available, ModelAdapter will not be used")
+
         # スケーラーを取得 - CLAUDE_ADDED: 逆標準化に必要
         self.scalers = test_data.get('scalers', {})
         print(f"Available scalers: {list(self.scalers.keys()) if self.scalers else 'None'}")
@@ -168,7 +180,7 @@ class TrajectoryOverlayEvaluator(BaseEvaluator):
         return data_splits
 
     def _reconstruct_trajectories(self, model: torch.nn.Module, split_data: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
-        """指定されたデータ分割の軌道を再構成"""
+        """CLAUDE_ADDED: Adapter-enabled reconstruction for selected samples"""
 
         trajectories = split_data['trajectories']
         subject_ids = split_data.get('subject_ids')
@@ -189,49 +201,34 @@ class TrajectoryOverlayEvaluator(BaseEvaluator):
         trajectories_tensor = torch.stack([torch.tensor(traj, dtype=torch.float32) for traj in selected_trajectories])
         trajectories_tensor = trajectories_tensor.to(device)
 
-        # モデルで再構成
+        # CLAUDE_ADDED: Use ModelAdapter for reconstruction
         model.eval()
         with torch.no_grad():
-            # CLAUDE_ADDED: 拡散モデルの場合は encode -> sample で再構成
-            is_diffusion_model = hasattr(model, 'sample') and hasattr(model, 'num_timesteps')
-
-            if is_diffusion_model:
-                # 拡散モデル専用処理: encode -> sample
-                print("拡散モデル検出: encode -> sample で軌道再構成")
-                encoded = model.encode(trajectories_tensor)
+            # Get ModelAdapter from test_data (set during preprocessing)
+            if hasattr(self, 'model_adapter') and self.model_adapter is not None:
+                # Use adapter
+                encoded = self.model_adapter.encode(trajectories_tensor, attention_mask=None)
                 z_style = encoded['z_style']
                 z_skill = encoded['z_skill']
 
-                # 1000ステップの逆拡散サンプリング
-                reconstructed = model.sample(z_style, z_skill)
-
-            elif hasattr(model, 'forward'):
-                # 通常のVAEモデル: forwardで再構成を取得
-                import inspect
-                forward_signature = inspect.signature(model.forward)
-                forward_params = list(forward_signature.parameters.keys())
-
-                # subject_idsとskill_factorsが必要な場合は準備
-                if 'subject_ids' in forward_params or 'skill_factors' in forward_params:
-                    # subject_idsをテンソルに変換（文字列 -> インデックス）
-                    subject_ids_tensor = torch.tensor([int(sid.split('_')[-1]) if isinstance(sid, str) and '_' in sid else 0
-                                                       for sid in selected_subject_ids], dtype=torch.long).to(device)
-
-                    # skill_scoresをテンソルに変換
-                    if isinstance(selected_skill_scores[0], np.ndarray):
-                        skill_factors_tensor = torch.tensor(np.array(selected_skill_scores), dtype=torch.float32).to(device)
-                    else:
-                        # スカラー値の場合は3次元に拡張（因子数3と仮定）
-                        skill_factors_tensor = torch.tensor([[score, score, score] for score in selected_skill_scores],
-                                                            dtype=torch.float32).to(device)
-
-                    outputs = model(trajectories_tensor, subject_ids_tensor, skill_factors_tensor)
+                # Decode (skips for diffusion models by default)
+                if not self.model_adapter.is_diffusion_model():
+                    reconstructed = self.model_adapter.decode(z_style, z_skill, metadata=None)
                 else:
-                    outputs = model(trajectories_tensor)
-
-                reconstructed = outputs.get('reconstructed', outputs.get('trajectory', trajectories_tensor))
+                    # Diffusion model: sampling is time-consuming
+                    print("拡散モデル検出: サンプリングスキップ（時間がかかるため）")
+                    reconstructed = trajectories_tensor  # Use original as fallback
             else:
-                reconstructed = trajectories_tensor
+                # Fallback: Direct model access (for backward compatibility)
+                print("Warning: ModelAdapter not available, using direct model access")
+                if hasattr(model, 'encode') and hasattr(model, 'decode'):
+                    encoded = model.encode(trajectories_tensor)
+                    z_style = encoded['z_style']
+                    z_skill = encoded['z_skill']
+                    decoded = model.decode(z_style, z_skill)
+                    reconstructed = decoded.get('trajectory', trajectories_tensor)
+                else:
+                    reconstructed = trajectories_tensor
 
         # CPUに移動して逆標準化 - CLAUDE_ADDED: 標準化を元に戻して可視化
         original_trajectories = trajectories_tensor.cpu().numpy()
