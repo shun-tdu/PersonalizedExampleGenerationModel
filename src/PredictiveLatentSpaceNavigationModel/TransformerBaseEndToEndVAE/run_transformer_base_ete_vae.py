@@ -29,6 +29,7 @@ from experiment_manager import (
     ExperimentRunner, DatabaseTracker, ConfigHandler, ModelWrapper
 )
 from evaluator.base_evaluator import EvaluationPipeline
+from evaluator.adapters.adapter_factory import AdapterFactory  # CLAUDE_ADDED: アダプターシステム
 from utils.training_visualizer import TrainingVisualizer
 
 from datasets import DataLoaderFactory, DatasetRegistry
@@ -347,6 +348,11 @@ class IntegratedExperimentRunner:
 
         model.eval()
 
+        # CLAUDE_ADDED: アダプターの自動検出
+        data_adapter, model_adapter = AdapterFactory.auto_detect_adapters(
+            model, test_data['test_loader'], self.config
+        )
+
         # CLAUDE_ADDED: 潜在空間可視化用に全データローダーを作成
         from torch.utils.data import DataLoader, ConcatDataset
 
@@ -361,14 +367,15 @@ class IntegratedExperimentRunner:
         all_data_loader = DataLoader(
             all_dataset,
             batch_size=test_data['test_loader'].batch_size,
-            shuffle=False
+            shuffle=False,
+            collate_fn=test_data['test_loader'].collate_fn if hasattr(test_data['test_loader'], 'collate_fn') else None
         )
 
         # テストデータのみの処理（評価指標用）
-        test_evaluation_data = self._extract_data_from_loader(model, test_data['test_loader'], "test")
+        test_evaluation_data = self._extract_data_from_loader(model, test_data['test_loader'], "test", data_adapter, model_adapter)
 
         # 全データの処理（潜在空間可視化用）
-        all_evaluation_data = self._extract_data_from_loader(model, all_data_loader, "all")
+        all_evaluation_data = self._extract_data_from_loader(model, all_data_loader, "all", data_adapter, model_adapter)
 
         # test_dataを複製して両方のデータを含める
         enhanced_data = test_data.copy()
@@ -381,8 +388,8 @@ class IntegratedExperimentRunner:
 
         return enhanced_data
 
-    def _extract_data_from_loader(self, model, data_loader, data_type):
-        """データローダーから潜在変数と再構成データを抽出"""
+    def _extract_data_from_loader(self, model, data_loader, data_type, data_adapter, model_adapter):
+        """データローダーから潜在変数と再構成データを抽出 - CLAUDE_ADDED: アダプター対応"""
         print(f"{data_type}データから潜在変数抽出中...")
 
         all_originals = []
@@ -394,33 +401,80 @@ class IntegratedExperimentRunner:
 
         with torch.no_grad():
             for batch_data in data_loader:
-                # SkillMetricsDatasetからのデータ: (trajectories, subject_ids, skill_scores)
-                trajectories = batch_data[0].to(self.device)  # [batch, seq_len, 6]
-                subject_ids = batch_data[1]                   # List[str]
-                skill_scores = batch_data[2].to(self.device)  # [batch,]
+                # CLAUDE_ADDED: DataAdapterを使用してバッチデータを標準化
+                standardized_batch = data_adapter.extract_batch(batch_data)
 
-                # エンコード
-                encoded = model.encode(trajectories)
+                # CLAUDE_ADDED: StandardizedBatchはTypedDict（辞書）なので辞書としてアクセス
+                trajectories = standardized_batch['trajectory'].to(self.device)  # [batch, seq_len, 6] or [batch, num_patches, patch_size, 6]
+                subject_ids = standardized_batch['subject_id']                    # List[str]
+                skill_scores = standardized_batch['skill_metric'].to(self.device) # [batch, factor_num]
+                attention_mask = standardized_batch.get('attention_mask')         # Optional[Tensor]
+
+                # CLAUDE_ADDED: attention_maskもデバイスに移動（GPU/CPU不一致エラー回避）
+                if attention_mask is not None:
+                    attention_mask = attention_mask.to(self.device)
+
+                # CLAUDE_ADDED: ModelAdapterを使用してエンコード/デコードを実行
+                # ModelAdapterがパッチ→連続軌道の変換を自動処理
+                encoded = model_adapter.encode(trajectories, attention_mask)
                 z_style = encoded['z_style']  # [batch, style_dim]
                 z_skill = encoded['z_skill']  # [batch, skill_dim]
 
-                # デコード（再構成）- スキップ接続を動的に判断
-                decoded = _safe_decode(model, z_style, z_skill, encoded)
-                reconstructed = decoded['trajectory']  # [batch, seq_len, 6]
+                # 再構成データを取得（ModelAdapterが連続軌道形式に変換済み）
+                # メタデータを構築してパッチ情報を渡す
+                decode_metadata = {
+                    'num_patches': trajectories.shape[1] if len(trajectories.shape) == 4 else None,
+                    'attention_mask': attention_mask,
+                    'original_shape': trajectories.shape
+                }
+                reconstructed = model_adapter.decode(z_style, z_skill, decode_metadata)  # [batch, seq_len, 6]
+
+                # CLAUDE_ADDED: originalsもパッチから連続軌道に変換（評価器は連続軌道形式を期待）
+                # パッチ形式の場合は連続軌道に変換、それ以外はそのまま
+                if len(trajectories.shape) == 4:  # [B, num_patches, patch_size, features]
+                    # ModelAdapterのパッチ変換機能を利用
+                    original_continuous = model_adapter._patches_to_trajectory(
+                        trajectories, attention_mask
+                    ) if hasattr(model_adapter, '_patches_to_trajectory') else trajectories.reshape(trajectories.shape[0], -1, trajectories.shape[-1])
+                else:
+                    original_continuous = trajectories
 
                 # CPU上に移動してリストに追加
-                all_originals.append(trajectories.cpu().numpy())
+                all_originals.append(original_continuous.cpu().numpy())
                 all_reconstructed.append(reconstructed.cpu().numpy())
                 all_z_style.append(z_style.cpu().numpy())
                 all_z_skill.append(z_skill.cpu().numpy())
                 all_subject_ids.extend(subject_ids)
                 all_skill_scores.append(skill_scores.cpu().numpy())
 
+        # CLAUDE_ADDED: 可変長データを固定長に統一（最大長にパディング）
+        def pad_to_max_length(arrays_list):
+            """配列リストを最大長にパディング"""
+            if len(arrays_list) == 0:
+                return np.array([])
+
+            # 最大長を検出
+            max_len = max(arr.shape[1] for arr in arrays_list)
+            n_features = arrays_list[0].shape[-1]
+
+            # パディングして統一
+            padded_arrays = []
+            for arr in arrays_list:
+                if arr.shape[1] < max_len:
+                    # ゼロパディング
+                    pad_width = ((0, 0), (0, max_len - arr.shape[1]), (0, 0))
+                    padded = np.pad(arr, pad_width, mode='constant', constant_values=0)
+                    padded_arrays.append(padded)
+                else:
+                    padded_arrays.append(arr)
+
+            return np.vstack(padded_arrays)
+
         # 結合してnumpy配列に変換
         extracted_data = {
-            'originals': np.vstack(all_originals),           # [total_samples, seq_len, 6]
-            'reconstructed': np.vstack(all_reconstructed),   # [total_samples, seq_len, 6]
-            'reconstructions': np.vstack(all_reconstructed), # TrajectoryGenerationEvaluator用
+            'originals': pad_to_max_length(all_originals),           # [total_samples, max_seq_len, 6]
+            'reconstructed': pad_to_max_length(all_reconstructed),   # [total_samples, max_seq_len, 6]
+            'reconstructions': pad_to_max_length(all_reconstructed), # TrajectoryGenerationEvaluator用
             'z_style': np.vstack(all_z_style),               # [total_samples, style_dim]
             'z_skill': np.vstack(all_z_skill),               # [total_samples, skill_dim]
             'subject_ids': all_subject_ids,                  # List[str]
