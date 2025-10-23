@@ -1630,9 +1630,18 @@ class DatasetBuilder:
             print(f"CLAUDE_DEBUG: Min length: {trial_lengths.min()}, Max length: {trial_lengths.max()}")
 
         # CLAUDE_ADDED: スコアカラムを検出（skill_score + factor_i_score）
-        score_columns = ['skill_score']
+        # 因子スコアが存在する場合は因子スコアのみ、存在しない場合はskill_scoreを使用
         factor_score_cols = [col for col in skill_score_df.columns if col.startswith('factor_') and col.endswith('_score')]
-        score_columns.extend(factor_score_cols)
+
+        if len(factor_score_cols) > 0:
+            # 因子スコアが存在する場合は因子スコアのみを使用（skill_scoreは除外）
+            score_columns = factor_score_cols
+            print(f"💡 因子スコアのみを使用します: {score_columns}")
+        else:
+            # 因子スコアが存在しない場合はskill_scoreを使用
+            score_columns = ['skill_score']
+            print(f"💡 skill_scoreのみを使用します")
+
         print(f"CLAUDE_DEBUG: Detected score columns to merge: {score_columns}")
 
         # CLAUDE_ADDED: スキルスコアデータをトライアル単位で結合

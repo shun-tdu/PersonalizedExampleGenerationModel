@@ -244,16 +244,33 @@ class TrajectoryOverlayEvaluator(BaseEvaluator):
         original_trajectories = trajectories_tensor.cpu().numpy()
         reconstructed_trajectories = reconstructed.cpu().numpy()
 
+        # CLAUDE_ADDED: 逆正規化前に有効な長さを検出（正規化空間でのゼロを検出）
+        valid_lengths = self._detect_valid_lengths(original_trajectories)
+
         # 標準化を元に戻す
         original_denormalized = self._denormalize_trajectories(original_trajectories)
         reconstructed_denormalized = self._denormalize_trajectories(reconstructed_trajectories)
 
+        # CLAUDE_ADDED: 逆正規化後、パディング部分を再度ゼロに戻す
+        for i in range(len(original_denormalized)):
+            valid_len = valid_lengths[i]
+            original_denormalized[i, valid_len:, :] = 0.0
+            reconstructed_denormalized[i, valid_len:, :] = 0.0
+
+        # CLAUDE_ADDED: 再構成軌道も元の軌道と同じ長さにトリミング
+        # （再構成軌道が元より長い場合があるため）
+        reconstructed_trimmed = np.zeros_like(original_denormalized)
+        for i in range(len(reconstructed_denormalized)):
+            valid_len = valid_lengths[i]
+            reconstructed_trimmed[i, :valid_len, :] = reconstructed_denormalized[i, :valid_len, :]
+
         return {
             'original': original_denormalized,
-            'reconstructed': reconstructed_denormalized,
+            'reconstructed': reconstructed_trimmed,  # CLAUDE_ADDED: トリミング済み再構成軌道
             'subject_ids': selected_subject_ids,
             'skill_scores': selected_skill_scores,
-            'indices': selected_indices
+            'indices': selected_indices,
+            'valid_lengths': valid_lengths  # CLAUDE_ADDED: 有効な長さ情報を追加
         }
 
     def _create_trajectory_overlay_plot(self, trajectories_data: Dict[str, Dict[str, Any]]) -> plt.Figure:
@@ -294,6 +311,7 @@ class TrajectoryOverlayEvaluator(BaseEvaluator):
             reconstructed = data['reconstructed']
             subject_ids = data['subject_ids']
             skill_scores = data['skill_scores']
+            valid_lengths = data.get('valid_lengths', [original.shape[1]] * len(original))  # CLAUDE_ADDED: 有効な長さ
 
             for comp_idx, component in enumerate(self.expanded_plot_components):
                 ax = fig.add_subplot(gs[comp_idx, split_idx])
@@ -328,29 +346,31 @@ class TrajectoryOverlayEvaluator(BaseEvaluator):
                 # プロットタイプに応じて描画方法を変更
                 if plot_type == 'time_series':
                     # 時系列プロット（速度・加速度用）
-                    time_steps = np.arange(original.shape[1])
-
                     for sample_idx in range(len(original)):
+                        # CLAUDE_ADDED: 有効な長さまでのデータのみプロット
+                        valid_len = valid_lengths[sample_idx]
+                        time_steps = np.arange(valid_len)
+
                         color = colors[sample_idx % len(colors)]
                         alpha = 0.7
 
-                        # X成分
-                        ax.plot(time_steps, original[sample_idx, :, comp_indices[0]],
+                        # X成分（有効な長さまで）
+                        ax.plot(time_steps, original[sample_idx, :valid_len, comp_indices[0]],
                                color=color, alpha=alpha, linewidth=2,
                                label=f'Original {subject_ids[sample_idx]} (X)' if sample_idx < 2 else '',
                                linestyle='-')
-                        ax.plot(time_steps, reconstructed[sample_idx, :, comp_indices[0]],
+                        ax.plot(time_steps, reconstructed[sample_idx, :valid_len, comp_indices[0]],
                                color=color, alpha=alpha, linewidth=2,
                                label=f'Reconstructed {subject_ids[sample_idx]} (X)' if sample_idx < 2 else '',
                                linestyle='--')
 
-                        # Y成分（異なる色合い）
+                        # Y成分（異なる色合い、有効な長さまで）
                         darker_color = colors[(sample_idx + 6) % len(colors)]
-                        ax.plot(time_steps, original[sample_idx, :, comp_indices[1]],
+                        ax.plot(time_steps, original[sample_idx, :valid_len, comp_indices[1]],
                                color=darker_color, alpha=alpha, linewidth=2,
                                label=f'Original {subject_ids[sample_idx]} (Y)' if sample_idx < 2 else '',
                                linestyle='-')
-                        ax.plot(time_steps, reconstructed[sample_idx, :, comp_indices[1]],
+                        ax.plot(time_steps, reconstructed[sample_idx, :valid_len, comp_indices[1]],
                                color=darker_color, alpha=alpha, linewidth=2,
                                label=f'Reconstructed {subject_ids[sample_idx]} (Y)' if sample_idx < 2 else '',
                                linestyle='--')
@@ -364,31 +384,34 @@ class TrajectoryOverlayEvaluator(BaseEvaluator):
                 else:
                     # 2D軌道プロット（位置用）
                     for sample_idx in range(len(original)):
+                        # CLAUDE_ADDED: 有効な長さまでのデータのみプロット
+                        valid_len = valid_lengths[sample_idx]
+
                         color = colors[sample_idx % len(colors)]
                         alpha = 0.7
 
-                        # 元軌道（実線）
+                        # 元軌道（実線、有効な長さまで）
                         if len(comp_indices) >= 2:
-                            ax.plot(original[sample_idx, :, comp_indices[0]],
-                                   original[sample_idx, :, comp_indices[1]],
+                            ax.plot(original[sample_idx, :valid_len, comp_indices[0]],
+                                   original[sample_idx, :valid_len, comp_indices[1]],
                                    color=color, alpha=alpha, linewidth=2,
                                    label=f'Original {subject_ids[sample_idx]}' if sample_idx < 3 else '',
                                    linestyle='-')
 
-                            # 再構成軌道（点線）
-                            ax.plot(reconstructed[sample_idx, :, comp_indices[0]],
-                                   reconstructed[sample_idx, :, comp_indices[1]],
+                            # 再構成軌道（点線、有効な長さまで）
+                            ax.plot(reconstructed[sample_idx, :valid_len, comp_indices[0]],
+                                   reconstructed[sample_idx, :valid_len, comp_indices[1]],
                                    color=color, alpha=alpha, linewidth=2,
                                    label=f'Reconstructed {subject_ids[sample_idx]}' if sample_idx < 3 else '',
                                    linestyle='--')
 
-                            # スタート・エンド点をマーク
+                            # スタート・エンド点をマーク（有効なデータの最初と最後）
                             ax.scatter(original[sample_idx, 0, comp_indices[0]],
                                      original[sample_idx, 0, comp_indices[1]],
                                      color=color, s=100, marker='o', edgecolor='black', linewidth=1,
                                      zorder=10)
-                            ax.scatter(original[sample_idx, -1, comp_indices[0]],
-                                     original[sample_idx, -1, comp_indices[1]],
+                            ax.scatter(original[sample_idx, valid_len-1, comp_indices[0]],
+                                     original[sample_idx, valid_len-1, comp_indices[1]],
                                      color=color, s=100, marker='s', edgecolor='black', linewidth=1,
                                      zorder=10)
 
@@ -482,6 +505,31 @@ class TrajectoryOverlayEvaluator(BaseEvaluator):
                     description=description,
                     category='trajectory_reconstruction'
                 )
+
+    def _detect_valid_lengths(self, trajectories: np.ndarray) -> list:
+        """
+        CLAUDE_ADDED: 各軌道の有効な長さを検出（ゼロパディング部分を除く）
+        :param trajectories: [batch_size, seq_len, features]
+        :return: 各サンプルの有効な長さのリスト
+        """
+        valid_lengths = []
+        for i in range(len(trajectories)):
+            # 各フレームで全特徴量がゼロかチェック
+            frame_magnitudes = np.linalg.norm(trajectories[i], axis=1)  # [seq_len]
+
+            # ゼロでないフレームを探す
+            non_zero_frames = np.where(frame_magnitudes > 1e-6)[0]
+
+            if len(non_zero_frames) > 0:
+                # 最後の非ゼロフレームの次のインデックスが有効な長さ
+                valid_length = non_zero_frames[-1] + 1
+            else:
+                # 全フレームがゼロの場合は全長を使用
+                valid_length = trajectories.shape[1]
+
+            valid_lengths.append(valid_length)
+
+        return valid_lengths
 
     def _denormalize_trajectories(self, trajectories: np.ndarray) -> np.ndarray:
         """軌道データの標準化を元に戻す - CLAUDE_ADDED: 可視化のため元のスケールに戻す"""
