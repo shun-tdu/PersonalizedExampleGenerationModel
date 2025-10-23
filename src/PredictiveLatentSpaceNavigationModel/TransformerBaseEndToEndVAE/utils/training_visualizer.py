@@ -38,7 +38,9 @@ class TrainingVisualizer:
                 'manifold': 'Manifold Formation',
                 'style_classification': 'Style Classification',
                 'skill_regression': 'Skill Regression',
-                'diffusion':'Diffusion Loss'
+                'diffusion': 'Diffusion Loss',
+                'physical_consistency': 'Physical Consistency',  # CLAUDE_ADDED: 物理的整合性損失
+                'factor_regression': 'Factor Regression'  # CLAUDE_ADDED: 因子回帰損失
             }
 
             for key in keys_to_plot:
@@ -96,24 +98,33 @@ class TrainingVisualizer:
             'kl_style', 'kl_skill',  # KL損失を分離
             'orthogonal', 'contrastive', 'adversarial',
             'manifold',  # manifold_loss追加
-            'style_classification', 'skill_regression'
+            'style_classification', 'skill_regression',
+            'factor_regression',  # CLAUDE_ADDED: 因子回帰損失
+            'physical_consistency',  # CLAUDE_ADDED: 物理的整合性損失
             'diffusion'
         ]
 
         # lossの開始
         for key in history.keys():
             if '_loss' in key:
-                # CLAUDE_ADDED: より精密なマッチングでKL損失を分離
+                # CLAUDE_ADDED: より精密なマッチングで各損失を分離
                 if 'kl_style' in key:
                     loss_types.setdefault('kl_style', []).append(key)
                 elif 'kl_skill' in key:
                     loss_types.setdefault('kl_skill', []).append(key)
                 elif 'manifold' in key:
                     loss_types.setdefault('manifold', []).append(key)
+                elif 'physical_consistency' in key:  # CLAUDE_ADDED: 物理的整合性損失の検出
+                    loss_types.setdefault('physical_consistency', []).append(key)
+                elif 'factor_regression' in key:  # CLAUDE_ADDED: 因子回帰損失の検出
+                    loss_types.setdefault('factor_regression', []).append(key)
                 else:
-                    # 従来の検出ロジック（kl_styleとkl_skill以外）
+                    # 従来の検出ロジック（上記で明示的に検出されなかった損失）
                     for detection_filter in detection_filters:
-                        if detection_filter in key and detection_filter not in ['kl_style', 'kl_skill', 'manifold']:
+                        if detection_filter in key and detection_filter not in [
+                            'kl_style', 'kl_skill', 'manifold',
+                            'physical_consistency', 'factor_regression'  # CLAUDE_ADDED
+                        ]:
                             loss_types.setdefault(detection_filter, []).append(key)
                             break
 
