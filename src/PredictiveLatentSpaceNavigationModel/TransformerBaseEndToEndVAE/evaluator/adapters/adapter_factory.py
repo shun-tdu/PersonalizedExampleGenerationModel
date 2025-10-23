@@ -14,6 +14,7 @@ from .model_adapter import (
     StandardVAEAdapter,
     PatchedVAEAdapter,
     DiffusionVAEAdapter,
+    PatchedDiffusionVAEAdapter,
     SkipConnectionVAEAdapter
 )
 
@@ -51,31 +52,39 @@ class AdapterFactory:
         print("=" * 60)
         print("ModelAdapter auto-detection...")
 
-        # 1. Diffusion model detection
-        if hasattr(model, 'sample') and hasattr(model, 'num_timesteps'):
+        # CLAUDE_ADDED: 拡散モデルとパッチモデルの両方の特徴を持つ場合を最初にチェック
+        is_diffusion = hasattr(model, 'sample') and hasattr(model, 'num_timesteps')
+        is_patched = hasattr(model, 'patch_size')
+
+        data_config = config.get('data', {})
+        if not is_patched:
+            is_patched = 'patch' in data_config or data_config.get('type', '').endswith('no_interpolate')
+
+        # 1. Patched + Diffusion model detection
+        if is_diffusion and is_patched:
+            print("  Detected: patched diffusion model")
+            print("  -> PatchedDiffusionVAEAdapter")
+            return PatchedDiffusionVAEAdapter(model, config)
+
+        # 2. Diffusion model only
+        if is_diffusion:
             print("  Detected: diffusion model")
             print("  -> DiffusionVAEAdapter")
             return DiffusionVAEAdapter(model, config)
 
-        # 2. Patched model detection
-        if hasattr(model, 'patch_size'):
-            print("  Detected: patched model (model.patch_size)")
+        # 3. Patched model only
+        if is_patched:
+            print("  Detected: patched model")
             print("  -> PatchedVAEAdapter")
             return PatchedVAEAdapter(model, config)
 
-        data_config = config.get('data', {})
-        if 'patch' in data_config or data_config.get('type', '').endswith('no_interpolate'):
-            print("  Detected: patched model (config.data.patch)")
-            print("  -> PatchedVAEAdapter")
-            return PatchedVAEAdapter(model, config)
-
-        # 3. Skip connection detection
+        # 4. Skip connection detection
         if AdapterFactory._has_skip_connections(model):
             print("  Detected: skip connection model")
             print("  -> SkipConnectionVAEAdapter")
             return SkipConnectionVAEAdapter(model, config)
 
-        # 4. Standard VAE
+        # 5. Standard VAE
         print("  Detected: standard VAE")
         print("  -> StandardVAEAdapter")
         return StandardVAEAdapter(model, config)
@@ -148,6 +157,7 @@ class AdapterFactory:
             'standard': StandardVAEAdapter,
             'patched': PatchedVAEAdapter,
             'diffusion': DiffusionVAEAdapter,
+            'patched_diffusion': PatchedDiffusionVAEAdapter,  # CLAUDE_ADDED
             'skip_connection': SkipConnectionVAEAdapter,
         }
 

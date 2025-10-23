@@ -294,9 +294,101 @@ class IntegratedExperimentRunner:
         
         model = model_class(**model_params)
         model.to(self.device)
-        
+
+        # 事前学習済みモデルのロード
+        prereq_config = self.config.get('prerequisites')
+        if prereq_config:
+            print("事前学習済みモデルをロードします")
+            try:
+                self._apply_prerequisites(model, prereq_config)
+            except Exception as e:
+                print(f"事前学習済みモデルのロードに失敗:{e}")
+                raise
+
         return ModelWrapper(model, self.config)
-        
+
+    def _get_model_path_from_db(self, experiment_id: int) -> Optional[str]:
+        """DBから実験IDのモデルパスを取得"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """SELECT model_path,
+                              json_extract(training_results, '$.best_model_path') AS best_model_path
+                       FROM transformer_base_e2e_vae_experiment
+                       WHERE id = ?""",
+                    (experiment_id,)
+                )
+                result = cursor.fetchone()
+
+                if result:
+                    final_model_path, best_model_path = result
+
+                    if best_model_path and os.path.exists(best_model_path):
+                        print(f"DB (ID: {experiment_id}): ベストモデルパスを使用 -> {best_model_path}")
+                        return best_model_path
+                    elif final_model_path and os.path.exists(final_model_path):
+                        print(f"DB (ID: {experiment_id}): 最終モデルパスを使用 -> {final_model_path}")
+                        return final_model_path
+                    else:
+                        print(f"警告: DB (ID: {experiment_id}) にパスはありますが、ファイルが見つかりません。")
+
+            print(f"エラー: DB (ID: {experiment_id}) から有効なモデルパスが見つかりません。")
+            return None
+
+        except Exception as e:
+            print(f"DBからのパス取得エラー (ID: {experiment_id}): {e}")
+        return None
+
+    def _apply_prerequisites(self, model: torch.nn.Module, prereq_config: Dict[str, Any]):
+        """重みロードとフリーズ設定を適用"""
+
+        # 1. 重みファイルのパスを取得
+        model_path = None
+        if 'load_weights_from_path' in prereq_config:
+            model_path = prereq_config.get('load_weights_from_path')
+        elif 'load_weights_from_id' in prereq_config:
+            exp_id = prereq_config.get('load_weights_from_id')
+            model_path = self._get_model_path_from_db(exp_id)
+            if not model_path:
+                raise FileNotFoundError(f"DBから実験ID {exp_id} のモデルパスが見つかりません。")
+
+        # 2. 重みをロード
+        if model_path:
+            if not os.path.exists(model_path):
+                raise FileNotFoundError(f"指定された重みファイルが見つかりません: {model_path}")
+
+            print(f"重みをロード: {model_path}")
+            checkpoint = torch.load(model_path, map_location=self.device)
+
+            # .pthファイルが辞書形式（state_dictを含む）か、state_dictそのものかを判定
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                state_dict = checkpoint['model_state_dict']
+            else:
+                state_dict = checkpoint
+
+            strict = prereq_config.get('strict_load', True)
+
+            try:
+                model.load_state_dict(state_dict, strict=strict)
+                print(f"重みロード完了 (strict={strict})")
+            except RuntimeError as e:
+                print(f"重みロードエラー (strict={strict}): {e}")
+                if strict:
+                    print("ヒント: モデル構造が異なる場合は strict_load: false を試してください。")
+                raise
+
+        # 3. レイヤーのフリーズ/解凍
+        if hasattr(model, 'apply_freezing_config'):
+            model.apply_freezing_config(
+                freeze_modules=prereq_config.get('freeze_modules', []),
+                unfreeze_modules=prereq_config.get('unfreeze_modules', [])
+            )
+        elif prereq_config.get('freeze_modules') or prereq_config.get('unfreeze_modules'):
+            print("警告: 'freeze_modules'/'unfreeze_modules' が設定されていますが、"
+                  "ロードしたモデルに 'apply_freezing_config' メソッドが実装されていません。")
+
+
     def _run_training(self, model_wrapper, train_loader, val_loader):
         """学習実行"""
         print("学習開始...")
@@ -441,7 +533,14 @@ class IntegratedExperimentRunner:
 
                 # CPU上に移動してリストに追加
                 all_originals.append(original_continuous.cpu().numpy())
-                all_reconstructed.append(reconstructed.cpu().numpy())
+
+                # CLAUDE_ADDED: reconstructedがNoneの場合（拡散デコードスキップ時）の処理
+                if reconstructed is not None:
+                    all_reconstructed.append(reconstructed.cpu().numpy())
+                else:
+                    # Noneの場合はオリジナルと同じ形状のゼロ配列を追加（評価では使用しない）
+                    all_reconstructed.append(np.zeros_like(original_continuous.cpu().numpy()))
+
                 all_z_style.append(z_style.cpu().numpy())
                 all_z_skill.append(z_skill.cpu().numpy())
                 all_subject_ids.extend(subject_ids)
@@ -488,7 +587,7 @@ class IntegratedExperimentRunner:
         print(f"  - スキル潜在次元: {extracted_data['z_skill'].shape[1]}")
 
         return extracted_data
-        
+
     def _finalize_results(self, model_path, evaluation_results):
         """結果の最終化"""
         final_results = {

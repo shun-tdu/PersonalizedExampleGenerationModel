@@ -233,7 +233,6 @@ class PatchedTokenPoolCompressedPhysicalSeparationNet(BaseExperimentModel):
                  factor_num=2,
                  n_subjects=6,
                  loss_schedule_config: Dict[str, Any] = None,
-                 dt: float = 0.01,  # CLAUDE_ADDED: サンプリング周期（秒）
                  **kwargs):
 
         super().__init__(input_dim=input_dim,
@@ -255,13 +254,11 @@ class PatchedTokenPoolCompressedPhysicalSeparationNet(BaseExperimentModel):
         self.d_model = d_model
         self.style_latent_dim = style_latent_dim
         self.skill_latent_dim = skill_latent_dim
-        self.dt = dt  # CLAUDE_ADDED: サンプリング周期
 
         print(f"PatchedTokenPoolSeparationNet instantiated:")
         print(f"  d_model: {d_model}, n_heads: {n_heads}")
         print(f"  encoder_layers: {n_encoder_layers}, decoder_layers: {n_decoder_layers}")
         print(f"  latent_dims: style={style_latent_dim}, skill={skill_latent_dim}")
-        print(f"  dt: {dt} (sampling period)")  # CLAUDE_ADDED
 
         # CLAUDE_ADDED: 損失スケジューラ初期化 - 相関行列ベースの直交性損失を使用
         if loss_schedule_config is None:
@@ -279,7 +276,6 @@ class PatchedTokenPoolCompressedPhysicalSeparationNet(BaseExperimentModel):
         # スケジューラ設定からlossの計算フラグを受け取り
         self.calc_factor_subtask = 'factor_regression_loss' in loss_schedule_config
         self.calc_orthogonal_loss = 'orthogonal_loss' in loss_schedule_config  # CLAUDE_ADDED: orthogonal_loss
-        self.calc_physical_consistency = 'physical_consistency_loss' in loss_schedule_config  # CLAUDE_ADDED: physical_consistency
 
         # エンコーダ・デコーダ
         self.encoder = TokenPoolSeparationEncoder(
@@ -374,82 +370,6 @@ class PatchedTokenPoolCompressedPhysicalSeparationNet(BaseExperimentModel):
 
         return result | losses
 
-    def compute_physical_consistency_loss(self, trajectory, attention_mask):
-        """
-        CLAUDE_ADDED: 物理的整合性損失を計算
-        位置、速度、加速度が微分関係を満たすように制約する
-
-        Args:
-            trajectory: [B, Patches, PatchSize, Features]
-                        Features = [pos_x, pos_y, vel_x, vel_y, acc_x, acc_y]
-            attention_mask: [B, Patches] パディングマスク (Trueがパディング)
-
-        Returns:
-            physical_loss: スカラーテンソル
-        """
-        # データ形状を取得
-        batch_size, num_patches, patch_size, num_features = trajectory.shape
-
-        # 特徴量を分解 (input_dim=6: x, y, vx, vy, ax, ay)
-        pos = trajectory[..., 0:2]  # [B, Patches, PatchSize, 2]
-        vel = trajectory[..., 2:4]  # [B, Patches, PatchSize, 2]
-        acc = trajectory[..., 4:6]  # [B, Patches, PatchSize, 2]
-
-        # 方法: 前進差分法 (forward difference) + スケール正規化
-        # d(pos)/dt ≈ vel[t] を検証
-        # pos[t+1] - pos[t] = vel[t] * dt
-        # [B, Patches, PatchSize-1, 2]
-        pos_diff = pos[:, :, 1:, :] - pos[:, :, :-1, :]  # 位置差分
-        vel_expected = vel[:, :, :-1, :] * self.dt  # 速度から期待される位置変化
-
-        # d(vel)/dt ≈ acc[t] を検証
-        # vel[t+1] - vel[t] = acc[t] * dt
-        vel_diff = vel[:, :, 1:, :] - vel[:, :, :-1, :]  # 速度差分
-        acc_expected = acc[:, :, :-1, :] * self.dt  # 加速度から期待される速度変化
-
-        # CLAUDE_ADDED: スケール正規化された損失計算
-        # 相対誤差を使うことで、異なるスケールの量を公平に扱う
-        # 位置-速度の整合性: |Δpos - vel*dt| / |vel*dt|
-        pos_vel_consistency = (pos_diff - vel_expected).pow(2) / (vel_expected.pow(2) + 1e-6)
-
-        # 速度-加速度の整合性: |Δvel - acc*dt| / |acc*dt|
-        # 加速度の寄与を強調するため、より強い正規化を適用
-        vel_acc_consistency = (vel_diff - acc_expected).pow(2) / (acc_expected.pow(2) + 1e-6)
-
-        # パッチ方向のマスク処理
-        # attention_mask: [B, Patches] -> [B, Patches, 1, 1]に拡張
-        patch_mask = (~attention_mask).unsqueeze(-1).unsqueeze(-1).float()
-        # PatchSize-1に対応するマスク (最後のフレームは差分計算に使えない)
-        patch_mask_diff = patch_mask.expand(-1, -1, patch_size-1, 2)
-
-        # マスクを適用して損失を計算
-        pos_vel_loss = (pos_vel_consistency * patch_mask_diff).sum()
-        vel_acc_loss = (vel_acc_consistency * patch_mask_diff).sum()
-
-        # 有効な要素数で正規化
-        num_valid = patch_mask_diff.sum()
-        if num_valid > 0:
-            physical_loss = (pos_vel_loss + vel_acc_loss) / num_valid
-        else:
-            physical_loss = torch.tensor(0.0, device=trajectory.device)
-
-        # CLAUDE_ADDED: デバッグ用ロギング（初回エポックと物理損失導入時）
-        if self.training and (self.current_epoch <= 1 or (41 <= self.current_epoch <= 42)) and torch.rand(1).item() < 0.02:
-            print(f"\n[Physical Loss Debug] epoch={self.current_epoch}")
-            print(f"  dt={self.dt}")
-            print(f"  pos_diff range: [{pos_diff.min().item():.6f}, {pos_diff.max().item():.6f}]")
-            print(f"  vel_expected range: [{vel_expected.min().item():.6f}, {vel_expected.max().item():.6f}]")
-            print(f"  vel_diff range: [{vel_diff.min().item():.6f}, {vel_diff.max().item():.6f}]")
-            print(f"  acc_expected range: [{acc_expected.min().item():.6f}, {acc_expected.max().item():.6f}]")
-            print(f"  pos_vel_consistency (normalized) mean: {pos_vel_consistency.mean().item():.6f}")
-            print(f"  vel_acc_consistency (normalized) mean: {vel_acc_consistency.mean().item():.6f}")
-            print(f"  pos_vel_loss: {(pos_vel_loss/num_valid).item():.6f}")
-            print(f"  vel_acc_loss: {(vel_acc_loss/num_valid).item():.6f}")
-            print(f"  physical_loss: {physical_loss.item():.6f}")
-            print(f"  loss_weight: {self.loss_scheduler.get_weights().get('physical_consistency_loss', 0.0):.6f}\n")
-
-        return physical_loss
-
     def compute_losses(self, x, reconstructed, attention_mask, encoded, z_style, z_skill,
                        skill_factor_pred, skill_factor):
         """CLAUDE_ADDED: 相関行列ベースの直交性損失を使用"""
@@ -494,10 +414,6 @@ class PatchedTokenPoolCompressedPhysicalSeparationNet(BaseExperimentModel):
             if self.calc_factor_subtask and skill_factor_pred is not None:
                 losses['factor_regression_loss'] = F.mse_loss(skill_factor_pred, skill_factor)
 
-        # CLAUDE_ADDED: 物理的整合性損失 (位置・速度・加速度の微分関係)
-        if self.calc_physical_consistency:
-            losses['physical_consistency_loss'] = self.compute_physical_consistency_loss(reconstructed, attention_mask)
-
         # 総合損失計算
         total_loss = (losses['reconstruction_loss']
                       + weights.get('beta_style', weights.get('beta', 0.0)) * losses['kl_style_loss']
@@ -506,8 +422,6 @@ class PatchedTokenPoolCompressedPhysicalSeparationNet(BaseExperimentModel):
                                                                          torch.tensor(0.0, device=x.device))
                       + weights.get('factor_regression_loss', 0.0) * losses.get('factor_regression_loss',
                                                                                 torch.tensor(0.0, device=x.device))
-                      + weights.get('physical_consistency_loss', 0.0) * losses.get('physical_consistency_loss',
-                                                                                   torch.tensor(0.0, device=x.device))
                       )
 
         losses['total_loss'] = total_loss

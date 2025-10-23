@@ -3,7 +3,7 @@
 
 from .types import StandardizedBatch, DecodeMetadata
 from .data_adapter import DataAdapter, TupleDataAdapter, DictPatchDataAdapter
-from .model_adapter import ModelAdapter, StandardVAEAdapter, PatchedVAEAdapter, DiffusionVAEAdapter, SkipConnectionVAEAdapter
+from .model_adapter import ModelAdapter, StandardVAEAdapter, PatchedVAEAdapter, DiffusionVAEAdapter, PatchedDiffusionVAEAdapter, SkipConnectionVAEAdapter
 from .adapter_factory import AdapterFactory
 
 __all__ = [
@@ -21,6 +21,7 @@ __all__ = [
     'StandardVAEAdapter',
     'PatchedVAEAdapter',
     'DiffusionVAEAdapter',
+    'PatchedDiffusionVAEAdapter',  # CLAUDE_ADDED
     'SkipConnectionVAEAdapter',
 
     # Factory

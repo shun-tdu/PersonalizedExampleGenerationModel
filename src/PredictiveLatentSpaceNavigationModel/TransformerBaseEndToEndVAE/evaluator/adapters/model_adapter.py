@@ -278,10 +278,12 @@ class DiffusionVAEAdapter(ModelAdapter):
 
     def decode(self, z_style: torch.Tensor, z_skill: torch.Tensor,
                metadata: Optional[DecodeMetadata] = None) -> Optional[torch.Tensor]:
-        skip_decode = self.config.get('skip_diffusion_decode', True)
+        # CLAUDE_ADDED: skip_diffusion_decodeはevaluation配下にネストされている
+        evaluation_config = self.config.get('evaluation', {})
+        skip_decode = evaluation_config.get('skip_diffusion_decode', True)
         if skip_decode:
             print("Warning: Diffusion decode skipped (time-consuming)")
-            print("   Set config['skip_diffusion_decode'] = False to enable")
+            print("   Set config['evaluation']['skip_diffusion_decode'] = False to enable")
             return None
         print(f"Diffusion sampling: {len(z_style)} samples")
         sampled = self.model.sample(z_style, z_skill)
@@ -293,6 +295,70 @@ class DiffusionVAEAdapter(ModelAdapter):
 
     def get_model_type(self) -> str:
         return 'diffusion_vae'
+
+
+class PatchedDiffusionVAEAdapter(PatchedVAEAdapter):
+    """
+    CLAUDE_ADDED: Adapter for patched diffusion VAE models
+    Combines patch handling from PatchedVAEAdapter with diffusion sampling
+    """
+
+    def decode(self, z_style: torch.Tensor, z_skill: torch.Tensor,
+               metadata: Optional[DecodeMetadata] = None) -> Optional[torch.Tensor]:
+        # CLAUDE_ADDED: skip_diffusion_decodeはevaluation配下にネストされている
+        evaluation_config = self.config.get('evaluation', {})
+        skip_decode = evaluation_config.get('skip_diffusion_decode', True)
+        if skip_decode:
+            print("Warning: Diffusion decode skipped (time-consuming)")
+            print("   Set config['evaluation']['skip_diffusion_decode'] = False to enable")
+            return None
+
+        # メタデータから元のシーケンス長とnum_patchesを取得
+        num_patches = None
+        attention_mask = None
+        original_seq_len = None
+
+        if metadata is not None:
+            num_patches = metadata.get('num_patches')
+            attention_mask = metadata.get('attention_mask')
+            original_seq_len = metadata.get('original_seq_len')
+
+            if num_patches is None and 'original_shape' in metadata:
+                original_shape = metadata['original_shape']
+                if len(original_shape) == 4:
+                    num_patches = original_shape[1]
+                elif len(original_shape) == 3:
+                    if original_seq_len is None:
+                        original_seq_len = original_shape[1]
+                    num_patches = (original_seq_len - self.patch_size) // self.patch_step + 1
+
+        if num_patches is None:
+            num_patches = 100
+
+        # 拡散サンプリング（パッチ形式で生成）
+        print(f"Diffusion sampling with {num_patches} patches: {len(z_style)} samples")
+        sampled_patches = self.model.sample(z_style, z_skill, num_patches)
+        print(f"Sampling completed: shape={sampled_patches.shape}")
+
+        # パッチを連続軌道に変換
+        trajectory = self._patches_to_trajectory(sampled_patches, attention_mask)
+
+        # 元の連続軌道長にトリミング（3D入力の場合）
+        if original_seq_len is not None and trajectory.shape[1] != original_seq_len:
+            if trajectory.shape[1] > original_seq_len:
+                trajectory = trajectory[:, :original_seq_len, :]
+            else:
+                pad_len = original_seq_len - trajectory.shape[1]
+                padding = torch.zeros(trajectory.shape[0], pad_len, trajectory.shape[2], device=trajectory.device)
+                trajectory = torch.cat([trajectory, padding], dim=1)
+
+        return trajectory
+
+    def is_diffusion_model(self) -> bool:
+        return True
+
+    def get_model_type(self) -> str:
+        return 'patched_diffusion_vae'
 
 
 class SkipConnectionVAEAdapter(StandardVAEAdapter):
