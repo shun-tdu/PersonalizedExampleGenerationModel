@@ -236,14 +236,16 @@ class DiffusionDecoderBlock(nn.Module):
 
 class ConditionalDiffusionDecoder(nn.Module):
     """
-    CLAUDE_ADDED: パッチ処理対応の条件付き拡散デコーダ
-    入力: [B, Patches, PatchSize, Features] 形状のノイズ付き軌道
+    CLAUDE_MODIFIED: パッチ処理対応の条件付き拡散デコーダ（位置のみ予測）
+    入力: [B, Patches, PatchSize, 2] 形状のノイズ付き位置データ
     条件: z_style, z_skill
-    出力: [B, Patches, PatchSize, Features] 形状のノイズ予測
+    出力: [B, Patches, PatchSize, 2] 形状の位置ノイズ予測
+
+    速度と加速度は位置から数値微分で計算される（サンプリング時）
     """
 
     def __init__(self,
-                 output_dim,
+                 output_dim,  # 位置のみなので2を期待
                  patch_size,
                  d_model,
                  n_heads,
@@ -256,11 +258,11 @@ class ConditionalDiffusionDecoder(nn.Module):
         super().__init__()
 
         self.patch_size = patch_size
-        self.output_dim = output_dim
+        self.output_dim = output_dim  # CLAUDE_MODIFIED: 位置のみなので2
         self.max_patches = max_patches
 
-        # フレームレベルで処理するため、フレーム単位の射影に変更
-        self.input_proj = nn.Linear(patch_size*output_dim, d_model)
+        # CLAUDE_MODIFIED: 位置のみ（2次元）を入力として処理
+        self.input_proj = nn.Linear(patch_size * 2, d_model)  # 位置のみ
 
         # パッチ系列用の位置埋め込み
         self.pos_encoding = PositionalEncoding(d_model, max_patches)
@@ -448,9 +450,9 @@ class PreTrainedTokenPoolDiffusionNet(BaseExperimentModel):
         if freeze_encoder:
             self.freeze_encoder_weights()
 
-        # 拡散デコーダ
+        # CLAUDE_MODIFIED: 拡散デコーダ（位置のみ予測）
         self.decoder = ConditionalDiffusionDecoder(
-            output_dim=input_dim,
+            output_dim=2,  # CLAUDE_MODIFIED: 位置のみ（x, y）
             patch_size=patch_size,
             d_model=d_model,
             n_heads=n_heads,
@@ -653,9 +655,52 @@ class PreTrainedTokenPoolDiffusionNet(BaseExperimentModel):
         eps = torch.randn_like(std)
         return mu + eps * std
 
-    def _generate_consistent_patch_noise(self, batch_size, num_patches, device):
+    def _numerical_differentiation(self, position_trajectory, dt=0.01):
         """
-        CLAUDE_ADDED: パッチのオーバーラップを考慮した一貫性のあるノイズを生成
+        CLAUDE_ADDED: 位置から速度と加速度を数値微分で計算
+
+        Args:
+            position_trajectory: [B, Seq_len, 2] 連続する位置軌道
+            dt: 時間刻み（デフォルト: 0.01秒）
+        Returns:
+            velocity: [B, Seq_len, 2] 速度
+            acceleration: [B, Seq_len, 2] 加速度
+        """
+        batch_size, seq_len, _ = position_trajectory.shape
+
+        # 速度の計算: v(t) = (pos(t+1) - pos(t)) / dt
+        # 中央差分を使用: v(t) = (pos(t+1) - pos(t-1)) / (2*dt)
+        velocity = torch.zeros_like(position_trajectory)
+
+        # 始端: 前方差分
+        velocity[:, 0, :] = (position_trajectory[:, 1, :] - position_trajectory[:, 0, :]) / dt
+
+        # 中間: 中央差分
+        if seq_len > 2:
+            velocity[:, 1:-1, :] = (position_trajectory[:, 2:, :] - position_trajectory[:, :-2, :]) / (2 * dt)
+
+        # 終端: 後方差分
+        velocity[:, -1, :] = (position_trajectory[:, -1, :] - position_trajectory[:, -2, :]) / dt
+
+        # 加速度の計算: a(t) = (v(t+1) - v(t)) / dt
+        acceleration = torch.zeros_like(velocity)
+
+        # 始端: 前方差分
+        acceleration[:, 0, :] = (velocity[:, 1, :] - velocity[:, 0, :]) / dt
+
+        # 中間: 中央差分
+        if seq_len > 2:
+            acceleration[:, 1:-1, :] = (velocity[:, 2:, :] - velocity[:, :-2, :]) / (2 * dt)
+
+        # 終端: 後方差分
+        acceleration[:, -1, :] = (velocity[:, -1, :] - velocity[:, -2, :]) / dt
+
+        return velocity, acceleration
+
+    def _generate_consistent_patch_noise(self, batch_size, num_patches, device, num_features=None):
+        """
+        CLAUDE_MODIFIED: パッチのオーバーラップを考慮した一貫性のあるノイズを生成
+        位置のみ予測の場合は num_features=2 を指定
 
         patch_size=10, patch_step=5 の場合:
         - Patch 0: frames [0-9]
@@ -668,19 +713,22 @@ class PreTrainedTokenPoolDiffusionNet(BaseExperimentModel):
             batch_size: バッチサイズ
             num_patches: パッチ数
             device: デバイス
+            num_features: 特徴量の次元数（Noneの場合はself.input_dimを使用）
         Returns:
             noise: [B, Patches, PatchSize, Features] 一貫性のあるノイズ
         """
 
         patch_step = self.patch_step
+        if num_features is None:
+            num_features = self.input_dim
 
         # 連続軌道の長さを計算
         trajectory_length = (num_patches - 1) * patch_step + self.patch_size
 
         # 連続軌道全体のノイズを生成
-        trajectory_noise = torch.randn(batch_size, trajectory_length, self.input_dim, device=device)
+        trajectory_noise = torch.randn(batch_size, trajectory_length, num_features, device=device)
         # パッチに分割（オーバーラップ領域は自動的に一貫性を持つ）
-        patch_noise = torch.zeros(batch_size, num_patches, self.patch_size, self.input_dim, device=device)
+        patch_noise = torch.zeros(batch_size, num_patches, self.patch_size, num_features, device=device)
 
         for i in range(num_patches):
             start = i * patch_step
@@ -697,24 +745,27 @@ class PreTrainedTokenPoolDiffusionNet(BaseExperimentModel):
     def forward_process(self, x0, t):
 
         """
-        CLAUDE_FIXED: x0にtステップ分のノイズを加える
+        CLAUDE_MODIFIED: x0から位置のみ抽出し、tステップ分のノイズを加える
         オーバーラップ領域で一貫性のあるノイズを使用
 
         Args:
-            x0: [B, Patches, PatchSize, Features]
+            x0: [B, Patches, PatchSize, 6] (位置、速度、加速度)
             t: [B]
         Returns:
-            xt: ノイズ付き軌道
-            noise: 加えたノイズ
+            xt: [B, Patches, PatchSize, 2] ノイズ付き位置
+            noise: [B, Patches, PatchSize, 2] 加えたノイズ
         """
 
         batch_size, num_patches, _, _ = x0.shape
 
-        # CLAUDE_FIXED: オーバーラップを考慮した一貫性のあるノイズを生成
-        noise = self._generate_consistent_patch_noise(batch_size, num_patches, x0.device)
-        sqrt_alphas_cumprod_t = self._extract(self.sqrt_alphas_cumprod, t, x0.shape)
-        sqrt_one_minus_alphas_cumprod_t = self._extract(self.sqrt_one_minus_alphas_cumprod, t, x0.shape)
-        xt = sqrt_alphas_cumprod_t * x0 + sqrt_one_minus_alphas_cumprod_t * noise
+        # CLAUDE_MODIFIED: 位置のみ抽出 (x, y: 最初の2次元)
+        position_only = x0[:, :, :, :2]  # [B, Patches, PatchSize, 2]
+
+        # CLAUDE_MODIFIED: 位置のみ（2次元）のノイズを生成
+        noise = self._generate_consistent_patch_noise(batch_size, num_patches, x0.device, num_features=2)
+        sqrt_alphas_cumprod_t = self._extract(self.sqrt_alphas_cumprod, t, position_only.shape)
+        sqrt_one_minus_alphas_cumprod_t = self._extract(self.sqrt_one_minus_alphas_cumprod, t, position_only.shape)
+        xt = sqrt_alphas_cumprod_t * position_only + sqrt_one_minus_alphas_cumprod_t * noise
 
         return xt, noise
 
@@ -880,10 +931,47 @@ class PreTrainedTokenPoolDiffusionNet(BaseExperimentModel):
         losses['total_loss'] = total_loss
         return losses
 
+    def _patches_to_continuous_trajectory(self, patches, attention_mask=None):
+        """
+        CLAUDE_ADDED: パッチを連続軌道に変換（オーバーラップを平均化）
+
+        Args:
+            patches: [B, Patches, PatchSize, Features]
+            attention_mask: [B, Patches] (True = パディング)
+        Returns:
+            trajectory: [B, Seq_len, Features] 連続軌道
+        """
+        batch_size, num_patches, patch_size, features = patches.shape
+
+        # 連続軌道の長さを計算
+        seq_len = (num_patches - 1) * self.patch_step + patch_size
+
+        # 累積用の配列を初期化
+        trajectory = torch.zeros(batch_size, seq_len, features, device=patches.device)
+        counts = torch.zeros(batch_size, seq_len, 1, device=patches.device)
+
+        # 各パッチを連続軌道に配置（オーバーラップ領域は累積）
+        for i in range(num_patches):
+            start = i * self.patch_step
+            end = start + patch_size
+
+            # attention_maskがある場合、パディング領域は無視
+            if attention_mask is not None and attention_mask[:, i].any():
+                continue
+
+            trajectory[:, start:end, :] += patches[:, i, :, :]
+            counts[:, start:end, :] += 1
+
+        # オーバーラップ領域を平均化
+        trajectory = trajectory / counts.clamp(min=1)
+
+        return trajectory
+
     @torch.no_grad()
     def ddim_sample(self, z_style, z_skill, num_patches, ddim_steps=None, eta=None):
         """
-        CLAUDE_ADDED: DDIM sampling
+        CLAUDE_MODIFIED: DDIM sampling（位置のみ予測 → 速度・加速度は数値微分）
+
         Args:
             z_style: [B, style_dim]
             z_skill: [B, skill_dim]
@@ -891,7 +979,7 @@ class PreTrainedTokenPoolDiffusionNet(BaseExperimentModel):
             ddim_steps: サンプリングステップ数
             eta: 確率性パラメータ (0=決定的, 1=確率的)
         Returns:
-            trajectory: [B, Patches, PatchSize, Features]
+            trajectory: [B, Patches, PatchSize, 6] (位置、速度、加速度を含む)
         """
 
         device = z_style.device
@@ -917,56 +1005,72 @@ class PreTrainedTokenPoolDiffusionNet(BaseExperimentModel):
             num_patches = self.max_patches
         attention_mask = full_mask
 
-        # 2. 初期ノイズ生成(max_patchesサイズで生成)
-        trajectory = self._generate_consistent_patch_noise(batch_size, self.max_patches, device)
+        # CLAUDE_MODIFIED: 位置のみ（2次元）の初期ノイズ生成
+        position_patches = self._generate_consistent_patch_noise(batch_size, self.max_patches, device, num_features=2)
 
-        # 逆拡散プロセス
+        # 逆拡散プロセス（位置のみ）
         for i, t in enumerate(reversed(ddim_timesteps)):
             time = torch.full((batch_size,), t, device=device, dtype=torch.long)
 
             # 前のタイムステップ
             t_prev = ddim_timesteps[-(i + 2)] if i < len(ddim_timesteps) - 1 else torch.tensor(-1, device=device)
 
-            # ノイズ予測
-            predicted_noise = self.decoder(trajectory, time, z_style, z_skill, src_key_padding_mask=attention_mask)
+            # CLAUDE_MODIFIED: デコーダは位置のみのノイズ予測を行う
+            predicted_noise = self.decoder(position_patches, time, z_style, z_skill, src_key_padding_mask=attention_mask)
 
             # alpha値
-            alpha_t = self._extract(self.alphas_cumprod, time, trajectory.shape)
+            alpha_t = self._extract(self.alphas_cumprod, time, position_patches.shape)
 
             if t_prev >= 0:
                 time_prev = torch.full((batch_size,), t_prev, device=device, dtype=torch.long)
-                alpha_t_prev = self._extract(self.alphas_cumprod, time_prev, trajectory.shape)
+                alpha_t_prev = self._extract(self.alphas_cumprod, time_prev, position_patches.shape)
             else:
                 alpha_t_prev = torch.ones_like(alpha_t)
 
-            # CLAUDE_FIXED: DDIMサンプリングの正しい実装
-            # x0を予測（ノイズから元データを推定）
+            # DDIM sampling formula
             sqrt_alpha_t = torch.sqrt(alpha_t)
             sqrt_one_minus_alpha_t = torch.sqrt(1. - alpha_t)
-            pred_x0 = (trajectory - sqrt_one_minus_alpha_t * predicted_noise) / sqrt_alpha_t
+            pred_x0 = (position_patches - sqrt_one_minus_alpha_t * predicted_noise) / sqrt_alpha_t
 
             # CLAUDE_ADDED: pred_x0をデータ範囲にクリッピング（数値安定性のため）
-            # データは-1~1に正規化されているため、この範囲に制限
             pred_x0 = torch.clamp(pred_x0, -1.0, 1.0)
 
-            # DDIM更新式の方向成分
-            # direction pointing to x_t
+            # DDIM更新式
             sqrt_alpha_t_prev = torch.sqrt(alpha_t_prev)
-
-            # ノイズレベル（eta=0で決定的、eta=1でDDPMと同じ確率性）
             sigma_t = eta * torch.sqrt((1 - alpha_t_prev) / (1 - alpha_t) * (1 - alpha_t / alpha_t_prev))
-
-            # DDIMの方向ベクトル（x0からの方向）
-            # pred_x0に向かう方向とノイズ方向を組み合わせる
             dir_xt = torch.sqrt(1. - alpha_t_prev - sigma_t ** 2) * predicted_noise
+            noise = torch.randn_like(position_patches) if eta > 0 else torch.zeros_like(position_patches)
 
-            # ランダムノイズ（確率的サンプリングの場合のみ）
-            noise = torch.randn_like(trajectory) if eta > 0 else torch.zeros_like(trajectory)
+            position_patches = sqrt_alpha_t_prev * pred_x0 + dir_xt + sigma_t * noise
 
-            # DDIM更新: x_{t-1} = sqrt(α_{t-1}) * x0_pred + direction + noise
-            trajectory = sqrt_alpha_t_prev * pred_x0 + dir_xt + sigma_t * noise
+        # CLAUDE_ADDED: 位置パッチを連続軌道に変換
+        position_patches_valid = position_patches[:, :num_patches, :, :]  # [B, num_patches, PatchSize, 2]
+        attention_mask_valid = attention_mask[:, :num_patches]  # [B, num_patches]
 
-        return trajectory[:, :num_patches, :, :]
+        position_trajectory = self._patches_to_continuous_trajectory(
+            position_patches_valid, attention_mask_valid
+        )  # [B, Seq_len, 2]
+
+        # CLAUDE_ADDED: 数値微分で速度と加速度を計算
+        velocity, acceleration = self._numerical_differentiation(position_trajectory, dt=0.01)
+        # [B, Seq_len, 2], [B, Seq_len, 2]
+
+        # CLAUDE_ADDED: 位置、速度、加速度を結合 [B, Seq_len, 6]
+        full_trajectory = torch.cat([position_trajectory, velocity, acceleration], dim=-1)
+
+        # CLAUDE_ADDED: 連続軌道を再びパッチに分割
+        final_patches = torch.zeros(batch_size, num_patches, self.patch_size, 6, device=device)
+        for i in range(num_patches):
+            start = i * self.patch_step
+            end = start + self.patch_size
+            if end <= full_trajectory.shape[1]:
+                final_patches[:, i, :, :] = full_trajectory[:, start:end, :]
+            else:
+                # 最後のパッチが範囲外の場合
+                remaining = full_trajectory.shape[1] - start
+                final_patches[:, i, :remaining, :] = full_trajectory[:, start:, :]
+
+        return final_patches
 
     @torch.no_grad()
     def sample(self, z_style, z_skill, num_patches=None):
