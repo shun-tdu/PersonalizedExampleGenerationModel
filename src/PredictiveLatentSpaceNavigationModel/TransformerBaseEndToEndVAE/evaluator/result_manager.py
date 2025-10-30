@@ -306,10 +306,20 @@ class EnhancedEvaluationResult:
             html_parts.append('<div class="metric-grid">')
 
             for name, info in metrics:
+                # CLAUDE_FIXED: 非常に小さい値は科学的記法で表示
+                value = info["value"]
+                if isinstance(value, (int, float)):
+                    if abs(value) < 0.0001 and value != 0:
+                        value_str = f'{value:.6e}'  # 科学的記法（例: 1.234567e-05）
+                    else:
+                        value_str = f'{value:.4f}'  # 通常の表示
+                else:
+                    value_str = str(value)
+
                 html_parts.append(f'''
                 <div class="metric-card">
                     <div class="metric-name">{name}</div>
-                    <div class="metric-value">{info["value"]:.4f}</div>
+                    <div class="metric-value">{value_str}</div>
                     <div class="metric-description">{info.get("description", "")}</div>
                 </div>
                 ''')

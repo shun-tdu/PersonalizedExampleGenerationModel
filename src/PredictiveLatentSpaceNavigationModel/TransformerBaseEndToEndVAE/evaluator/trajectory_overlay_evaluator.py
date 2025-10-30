@@ -96,7 +96,7 @@ class TrajectoryOverlayEvaluator(BaseEvaluator):
         result.add_visualization(
             name='trajectory_overlay_comparison',
             fig_or_path=overlay_fig,
-            description='学習・検証・テストデータの元軌道と再構成軌道の重ね合わせ表示',
+            description='テストデータの元軌道と再構成軌道の重ね合わせ表示（過学習判定用）',  # CLAUDE_FIXED
             category='trajectory_analysis'
         )
 
@@ -128,12 +128,9 @@ class TrajectoryOverlayEvaluator(BaseEvaluator):
 
         data_splits = {}
 
-        # 各データ分割を処理 - CLAUDE_ADDED: 実際のキー構造に対応
+        # CLAUDE_FIXED: テストデータのみを使用（過学習判定のため訓練データを除外）
         split_mappings = {
-            'train': ['train_trajectories', 'trajectories_train', 'train_data'],
-            'validation': ['val_trajectories', 'trajectories_val', 'validation_data', 'val_data'],
             'test': ['originals', 'test_trajectories', 'trajectories_test', 'test_data', 'trajectories'],
-            'all': ['all_originals', 'all_trajectories']  # 全データ用の新しい分割
         }
 
         for split_name, possible_keys in split_mappings.items():
@@ -215,19 +212,19 @@ class TrajectoryOverlayEvaluator(BaseEvaluator):
                 attention_mask = encoded.get('attention_mask', None)
                 original_seq_len = encoded.get('original_seq_len', None)
 
-                # Decode (skips for diffusion models by default)
-                if not self.model_adapter.is_diffusion_model():
-                    # CLAUDE_ADDED: 元の軌道形状とシーケンス長をメタデータとして渡す
-                    decode_metadata = {
-                        'original_shape': trajectories_tensor.shape,
-                        'attention_mask': attention_mask,
-                        'original_seq_len': original_seq_len  # CLAUDE_ADDED: encode時に記録された元の長さ
-                    }
-                    reconstructed = self.model_adapter.decode(z_style, z_skill, metadata=decode_metadata)
-                else:
-                    # Diffusion model: sampling is time-consuming
-                    print("拡散モデル検出: サンプリングスキップ（時間がかかるため）")
-                    reconstructed = trajectories_tensor  # Use original as fallback
+                # Decode
+                # CLAUDE_FIXED: 拡散モデルでも実際にサンプリングを実行（評価のため）
+                decode_metadata = {
+                    'original_shape': trajectories_tensor.shape,
+                    'attention_mask': attention_mask,
+                    'original_seq_len': original_seq_len,
+                    'num_patches': trajectories_tensor.shape[1] if len(trajectories_tensor.shape) == 4 else None
+                }
+
+                if self.model_adapter.is_diffusion_model():
+                    print(f"拡散モデル検出: {len(z_style)}サンプルの拡散サンプリング実行中...")
+
+                reconstructed = self.model_adapter.decode(z_style, z_skill, metadata=decode_metadata)
             else:
                 # Fallback: Direct model access (for backward compatibility)
                 print("Warning: ModelAdapter not available, using direct model access")
