@@ -155,32 +155,26 @@
     ```math
     m_{\text{error}} = \| \mathbf{p}_{\text{final}} - \mathbf{p}_{\text{target}} \|_2
     ```
-
 - 動作時間$m_{time}$：試行開始から終了までの時間
     ```math
     m_{\text{time}} = T_{\text{end}} - T_{\text{start}}
     ```
-
 - ジャーク$m_{jerk}$：加速度$a(t)$の時間微分の平均絶対値
     ```math
     m_{\text{jerk}} = \mathbb{E} [ \| \mathbf{j}(t) \| ] = \mathbb{E} \left[ \left\| \frac{d\mathbf{a}(t)}{dt} \right\| \right]
     ```
-
 - 速度滑らかさ$m_{vel\_smooth}$：速度$|v(t)|$変動の標準偏差の逆数
     ```math
     m_{\text{vel\_smooth}} = \frac{1}{1 + \sigma(\Delta|v(t)|)}
     ```
-
 - 加速度滑らかさ$m_{acc\_smooth}$：加速度$|a(t)|$変動の標準偏差の逆数
     ```math
     m_{\text{acc\_smooth}} = \frac{1}{1 + \sigma(\Delta|a(t)|)}
     ```
-
 - 制御安定性$m_{stability}$：加速度$|a(t)|$の標準偏差の逆数
     ```math
     m_{\text{stability}} = \frac{1}{1 + \sigma(|a(t)|)}
     ```
-
 - 軌道曲率$m_{curve}$：軌跡の曲率の平均。3点$P_1, P_2, P_3$からManger曲率$\kappa$として計算
     ```math
     \kappa = \frac{4 \cdot \text{Area}(\mathbf{p}_1, \mathbf{p}_2, \mathbf{p}_3)}{\| \mathbf{p}_1 - \mathbf{p}_2 \| \| \mathbf{p}_2 - \mathbf{p}_3 \| \| \mathbf{p}_3 - \mathbf{p}_1 \|}
@@ -208,18 +202,7 @@
        \mathbf{z}_i = S_{\text{B4}}(\mathbf{m}_i)
        ```
    2. 標準化された$\mathbf{z}_i$を熟達者因子分析モデル$FA_{B4}$に入力し、各試行の$k$次元の因子スコア$\mathbf{f}_i=[\mathbf{f}_{i,1},...,\mathbf{f}_{i,k}]$を計算した。
-   3. 各因子スコア$\mathbf{f}_{i,j}$を、その因子の寄与率$\mathbf{w}_j$で重み付け加算し、総合的な巧拙を表す単一のスキルスコア$S_i$をを算出した。
-       ```math
-       S_i = \sum_{j=1}^{k} w_j \cdot f_{i,j}
-       ```
-
-4. 正規化
-
-   1. 元の動作データ$\mathbf{X}_{traj}$と、ステップ3で計算した因子スコア$\mathbf{f}$及びスキルスコアを試行毎に結合した。
-   2. 被験者IDに基づき、データセットを訓練用$D_{train}$と検証用$D_{test}$に分割した。 
-   3. 訓練用データ$D_{train}$の統計量のみを用いて動作データとスキル因子、スキルスコアを正規化し、データセットとした。
-
-</details>
+   3. 各因子スコア$\mathbf{f}_{i,j}$を、その因子の寄与率$\mathbf{w}_j$で重み付け加算し、総合的な巧拙を表す単
 
 ---
 
