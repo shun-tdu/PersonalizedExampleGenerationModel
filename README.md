@@ -23,12 +23,12 @@
 
 ## 📚 目次 (Table of Contents)
 
-- [📝 概要](#概要-overview)
-- [🎯 研究背景と目的](#研究背景と目的-background-and-objectives)
-- [⚙️ システム構成](#システム構成-system-architecture)
-- [🛠️ 使用技術](#使用技術-methods)
-- [📈 成果](#成果-results)
-- [🔭 今後の展望](#今後の展望-future-work)
+- 📝 概要
+- 🎯 研究背景と目的
+- ⚙️ システム構成
+- 🛠️ 使用技術
+- 📈 成果
+- 🔭 今後の展望
 
 ---
 
@@ -36,10 +36,10 @@
 
 本リポジトリは、画一的な指導から脱却し、個々人に最適化されたお手本生成を通して、個人最適な熟達支援を実現するための研究プロジェクトです。
 
-核となるのは、人間の複雑な運動データを**「スキル（技能）」**と**「スタイル（個分の癖）」**という独立した要因に分離する、独自のTransformer-VAEモデルです。
+核となるのは、人間の複雑な運動データを**「スキル（技能）」と「スタイル（個分の癖）」という独立した要因に分離する、独自のTransformer-VAEモデルです。
 
-このAIモデルを、力覚（フォース）フィードバックが可能な自作の実験デバイスと統合。
-これにより、「個人の癖を活かしたまま、技能の核心部分だけを向上させる」という、従来にない高次元な物理的フィードバックを生成・提示します。
+この生成モデルを用いた、スタイルとスキルを任意に操作した動作データを生成し、力覚フィードバックが可能な自作の実験デバイスを用いて被験者にフィードバックします。
+これにより、「個人の癖を活かしたまま、技能の核心部分だけを向上させる」という、従来にない物理的フィードバックを生成・提示します。
 
 ---
 
@@ -213,12 +213,40 @@
 
 ---
 ## 🛠️ 使用技術 (Methods)
-| Category          | Technology Stack      |
-|-------------------|-----------------------|
-| AI Model          | PyTorch               |
-| Data Analysis     | Pandas, schikit-learn |
-| Device Control    | C++, Ether CAT        |
-| Environment Setup | Docker                |
-| Database          | SQLite                |
-| Visualization     | Plotly, Matplot       |
 
+<div align="center">
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Technology Stack</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Model Development</td>
+          <td>PyTorch</td>
+        </tr>
+        <tr>
+          <td>Data Analysis</td>
+          <td>Pandas, schikit-learn</td>
+        </tr>
+        <tr>
+          <td>Device Control</td>
+          <td>C++, Ether CAT</td>
+        </tr>
+        <tr>
+          <td>Environment Setup</td>
+          <td>Docker</td>
+        </tr>
+        <tr>
+          <td>Database</td>
+          <td>SQLite</td>
+        </tr>
+        <tr>
+          <td>Visualization</td>
+          <td>Plotly, Matplot</td>
+        </tr>
+      </tbody>
+    </table>
+</div>
