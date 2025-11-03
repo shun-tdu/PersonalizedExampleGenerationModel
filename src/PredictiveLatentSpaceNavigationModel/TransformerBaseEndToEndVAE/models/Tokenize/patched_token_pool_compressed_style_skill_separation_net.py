@@ -31,10 +31,6 @@ class PositionalEncoding(nn.Module):
     def forward(self, x):
         return x + self.pe[:x.size(1), :].unsqueeze(0)
 
-
-# CLAUDE_ADDED: Discriminatorを削除し、相関行列ベースの直交性損失を使用
-
-
 class TokenPoolSeparationEncoder(nn.Module):
     """分布トークンで潜在空間を学習するエンコーダ"""
 
@@ -112,7 +108,6 @@ class TokenPoolSeparationEncoder(nn.Module):
         encoded = self.input_proj(x_flat)
 
         # 分布トークンをバッチサイズ分に拡張してシーケンスに連結
-        # CLAUDE_ADDED: 修正 - .expand()メソッドのみを使用（トークンはパラメータであり呼び出し可能ではない）
         style_mu_token = self.style_mu_token.expand(batch_size, -1, -1)
         style_logvar_token = self.style_logvar_token.expand(batch_size, -1, -1)
         skill_mu_token = self.skill_mu_token.expand(batch_size, -1, -1)
@@ -260,7 +255,7 @@ class PatchedTokenPoolCompressedSeparationNet(BaseExperimentModel):
         print(f"  encoder_layers: {n_encoder_layers}, decoder_layers: {n_decoder_layers}")
         print(f"  latent_dims: style={style_latent_dim}, skill={skill_latent_dim}")
 
-        # CLAUDE_ADDED: 損失スケジューラ初期化 - 相関行列ベースの直交性損失を使用
+        # 損失スケジューラ初期化 - 相関行列ベースの直交性損失を使用
         if loss_schedule_config is None:
             loss_schedule_config = {
                 'beta_style': {'schedule': 'linear', 'start_epoch': 21, 'end_epoch': 50, 'start_val': 0.0,
@@ -269,13 +264,13 @@ class PatchedTokenPoolCompressedSeparationNet(BaseExperimentModel):
                                'end_val': 0.0001},
                 'factor_regression_loss': {'schedule': 'linear', 'start_epoch': 20, 'end_epoch': 60, 'start_val': 0.0,
                                            'end_val': 0.2},
-                'orthogonal_loss': {'schedule': 'constant', 'val': 0.1}  # CLAUDE_ADDED: adversarial -> orthogonal
+                'orthogonal_loss': {'schedule': 'constant', 'val': 0.1}
             }
         self.loss_scheduler = LossWeightScheduler(loss_schedule_config)
 
         # スケジューラ設定からlossの計算フラグを受け取り
         self.calc_factor_subtask = 'factor_regression_loss' in loss_schedule_config
-        self.calc_orthogonal_loss = 'orthogonal_loss' in loss_schedule_config  # CLAUDE_ADDED: orthogonal_loss
+        self.calc_orthogonal_loss = 'orthogonal_loss' in loss_schedule_config
 
         # エンコーダ・デコーダ
         self.encoder = TokenPoolSeparationEncoder(
@@ -372,7 +367,7 @@ class PatchedTokenPoolCompressedSeparationNet(BaseExperimentModel):
 
     def compute_losses(self, x, reconstructed, attention_mask, encoded, z_style, z_skill,
                        skill_factor_pred, skill_factor):
-        """CLAUDE_ADDED: 相関行列ベースの直交性損失を使用"""
+        """相関行列ベースの直交性損失を使用"""
         weights = self.loss_scheduler.get_weights()
 
         losses = {}
@@ -397,7 +392,7 @@ class PatchedTokenPoolCompressedSeparationNet(BaseExperimentModel):
         losses['kl_style_loss'] = -0.5 * torch.mean(torch.sum(style_kl_terms, dim=1))
         losses['kl_skill_loss'] = -0.5 * torch.mean(torch.sum(skill_kl_terms, dim=1))
 
-        # CLAUDE_ADDED: 相関行列ベースの直交性損失 (z_styleとz_skillの独立性を促進)
+        # 相関行列ベースの直交性損失 (z_styleとz_skillの独立性を促進)
         if self.calc_orthogonal_loss:
             # バッチ方向で標準化
             z_style_norm = (z_style - z_style.mean(dim=0)) / (z_style.std(dim=0) + 1e-8)
@@ -487,7 +482,7 @@ class PatchedTokenPoolCompressedSeparationNet(BaseExperimentModel):
         with torch.no_grad():
             outputs = self.forward(trajectory, attention_mask, subject_ids, skill_factors)
 
-        # CLAUDE_ADDED: 損失辞書を数値に変換して返す
+        # 損失辞書を数値に変換して返す
         loss_dict = {}
         for key, value in outputs.items():
             if 'loss' in key.lower():

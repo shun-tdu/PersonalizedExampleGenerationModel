@@ -23,12 +23,12 @@
 
 ## 📚 目次 (Table of Contents)
 
-- [📝 概要](#-概要)
-- [🎯 研究背景と目的](#️-研究背景と目的)
-- [⚙️ システム構成](#️-システム構成)
-- [🛠️ 使用技術](#-使用技術)
-- [📈 成果](#-成果)
-- [🔭 今後の展望](#-今後の展望)
+- [📝 概要](#概要-overview)
+- [🎯 研究背景と目的](#研究背景と目的-background-and-objectives)
+- [⚙️ システム構成](#システム構成-system-architecture)
+- [🛠️ 使用技術](#使用技術-methods)
+- [📈 成果](#成果-results)
+- [🔭 今後の展望](#今後の展望-future-work)
 
 ---
 
@@ -71,6 +71,8 @@
 </p>
 
 - アーキテクチャ
+
+  モデルのコードは[こちら](src/PredictiveLatentSpaceNavigationModel/TransformerBaseEndToEndVAE/models/Tokenize/patched_token_pool_compressed_style_skill_separation_net.py)にございます。
   - エンコーダが動作データをスキル潜在空間とスタイル潜在空間に射影
   - 各空間に個別の損失関数を適用することで意味的な分離を実現
 - 損失関数
