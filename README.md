@@ -74,32 +74,32 @@
   - 各空間に個別の損失関数を適用することで意味的な分離を実現
 - 損失関数
   - 再構築誤差
-    $$
+    ```math
     \mathcal{L}_{\text{rec}} = \frac{1}{\sum M} \sum_{i} M_i (\hat{x}_i - x_i)^2
-    $$
+    ```
   - KL損失
-    $$
+    ```math
     \mathcal{L}_{\text{KL,style}} = D_{KL}(q(z_{\text{style}}|x) \parallel p(z_{\text{style}}))
-    $$
-    $$
+    ```
+    ```math
     \mathcal{L}_{\text{KL,skill}} = D_{KL}(q(z_{\text{skill}}|x) \parallel p(z_{\text{skill}}))
-    $$
+    ```
   - 直行性損失
-    $$
+    ```math
     \mathcal{L}_{\text{orth}} = \frac{1}{Sty \cdot Ski} \sum_{j=1}^{Sty} \sum_{k=1}^{Ski} (C_{j,k})^2
     \quad \text{where} \quad
     C = \frac{1}{B} \bar{Z}_{\text{style}}^T \bar{Z}_{\text{skill}}
-    $$
+    ```
   - スキル因子損失
-    $$
+    ```math
     \mathcal{L}_{\text{factor}} = \mathbb{E} [ \| \hat{y} - y \|^2_2 ]
     \quad \text{where} \quad
     \hat{y} = f_{\text{reg}}(z_{\text{skill}})
-    $$
+    ```
   - 統合損失
-    $$
+    ```math
     \mathcal{L}_{\text{total}} = \mathcal{L}_{\text{rec}} + \beta_{\text{style}} \mathcal{L}_{\text{KL,style}} + \beta_{\text{skill}} \mathcal{L}_{\text{KL,skill}} + \gamma_{\text{orth}} \mathcal{L}_{\text{orth}} + \gamma_{\text{factor}} \mathcal{L}_{\text{factor}}
-    $$
+    ```
 
 ---
 ## 📈 成果 (Results)
