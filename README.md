@@ -185,25 +185,25 @@ $$\kappa = \frac{4 \cdot \text{Area}(\mathbf{p}_1, \mathbf{p}_2, \mathbf{p}_3)}{
 3. 標準化されたデータ $\mathbf{Z}_{B4}$ に対し、因子分析を実行した。これにより8つのスキル指標の背後にある $f$ 個の共通因子を特定した。
 
     ここで $\mathbf{L}$ は因子負荷量行列であり、分析モデル $FA_{B4}$ を熟達者因子分析モデルとした。
-    ```math
-    \mathbf{z} = L \mathbf{f} + \mathbf{\epsilon}
-    ```
+    
+    $$\mathbf{z} = L \mathbf{f} + \mathbf{\epsilon}$$
+    
 
 ### 3. スキルスコアの算出
 
 次に、全ブロックのデータ $\mathbf{M}_{all}$ に対して、熟達者因子分析モデルを用いてスキルスコアを算出した。
 
 1. 全ての試行 $i$ のスキル指標 $m_i$ を、熟達者スケーラ $S_{B4}$ で標準化した。
-    ```math
-    \mathbf{z}_i = S_{\text{B4}}(\mathbf{m}_i)
-    ```
+    
+    $$\mathbf{z}_i = S_{\text{B4}}(\mathbf{m}_i)$$
+    
 
 2. 標準化された $\mathbf{z}_i$ を熟達者因子分析モデル $FA_{B4}$ に入力し、各試行の $k$ 次元の因子スコア $\mathbf{f}_i=[\mathbf{f}_{i,1},...,\mathbf{f}_{i,k}]$ を計算した。
 
 3. 各因子スコア $\mathbf{f}_{i,j}$ を、その因子の寄与率 $\mathbf{w}_j$ で重み付け加算し、総合的な巧拙を表す単一のスキルスコア $S_i$ を算出した。
-    ```math
-    S_i = \sum_{j=1}^{k} w_j \cdot f_{i,j}
-    ```
+    
+    $$S_i = \sum_{j=1}^{k} w_j \cdot f_{i,j}$$
+    
 
 ### 4. 正規化
 
