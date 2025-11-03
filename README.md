@@ -149,9 +149,8 @@
 全試行データから、巧拙や特徴を表す以下の8つの運動スキル指標を計算した。
 
 - 終点誤差 $m_{error}$ ：最終到達点と目標点 $P_{target}$ とのユークリッド距離
-    ```math
-    m_{\text{error}} = \| \mathbf{p}_{\text{final}} - \mathbf{p}_{\text{target}} \|_2
-    ```
+    $$m_{\text{time}} = T_{\text{end}} - T_{\text{start}}$$
+
 - 動作時間 $m_{time}$ ：試行開始から終了までの時間
     ```math
     m_{\text{time}} = T_{\text{end}} - T_{\text{start}}
