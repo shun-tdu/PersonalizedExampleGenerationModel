@@ -55,7 +55,7 @@
 - デバイス: 直交二軸リニアアクチュエータ 
 
     <p align="center">
-        <img src="assets/Device_LinearActuator.png" alt="Result_StyleSeparation" width="50%">
+        <img src="assets/Device_LinearActuator.png" alt="Result_StyleSeparation" width="70%">
     </p>
     
 
@@ -67,7 +67,7 @@
 ### ソフトウェア（提案モデル）
 
 <p align="center">
-  <img src="assets/BertLikeStyleSkillSeparationNet.png" alt="Proposed Architecture" width="50%">
+  <img src="assets/BertLikeStyleSkillSeparationNet.png" alt="Proposed Architecture" width="70%">
 </p>
 
 - アーキテクチャ
@@ -116,7 +116,7 @@
     入力データに対して、高周波のノイズが重畳したようなデータが確認できるが、軌道の概形は捉えられていることがわかる。
   
     <p align="center">
-        <img src="assets/Result_TrajectoryOverlay.png" alt="Result Trajectory Overlay" width="30%">
+        <img src="assets/Result_TrajectoryOverlay.png" alt="Result Trajectory Overlay" width="60%">
     </p>
     
   - 位置、速度、加速度のRMSE
@@ -170,7 +170,7 @@
     以上から、本モデルはスタイル空間の構造化を促す損失関数を用いていないのにもかかわらず、モデルが自然にスタイル情報をエンコードしたことが示唆された。
     
     <p align="center">
-        <img src="assets/Result_StyleSeparation.png" alt="Result_StyleSeparation" width="50%">
+        <img src="assets/Result_StyleSeparation.png" alt="Result_StyleSeparation" width="70%">
     </p>
 
 
@@ -186,7 +186,7 @@
     以上から、本モデルは被験者の運動データから巧拙を表すスキルの表現を獲得していることが示唆された。
 
     <p align="center">
-        <img src="assets/Result_SkillRegressionScore.png" alt="Result_StyleSeparation" width="50%">
+        <img src="assets/Result_SkillRegressionScore.png" alt="Result_StyleSeparation" width="70%">
     </p>
     
   - スキル潜在空間の定性的評価
@@ -202,7 +202,7 @@
     以上から、本モデルは個人最適なお手本生成が可能な潜在空間の構造を有していることが示された。一方で、動作データの生成精度には課題が残っている。今後は、エンコーダの重みを固定し、デコーダをより表現力を持つ拡散モデルに切り替えることで再構成誤差の低減に努めていく。
 
     <p align="center">
-        <img src="assets/Result_SkillSpacePCA.png" alt="Result_StyleSeparation" width="50%">
+        <img src="assets/Result_SkillSpacePCA.png" alt="Result_StyleSeparation" width="70%">
     </p>    
 
 ---
