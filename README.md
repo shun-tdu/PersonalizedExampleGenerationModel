@@ -152,32 +152,45 @@
 全試行データから、巧拙や特徴を表す以下の8つの運動スキル指標を計算した。
 
 - 終点誤差$m_{error}$：最終到達点と目標点$P_{target}$とのユークリッド距離
-
-$$m_{\text{error}} = \| \mathbf{p}_{\text{final}} - \mathbf{p}_{\text{target}} \|_2$$
+    ```math
+    m_{\text{error}} = \| \mathbf{p}_{\text{final}} - \mathbf{p}_{\text{target}} \|_2
+    ```
 
 - 動作時間$m_{time}$：試行開始から終了までの時間
 
-$$m_{\text{error}} = \| \mathbf{p}_{\text{final}} - \mathbf{p}_{\text{target}} \|_2$$
+    ```math
+    m_{\text{time}} = T_{\text{end}} - T_{\text{start}}
+    ```
 
 - ジャーク$m_{jerk}$：加速度$a(t)$の時間微分の平均絶対値
 
-$$m_{\text{jerk}} = \mathbb{E} [ \| \mathbf{j}(t) \| ] = \mathbb{E} \left[ \left\| \frac{d\mathbf{a}(t)}{dt} \right\| \right]$$
+    ```math
+    m_{\text{jerk}} = \mathbb{E} [ \| \mathbf{j}(t) \| ] = \mathbb{E} \left[ \left\| \frac{d\mathbf{a}(t)}{dt} \right\| \right]
+    ```
 
 - 速度滑らかさ$m_{vel\_smooth}$：速度$|v(t)|$変動の標準偏差の逆数
 
-$$m_{\text{vel\_smooth}} = \frac{1}{1 + \sigma(\Delta|v(t)|)}$$
+    ```math
+    m_{\text{vel\_smooth}} = \frac{1}{1 + \sigma(\Delta|v(t)|)}
+    ```
 
 - 加速度滑らかさ$m_{acc\_smooth}$：加速度$|a(t)|$変動の標準偏差の逆数
 
-$$m_{\text{acc\_smooth}} = \frac{1}{1 + \sigma(\Delta|a(t)|)}$$
+    ```math
+    m_{\text{acc\_smooth}} = \frac{1}{1 + \sigma(\Delta|a(t)|)}
+    ```
 
 - 制御安定性$m_{stability}$：加速度$|a(t)|$の標準偏差の逆数
 
-$$m_{\text{stability}} = \frac{1}{1 + \sigma(|a(t)|)}$$
+    ```math
+    m_{\text{stability}} = \frac{1}{1 + \sigma(|a(t)|)}
+    ```
 
 - 軌道曲率$m_{curve}$：軌跡の曲率の平均。3点$P_1$,$P_2$,$P_3$からManger曲率$\kappa$として計算
 
-$$\kappa = \frac{4 \cdot \text{Area}(\mathbf{p}_1, \mathbf{p}_2, \mathbf{p}_3)}{\| \mathbf{p}_1 - \mathbf{p}_2 \| \| \mathbf{p}_2 - \mathbf{p}_3 \| \| \mathbf{p}_3 - \mathbf{p}_1 \|}$$
+    ```math
+    \kappa = \frac{4 \cdot \text{Area}(\mathbf{p}_1, \mathbf{p}_2, \mathbf{p}_3)}{\| \mathbf{p}_1 - \mathbf{p}_2 \| \| \mathbf{p}_2 - \mathbf{p}_3 \| \| \mathbf{p}_3 - \mathbf{p}_1 \|}
+    ```
 
 2. 熟達者モデルによる因子分析
 
